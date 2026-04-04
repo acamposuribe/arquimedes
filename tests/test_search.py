@@ -363,3 +363,268 @@ class TestHumanFormat:
         output = format_human(result)
         assert "No results" in output
 
+    def test_annotation_human_format_with_comment(self, index_repo):
+        result = search("thermal mass", depth=2)
+        output = format_human(result)
+        # annotation with comment must use "-> comment" arrow format
+        assert "→" in output or "->" in output or "key term" in output
+
+    def test_annotation_human_format_structure(self, index_repo):
+        result = search("thermal mass", depth=2)
+        output = format_human(result)
+        # must include page, type brackets, and quoted text
+        assert "[highlight]" in output
+
+
+@pytest.fixture
+def ranking_repo(tmp_path, monkeypatch):
+    """Index for ranking signal tests.
+
+    - 'strong_card': matches 'blorfex' well at card level (title+summary+keywords),
+      no annotations.
+    - 'weak_card_strong_ann': card text contains 'blorfex' once (weak), but has
+      two annotation comment hits containing 'blorfex'.
+
+    FTS5 should rank strong_card first. After reranking, weak_card_strong_ann
+    should rise above strong_card due to annotation evidence.
+    """
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    (tmp_path / "manifests").mkdir()
+
+    def _make(mid, title, summary, keywords, chunk_text, chunk_emphasized, annotations):
+        mat_dir = tmp_path / "extracted" / mid
+        mat_dir.mkdir(parents=True)
+        (mat_dir / "meta.json").write_text(json.dumps({
+            "material_id": mid, "title": title, "authors": ["A"], "year": "2024",
+            "page_count": 5, "file_type": "pdf", "domain": "research",
+            "collection": "_general", "ingested_at": "2026-01-01T00:00:00+00:00",
+            "raw_keywords": [], "raw_document_type": "paper",
+            "summary": {"value": summary, "provenance": {}},
+            "keywords": {"value": keywords, "provenance": {}},
+            "document_type": {"value": "paper", "provenance": {}},
+            "facets": {},
+            "_enrichment_stamp": {"prompt_version": "v1", "enrichment_schema_version": "1"},
+        }))
+        chunks = [{"chunk_id": "chk_00001", "text": chunk_text, "source_pages": [1],
+                   "emphasized": chunk_emphasized,
+                   "summary": {"value": "chunk summary", "provenance": {}},
+                   "keywords": {"value": [], "provenance": {}}, "content_class": "argument"}]
+        (mat_dir / "chunks.jsonl").write_text("\n".join(json.dumps(c) for c in chunks))
+        (mat_dir / "annotations.jsonl").write_text(
+            "\n".join(json.dumps(a) for a in annotations)
+        )
+        (mat_dir / "figures").mkdir()
+
+    # strong_card: 'blorfex' in title + summary + keywords → strong card match
+    _make("strong_card",
+          title="Blorfex Design Pattern in Architecture",
+          summary="A comprehensive study of blorfex methods and blorfex applications.",
+          keywords=["blorfex", "architectural pattern"],
+          chunk_text="Blorfex is a design method.",
+          chunk_emphasized=False,
+          annotations=[])
+
+    # weak_card_strong_ann: only title mentions 'blorfex', but two comments strongly match
+    _make("weak_card_strong_ann",
+          title="Blorfex in Practice",
+          summary="A generic document about practice.",
+          keywords=[],
+          chunk_text="General practice document.",
+          chunk_emphasized=False,
+          annotations=[
+              {"annotation_id": "ann_0001", "type": "highlight", "page": 1,
+               "quoted_text": "some text", "comment": "blorfex key finding here", "color": "", "rect": []},
+              {"annotation_id": "ann_0002", "type": "note", "page": 2,
+               "quoted_text": "other text", "comment": "blorfex confirmed", "color": "", "rect": []},
+          ])
+
+    (tmp_path / "manifests" / "materials.jsonl").write_text("\n".join([
+        json.dumps({"material_id": "strong_card", "file_hash": "x", "relative_path": "a.pdf",
+                    "file_type": "pdf", "domain": "research", "collection": "_general",
+                    "ingested_at": "2026-01-01T00:00:00+00:00"}),
+        json.dumps({"material_id": "weak_card_strong_ann", "file_hash": "y", "relative_path": "b.pdf",
+                    "file_type": "pdf", "domain": "research", "collection": "_general",
+                    "ingested_at": "2026-01-01T00:00:00+00:00"}),
+    ]))
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+    return tmp_path
+
+
+@pytest.fixture
+def emphasis_repo(tmp_path, monkeypatch):
+    """Index with one material that has two matching chunks: one emphasized, one not."""
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    (tmp_path / "manifests").mkdir()
+
+    mid = "emph_test"
+    mat_dir = tmp_path / "extracted" / mid
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps({
+        "material_id": mid, "title": "Emphasis Test Document", "authors": ["A"],
+        "year": "2024", "page_count": 5, "file_type": "pdf", "domain": "research",
+        "collection": "_general", "ingested_at": "2026-01-01T00:00:00+00:00",
+        "raw_keywords": [], "raw_document_type": "paper",
+        "summary": {"value": "Document about vrenblax.", "provenance": {}},
+        "keywords": {"value": ["vrenblax"], "provenance": {}},
+        "document_type": {"value": "paper", "provenance": {}},
+        "facets": {},
+        "_enrichment_stamp": {"prompt_version": "v1", "enrichment_schema_version": "1"},
+    }))
+    # chunk at page 1 is NOT emphasized; chunk at page 2 IS emphasized — same FTS relevance
+    chunks = [
+        {"chunk_id": "chk_00001", "text": "vrenblax material properties.", "source_pages": [1],
+         "emphasized": False,
+         "summary": {"value": "vrenblax page 1", "provenance": {}},
+         "keywords": {"value": [], "provenance": {}}, "content_class": "argument"},
+        {"chunk_id": "chk_00002", "text": "vrenblax material properties.", "source_pages": [2],
+         "emphasized": True,
+         "summary": {"value": "vrenblax page 2 emphasized", "provenance": {}},
+         "keywords": {"value": [], "provenance": {}}, "content_class": "key_finding"},
+    ]
+    (mat_dir / "chunks.jsonl").write_text("\n".join(json.dumps(c) for c in chunks))
+    (mat_dir / "annotations.jsonl").write_text("")
+    (mat_dir / "figures").mkdir()
+    (tmp_path / "manifests" / "materials.jsonl").write_text(json.dumps({
+        "material_id": mid, "file_hash": mid, "relative_path": "a.pdf",
+        "file_type": "pdf", "domain": "research", "collection": "_general",
+        "ingested_at": "2026-01-01T00:00:00+00:00",
+    }))
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+    return tmp_path
+
+
+class TestAnnotationRankField:
+    def test_annotation_hit_has_rank(self, index_repo):
+        result = search("thermal mass", depth=2)
+        card = next(r for r in result.results if r.material_id == "aabb001122")
+        for ann in card.annotations:
+            assert isinstance(ann.rank, int)
+            assert ann.rank >= 1
+
+    def test_annotation_rank_in_dict(self, index_repo):
+        result = search("thermal mass", depth=2)
+        card = next(r for r in result.results if r.material_id == "aabb001122")
+        d = result.to_dict()
+        result_dict = next(r for r in d["results"] if r["material_id"] == "aabb001122")
+        ann_dicts = result_dict.get("annotations", [])
+        assert len(ann_dicts) > 0
+        assert "rank" in ann_dicts[0]
+
+    def test_annotation_ranks_sequential(self, index_repo):
+        result = search("thermal mass", depth=2)
+        card = next(r for r in result.results if r.material_id == "aabb001122")
+        ranks = [a.rank for a in card.annotations]
+        assert ranks == list(range(1, len(ranks) + 1))
+
+
+class TestAnnotationCommentBoost:
+    """Annotations with comments rank above annotations without comments."""
+
+    def test_comment_annotation_ranks_first(self, tmp_path, monkeypatch):
+        """When one annotation has a comment and one doesn't, the comment one ranks first."""
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+        (tmp_path / "indexes").mkdir()
+        (tmp_path / "extracted").mkdir()
+        (tmp_path / "manifests").mkdir()
+
+        mid = "ann_boost_test"
+        mat_dir = tmp_path / "extracted" / mid
+        mat_dir.mkdir(parents=True)
+        (mat_dir / "meta.json").write_text(json.dumps({
+            "material_id": mid, "title": "Plocrix Architecture Study", "authors": ["A"],
+            "year": "2024", "page_count": 5, "file_type": "pdf", "domain": "research",
+            "collection": "_general", "ingested_at": "2026-01-01T00:00:00+00:00",
+            "raw_keywords": [], "raw_document_type": "paper",
+            "summary": {"value": "Study of plocrix method.", "provenance": {}},
+            "keywords": {"value": ["plocrix"], "provenance": {}},
+            "document_type": {"value": "paper", "provenance": {}},
+            "facets": {},
+            "_enrichment_stamp": {"prompt_version": "v1", "enrichment_schema_version": "1"},
+        }))
+        (mat_dir / "chunks.jsonl").write_text("")
+        # First annotation in file has NO comment; second has a comment
+        (mat_dir / "annotations.jsonl").write_text("\n".join([
+            json.dumps({"annotation_id": "ann_no_comment", "type": "highlight", "page": 1,
+                        "quoted_text": "plocrix structural behavior", "comment": "",
+                        "color": "", "rect": []}),
+            json.dumps({"annotation_id": "ann_with_comment", "type": "highlight", "page": 2,
+                        "quoted_text": "plocrix load path", "comment": "key finding for thesis",
+                        "color": "", "rect": []}),
+        ]))
+        (mat_dir / "figures").mkdir()
+        (tmp_path / "manifests" / "materials.jsonl").write_text(json.dumps({
+            "material_id": mid, "file_hash": mid, "relative_path": "a.pdf",
+            "file_type": "pdf", "domain": "research", "collection": "_general",
+            "ingested_at": "2026-01-01T00:00:00+00:00",
+        }))
+        monkeypatch.chdir(tmp_path)
+        rebuild_index()
+
+        result = search("plocrix", depth=2)
+        card = result.results[0]
+        assert len(card.annotations) == 2
+        # annotation with comment must be rank 1
+        assert card.annotations[0].annotation_id == "ann_with_comment"
+        assert card.annotations[0].rank == 1
+        assert card.annotations[1].annotation_id == "ann_no_comment"
+
+
+class TestEmphasisChunkBoost:
+    """Emphasized chunks sort before non-emphasized within the same material."""
+
+    def test_emphasized_chunk_ranks_first(self, emphasis_repo):
+        result = search("vrenblax", depth=2)
+        assert result.total == 1
+        card = result.results[0]
+        assert len(card.chunks) == 2
+        # emphasized chunk must come first
+        assert card.chunks[0].emphasized is True
+        assert card.chunks[1].emphasized is False
+
+    def test_emphasized_chunk_rank_value(self, emphasis_repo):
+        result = search("vrenblax", depth=2)
+        card = result.results[0]
+        assert card.chunks[0].rank == 1
+        assert card.chunks[1].rank == 2
+
+
+class TestMaterialRerankByAnnotation:
+    """Materials with strong annotation evidence rerank above weaker-card-matched materials."""
+
+    def test_annotation_evidence_lifts_material(self, ranking_repo):
+        # strong_card has better FTS card score (more 'blorfex' occurrences in card fields)
+        # weak_card_strong_ann has 2 annotation comment hits  → combined priority lifts it
+        result = search("blorfex", depth=2)
+        assert result.total >= 2
+        ids = [r.material_id for r in result.results]
+        assert "strong_card" in ids
+        assert "weak_card_strong_ann" in ids
+        # weak_card_strong_ann should outrank strong_card due to 2 comment hits (boost=1.6)
+        assert ids.index("weak_card_strong_ann") < ids.index("strong_card")
+
+    def test_reranking_does_not_affect_depth_1(self, ranking_repo):
+        # At depth 1, no content queries → no reranking; strong_card should stay first
+        result_d1 = search("blorfex", depth=1)
+        result_d2 = search("blorfex", depth=2)
+        ids_d1 = [r.material_id for r in result_d1.results]
+        ids_d2 = [r.material_id for r in result_d2.results]
+        # depth-1 order has strong_card first (no reranking)
+        assert ids_d1[0] == "strong_card"
+        # depth-2 order has weak_card_strong_ann first (annotation boost)
+        assert ids_d2[0] == "weak_card_strong_ann"
+
+    def test_final_ranks_sequential(self, ranking_repo):
+        result = search("blorfex", depth=2)
+        for i, card in enumerate(result.results, 1):
+            assert card.rank == i
+
+

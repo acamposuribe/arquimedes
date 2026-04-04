@@ -29,6 +29,7 @@ class AnnotationHit:
     quoted_text: str
     comment: str
     page: int
+    rank: int = 0
 
     def to_dict(self) -> dict:
         return {
@@ -37,6 +38,7 @@ class AnnotationHit:
             "quoted_text": self.quoted_text,
             "comment": self.comment,
             "page": self.page,
+            "rank": self.rank,
         }
 
 
@@ -196,8 +198,8 @@ def search(
     collection: str | None = None,
     limit: int = 20,
     chunk_limit: int = 5,
-    annotation_limit: int = 10,
-    figure_limit: int = 5,
+    annotation_limit: int = 3,
+    figure_limit: int = 3,
 ) -> SearchResult:
     """Search the index. Returns a SearchResult.
 
@@ -299,6 +301,16 @@ def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int) 
     return result
 
 
+def _combined_priority(card: "MaterialCard") -> float:
+    """Lower score = better rank. Boosts: comment hit > quoted_text hit > emphasized chunk."""
+    annotation_boost = sum(
+        0.8 if a.comment else 0.5
+        for a in card.annotations
+    )
+    chunk_boost = sum(0.2 for c in card.chunks if c.emphasized)
+    return card.rank - annotation_boost - chunk_boost
+
+
 def _do_search(
     con: sqlite3.Connection,
     query: str,
@@ -367,6 +379,11 @@ def _do_search(
                 con, query, card.material_id, figure_limit
             )
 
+        # Rerank materials using annotation + emphasized-chunk evidence
+        cards.sort(key=_combined_priority)
+        for i, card in enumerate(cards, 1):
+            card.rank = i
+
     return SearchResult(query=query, depth=depth, total=len(cards), results=cards)
 
 
@@ -377,13 +394,14 @@ def _search_chunks(
     limit: int,
     include_text: bool,
 ) -> list[ChunkHit]:
+    # Prefer emphasized chunks (secondary: FTS rank)
     sql = """
         SELECT c.chunk_id, c.summary, c.source_pages, c.emphasized,
                c.content_class, c.text, chunks_fts.rank
         FROM chunks_fts
         JOIN chunks c ON chunks_fts.rowid = c.rowid
         WHERE chunks_fts MATCH ? AND c.material_id = ?
-        ORDER BY chunks_fts.rank
+        ORDER BY (CASE WHEN c.emphasized = 1 THEN 0 ELSE 1 END), chunks_fts.rank
         LIMIT ?
     """
     rows = con.execute(sql, [query, material_id, limit]).fetchall()
@@ -411,12 +429,13 @@ def _search_annotations(
     material_id: str,
     limit: int,
 ) -> list[AnnotationHit]:
+    # Prefer annotations with a comment (reader intent strongest signal)
     sql = """
         SELECT a.annotation_id, a.type, a.quoted_text, a.comment, a.page
         FROM annotations_fts
         JOIN annotations a ON annotations_fts.rowid = a.rowid
         WHERE annotations_fts MATCH ? AND a.material_id = ?
-        ORDER BY annotations_fts.rank
+        ORDER BY (CASE WHEN a.comment = '' THEN 1 ELSE 0 END), annotations_fts.rank
         LIMIT ?
     """
     rows = con.execute(sql, [query, material_id, limit]).fetchall()
@@ -427,8 +446,9 @@ def _search_annotations(
             quoted_text=row["quoted_text"],
             comment=row["comment"],
             page=row["page"],
+            rank=i,
         )
-        for row in rows
+        for i, row in enumerate(rows, 1)
     ]
 
 

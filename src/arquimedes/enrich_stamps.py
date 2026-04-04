@@ -85,10 +85,21 @@ def document_fingerprint(output_dir: Path) -> str:
     toc_path = output_dir / "toc.json"
     toc_text = toc_path.read_text(encoding="utf-8") if toc_path.exists() else "[]"
 
-    # 5. chunks.jsonl (required)
-    chunks_text = (output_dir / "chunks.jsonl").read_text(encoding="utf-8")
+    # 5. chunks.jsonl — raw fields only (exclude enriched summary/keywords)
+    raw_chunks = []
+    for line in (output_dir / "chunks.jsonl").read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        c = json.loads(line)
+        raw_chunks.append({
+            "chunk_id": c.get("chunk_id", ""),
+            "text": c.get("text", ""),
+            "source_pages": c.get("source_pages", []),
+            "emphasized": c.get("emphasized", False),
+        })
 
-    return canonical_hash(meta_projection, pages_text, annotations_text, toc_text, chunks_text)
+    return canonical_hash(meta_projection, pages_text, annotations_text, toc_text, raw_chunks)
 
 
 # ---------------------------------------------------------------------------

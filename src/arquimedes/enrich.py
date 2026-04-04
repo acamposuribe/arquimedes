@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 
 from arquimedes import enrich_stamps
+from arquimedes.enrich_llm import get_model_id
 from arquimedes.config import get_project_root, load_config
 from arquimedes.enrich_document import enrich_document_stage
 from arquimedes.enrich_chunks import enrich_chunks_stage
@@ -49,7 +50,7 @@ _ALL_STAGES = ["document", "chunk", "figure"]
 def _is_document_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for document stage without calling LLM."""
     enrichment_config = config.get("enrichment", {})
-    model = config.get("llm", {}).get("model", "claude-sonnet-4-6")
+    model = get_model_id(config)
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
     try:
@@ -64,7 +65,7 @@ def _is_document_stale(output_dir: Path, config: dict) -> bool:
 def _is_chunk_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for chunk stage."""
     enrichment_config = config.get("enrichment", {})
-    model = config.get("llm", {}).get("model", "claude-sonnet-4-6")
+    model = get_model_id(config)
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
 
@@ -132,7 +133,7 @@ def _is_figure_stale(output_dir: Path, config: dict) -> bool:
         return False
 
     enrichment_config = config.get("enrichment", {})
-    model = config.get("llm", {}).get("model", "claude-sonnet-4-6")
+    model = get_model_id(config)
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
 
@@ -253,7 +254,7 @@ def _run_combined_enrichment(
     from arquimedes import enrich_llm, enrich_prompts
 
     enrichment_config = config.get("enrichment", {})
-    model = config.get("llm", {}).get("model", "claude-sonnet-4-6")
+    model = get_model_id(config)
 
     # Load artifacts
     meta = _load_json(output_dir / "meta.json", {})
@@ -371,10 +372,14 @@ def enrich(
         if s not in _ALL_STAGES:
             raise ValueError(f"Unknown stage: {s!r}. Valid stages: {_ALL_STAGES}")
 
-    # Build llm_fn if not provided (not needed for dry_run)
-    if not dry_run and llm_fn is None:
-        from arquimedes.enrich_llm import make_cli_llm_fn
-        llm_fn = make_cli_llm_fn(config)
+    # Defer llm_fn construction until we know something is stale (agent CLIs are slow)
+    _llm_fn_ref = [llm_fn]  # mutable ref for lazy init
+
+    def _get_llm_fn():
+        if _llm_fn_ref[0] is None:
+            from arquimedes.enrich_llm import make_cli_llm_fn
+            _llm_fn_ref[0] = make_cli_llm_fn(config)
+        return _llm_fn_ref[0]
 
     # Determine which materials to process
     if material_id:
@@ -438,7 +443,7 @@ def enrich(
 
             if doc_stale and chunk_stale:
                 doc_result, chunk_result = _run_combined_enrichment(
-                    output_dir, config, llm_fn, force=force,
+                    output_dir, config, _get_llm_fn(), force=force,
                 )
                 if doc_result is not None:
                     material_results["document"] = doc_result
@@ -468,13 +473,24 @@ def enrich(
                 }
                 continue
 
-            # Run the stage
+            # Run the stage — skip early if not stale (avoids constructing LLM fn)
+            if not force:
+                if stage_name == "document":
+                    stale = _is_document_stale(output_dir, config)
+                elif stage_name == "chunk":
+                    stale = _is_chunk_stale(output_dir, config)
+                else:
+                    stale = _is_figure_stale(output_dir, config)
+                if not stale:
+                    material_results[stage_name] = {"status": "skipped", "detail": "up to date"}
+                    continue
+
             if stage_name == "document":
-                result = enrich_document_stage(output_dir, config, llm_fn, force=force)
+                result = enrich_document_stage(output_dir, config, _get_llm_fn(), force=force)
             elif stage_name == "chunk":
-                result = enrich_chunks_stage(output_dir, config, llm_fn, force=force)
+                result = enrich_chunks_stage(output_dir, config, _get_llm_fn(), force=force)
             else:  # figure
-                result = enrich_figures_stage(output_dir, config, llm_fn, force=force)
+                result = enrich_figures_stage(output_dir, config, _get_llm_fn(), force=force)
 
             material_results[stage_name] = result
             if result["status"] == "failed":

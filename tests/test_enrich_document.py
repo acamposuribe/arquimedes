@@ -115,7 +115,7 @@ def _make_llm_fn(response_text: str) -> MagicMock:
 
 def _make_config() -> dict:
     return {
-        "llm": {"model": "claude-test", "api_key_env": "ANTHROPIC_API_KEY"},
+        "llm": {"agent_cmd": "test-agent --print"},
         "enrichment": {
             "prompt_version": "enrich-v1.0",
             "enrichment_schema_version": "1",
@@ -225,7 +225,7 @@ class TestEnrichDocumentStage:
 
         meta = json.loads((output_dir / "meta.json").read_text(encoding="utf-8"))
         prov = meta["summary"]["provenance"]
-        assert prov["model"] == "claude-test"
+        assert prov["model"] == "test-agent"
         assert prov["prompt_version"] == "enrich-v1.0"
         assert prov["confidence"] == pytest.approx(0.9)
 

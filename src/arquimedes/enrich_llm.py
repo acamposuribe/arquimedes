@@ -101,6 +101,30 @@ def parse_json_or_repair(
 
 
 # ---------------------------------------------------------------------------
+# Model identifier from config
+# ---------------------------------------------------------------------------
+
+
+def get_model_id(config: dict) -> str:
+    """Derive a stable model identifier from the agent_cmd config.
+
+    Uses the agent command names (e.g. ``"claude|codex"``).  This is stored
+    in stamps for staleness detection — if the config changes, artifacts
+    re-enrich.
+    """
+    raw_cmd = config.get("llm", {}).get("agent_cmd", "claude --print")
+    if isinstance(raw_cmd, str):
+        cmds = [raw_cmd]
+    elif isinstance(raw_cmd, list):
+        cmds = [c for c in raw_cmd if isinstance(c, str) and c.strip()]
+    else:
+        cmds = ["claude --print"]
+    # Use just the executable name from each command
+    names = [c.split()[0] for c in cmds if c.split()]
+    return "|".join(names) if names else "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Agent CLI adapter (default — shells out to configurable agent command)
 # ---------------------------------------------------------------------------
 

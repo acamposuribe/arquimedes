@@ -139,7 +139,7 @@ def _make_llm_fn(response_texts: list[str]) -> MagicMock:
 
 def _make_config(figure_batch_size: int = 6) -> dict:
     return {
-        "llm": {"model": "claude-test", "api_key_env": "ANTHROPIC_API_KEY"},
+        "llm": {"agent_cmd": "test-agent --print"},
         "enrichment": {
             "prompt_version": "enrich-v1.0",
             "enrichment_schema_version": "1",

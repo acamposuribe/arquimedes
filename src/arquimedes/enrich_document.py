@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
+from arquimedes.enrich_llm import get_model_id
 from arquimedes.models import (
     ArchitectureFacets,
     ConceptCandidate,
@@ -125,7 +126,7 @@ def enrich_document_stage(
         {"status": "enriched"|"skipped"|"failed", "detail": str}
     """
     enrichment_config = config.get("enrichment", {})
-    model: str = config.get("llm", {}).get("model", "claude-sonnet-4-6")
+    model: str = get_model_id(config)
     prompt_version: str = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version: str = enrichment_config.get("enrichment_schema_version", "1")
 

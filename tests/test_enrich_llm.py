@@ -10,6 +10,7 @@ import pytest
 from arquimedes.enrich_llm import (
     EnrichmentError,
     _build_prompt_text,
+    get_model_id,
     make_cli_llm_fn,
     parse_json_or_repair,
 )
@@ -78,6 +79,22 @@ class TestBuildPromptText:
         assert "abc123" not in result  # base64 data not leaked
         assert "/path/to/fig_0001.png" in result
         assert "[IMAGE:" in result
+
+
+# ---------------------------------------------------------------------------
+# get_model_id
+# ---------------------------------------------------------------------------
+
+
+class TestGetModelId:
+    def test_single_string(self):
+        assert get_model_id({"llm": {"agent_cmd": "claude --print"}}) == "claude"
+
+    def test_list(self):
+        assert get_model_id({"llm": {"agent_cmd": ["claude --print", "codex exec"]}}) == "claude|codex"
+
+    def test_default(self):
+        assert get_model_id({}) == "claude"
 
 
 # ---------------------------------------------------------------------------

@@ -85,7 +85,7 @@ def _setup_project(tmp_path: Path, material_id: str = "test123") -> Path:
 
 def _make_config() -> dict:
     return {
-        "llm": {"model": "claude-test", "api_key_env": "ANTHROPIC_API_KEY"},
+        "llm": {"agent_cmd": "test-agent --print"},
         "enrichment": {
             "prompt_version": "enrich-v1.0",
             "enrichment_schema_version": "1",

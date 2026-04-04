@@ -282,7 +282,7 @@ def _fetch_material_row(
 
 
 def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int) -> list[str]:
-    """Return ordered distinct material_ids with chunk or annotation FTS matches."""
+    """Return ordered distinct material_ids with chunk, annotation, or figure FTS matches."""
     seen: set[str] = set()
     result: list[str] = []
     for sql in (
@@ -292,6 +292,9 @@ def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int) 
         """SELECT DISTINCT a.material_id FROM annotations_fts
            JOIN annotations a ON annotations_fts.rowid = a.rowid
            WHERE annotations_fts MATCH ? LIMIT ?""",
+        """SELECT DISTINCT f.material_id FROM figures_fts
+           JOIN figures f ON figures_fts.rowid = f.rowid
+           WHERE figures_fts MATCH ? LIMIT ?""",
     ):
         for row in con.execute(sql, [query, limit]).fetchall():
             mid = row[0]
@@ -394,14 +397,17 @@ def _search_chunks(
     limit: int,
     include_text: bool,
 ) -> list[ChunkHit]:
-    # Prefer emphasized chunks (secondary: FTS rank)
+    # Soft emphasis boost: blend FTS rank with a modest boost for emphasized chunks.
+    # FTS5 rank is a negative value (more negative = better match); subtracting 0.2
+    # from an emphasized chunk's score shifts it up without overriding a strong
+    # text-relevance gap between non-emphasized chunks.
     sql = """
         SELECT c.chunk_id, c.summary, c.source_pages, c.emphasized,
                c.content_class, c.text, chunks_fts.rank
         FROM chunks_fts
         JOIN chunks c ON chunks_fts.rowid = c.rowid
         WHERE chunks_fts MATCH ? AND c.material_id = ?
-        ORDER BY (CASE WHEN c.emphasized = 1 THEN 0 ELSE 1 END), chunks_fts.rank
+        ORDER BY (chunks_fts.rank - CASE WHEN c.emphasized = 1 THEN 0.2 ELSE 0.0 END)
         LIMIT ?
     """
     rows = con.execute(sql, [query, material_id, limit]).fetchall()

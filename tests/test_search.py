@@ -224,11 +224,12 @@ class TestDeepSearch:
 
 @pytest.fixture
 def content_first_repo(tmp_path, monkeypatch):
-    """Index with two materials: one matched only at chunk level, one only at annotation level.
+    """Index with three materials: chunk-only, annotation-only, figure-only.
 
     'zorblax' appears only in a chunk of chunk_only_mid (not in the card).
     'qryvex' appears only in an annotation of ann_only_mid (not in the card).
-    Neither term appears in meta.json titles or summaries.
+    'wordmark' appears only in a figure description of fig_only_mid (not in the card).
+    None of the three terms appear in meta.json titles or summaries.
     """
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
@@ -236,7 +237,7 @@ def content_first_repo(tmp_path, monkeypatch):
     (tmp_path / "extracted").mkdir()
     (tmp_path / "manifests").mkdir()
 
-    def _write_material(mid, chunks_text=None, annotation_text=None):
+    def _write_material(mid, chunks_text=None, annotation_text=None, figure_description=None):
         mat_dir = tmp_path / "extracted" / mid
         mat_dir.mkdir(parents=True)
         (mat_dir / "meta.json").write_text(json.dumps({
@@ -267,14 +268,27 @@ def content_first_repo(tmp_path, monkeypatch):
             }))
         else:
             (mat_dir / "annotations.jsonl").write_text("")
-        (mat_dir / "figures").mkdir()
+        fig_dir = mat_dir / "figures"
+        fig_dir.mkdir()
+        if figure_description:
+            (fig_dir / "fig_0001.json").write_text(json.dumps({
+                "figure_id": "fig_0001", "source_page": 1,
+                "image_path": "figures/fig_0001.jpeg", "bbox": [],
+                "extraction_method": "embedded",
+                "visual_type": {"value": "diagram", "provenance": {}},
+                "description": {"value": figure_description, "provenance": {}},
+                "caption": {"value": "Figure 1", "provenance": {}},
+                "relevance": "substantive", "analysis_mode": "vision", "_enrichment_stamp": {},
+            }))
 
     _write_material("chunk_only_mid", chunks_text="zorblax is a unique term in chunk text only")
     _write_material("ann_only_mid", annotation_text="qryvex is a unique term in annotation only")
+    _write_material("fig_only_mid", figure_description="wordmark logo visible in the building facade diagram")
 
     (tmp_path / "manifests" / "materials.jsonl").write_text("\n".join([
         json.dumps({"material_id": "chunk_only_mid", "file_hash": "x", "relative_path": "a.pdf", "file_type": "pdf", "domain": "research", "collection": "_general", "ingested_at": "2026-01-01T00:00:00+00:00"}),
         json.dumps({"material_id": "ann_only_mid", "file_hash": "y", "relative_path": "b.pdf", "file_type": "pdf", "domain": "research", "collection": "_general", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+        json.dumps({"material_id": "fig_only_mid", "file_hash": "z", "relative_path": "c.pdf", "file_type": "pdf", "domain": "research", "collection": "_general", "ingested_at": "2026-01-01T00:00:00+00:00"}),
     ]))
     monkeypatch.chdir(tmp_path)
     from arquimedes.index import rebuild_index
@@ -321,6 +335,27 @@ class TestContentFirstDeepSearch:
         result = search("zorblax", depth=2, facets=["domain=practice"])
         ids = [r.material_id for r in result.results]
         assert "chunk_only_mid" not in ids
+
+    def test_figure_only_not_surfaced_at_depth_1(self, content_first_repo):
+        result = search("wordmark", depth=1)
+        ids = [r.material_id for r in result.results]
+        assert "fig_only_mid" not in ids
+
+    def test_figure_only_surfaced_at_depth_2(self, content_first_repo):
+        result = search("wordmark", depth=2)
+        ids = [r.material_id for r in result.results]
+        assert "fig_only_mid" in ids
+
+    def test_figure_only_surfaced_at_depth_3(self, content_first_repo):
+        result = search("wordmark", depth=3)
+        ids = [r.material_id for r in result.results]
+        assert "fig_only_mid" in ids
+
+    def test_figure_only_card_has_figures(self, content_first_repo):
+        result = search("wordmark", depth=2)
+        card = next(r for r in result.results if r.material_id == "fig_only_mid")
+        assert len(card.figures) > 0
+        assert "wordmark" in card.figures[0].description.lower()
 
 
 class TestSearchResult:
@@ -579,14 +614,15 @@ class TestAnnotationCommentBoost:
 
 
 class TestEmphasisChunkBoost:
-    """Emphasized chunks sort before non-emphasized within the same material."""
+    """Emphasized chunks sort before non-emphasized within the same material,
+    but only as a modest boost — a much stronger text-relevance match should still win."""
 
-    def test_emphasized_chunk_ranks_first(self, emphasis_repo):
+    def test_emphasized_chunk_ranks_first_at_equal_relevance(self, emphasis_repo):
         result = search("vrenblax", depth=2)
         assert result.total == 1
         card = result.results[0]
         assert len(card.chunks) == 2
-        # emphasized chunk must come first
+        # emphasized chunk must come first when text relevance is equal
         assert card.chunks[0].emphasized is True
         assert card.chunks[1].emphasized is False
 

@@ -34,17 +34,17 @@ index.py ─► search.py ─► cli.py
 ## Tasks
 
 ### Task 1: `index.py` — schema + build
-- [ ] Create `indexes/` directory if missing
-- [ ] Define schema: `materials` + `materials_fts`, `chunks` + `chunks_fts`, `figures` + `figures_fts`, `annotations` + `annotations_fts`, `index_state`
-- [ ] `rebuild_index(config) → IndexStats` — full build from extracted/ artifacts
-- [ ] Read `materials.jsonl` for material IDs, iterate `extracted/<id>/`
-- [ ] Extract `.value` from `EnrichedField` wrappers; empty string for absent fields
-- [ ] Keywords list → space-joined string for FTS
-- [ ] Facets: read each `facets.<field>.value`, empty string if absent
-- [ ] Atomic write: build in temp file, rename to `indexes/search.sqlite`
-- [ ] Write `index_state` row: built_at, manifest_hash, material_count, extracted_snapshot
-- [ ] Tests
-- [ ] Commit
+- [x] Create `indexes/` directory if missing
+- [x] Define schema: `materials` + `materials_fts`, `chunks` + `chunks_fts`, `figures` + `figures_fts`, `annotations` + `annotations_fts`, `index_state`
+- [x] `rebuild_index(config) → IndexStats` — full build from extracted/ artifacts
+- [x] Read `materials.jsonl` for material IDs, iterate `extracted/<id>/`
+- [x] Extract `.value` from `EnrichedField` wrappers; empty string for absent fields
+- [x] Keywords list → space-joined string for FTS
+- [x] Facets: read each `facets.<field>.value`, empty string if absent
+- [x] Atomic write: build in temp file, rename to `indexes/search.sqlite`
+- [x] Write `index_state` row: built_at, manifest_hash, material_count, extracted_snapshot
+- [x] Tests
+- [x] Commit
 
 ### Task 2: `index.py` — staleness detection
 - [x] `ensure_index(config) → (rebuilt: bool, stats: IndexStats | None)`

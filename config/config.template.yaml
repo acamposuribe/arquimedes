@@ -1,0 +1,48 @@
+# Arquimedes local configuration template
+# Copy this file to config.local.yaml and adjust for your device.
+# config.local.yaml is gitignored — it won't be committed.
+# Only uncomment settings you need to override from config.yaml defaults.
+
+# Path to the shared raw materials library.
+# On macOS with iCloud, this is typically:
+#   ~/Arquimedes-Library
+# Adjust if your iCloud folder or OS is different.
+library_root: "~/Arquimedes-Library"
+
+# LLM provider override (if you prefer a different provider/model)
+# llm:
+#   provider: anthropic
+#   model: claude-sonnet-4-6
+#   api_key_env: ANTHROPIC_API_KEY
+
+# Extraction settings
+# extraction:
+#   chunk_size: 500            # tokens per chunk
+#   generate_thumbnails: true
+#   ocr_fallback: true
+#   figure_extraction:
+#     embedded: true
+#     rasterize: true
+#     rasterize_dpi: 200
+
+# Enrichment settings
+# enrichment:
+#   prompt_version: "enrich-v1.0"
+
+# Watch daemon settings (server mode)
+# watch:
+#   backend: fsevents          # fsevents (macOS) or poll (fallback)
+#   poll_interval: 30
+#   debounce_window: 10
+#   batch_commit: true
+
+# Sync daemon settings (collaborator mode)
+# sync:
+#   pull_interval: 300
+#   auto_start: false
+#   auto_index: true
+
+# Web UI
+# serve:
+#   host: "0.0.0.0"
+#   port: 8420

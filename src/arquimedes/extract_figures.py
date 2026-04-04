@@ -1,0 +1,304 @@
+"""Figure extraction from PDFs: embedded images + page rasterization with region detection."""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+
+import fitz  # PyMuPDF
+
+from arquimedes.models import Figure
+
+# Minimum dimensions to consider an image worth extracting (pixels)
+MIN_IMAGE_WIDTH = 100
+MIN_IMAGE_HEIGHT = 100
+MIN_IMAGE_AREA = 15000  # skip tiny decorative images
+
+
+def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
+    """Extract embedded raster images from a PDF.
+
+    These are photos, scanned images, and raster graphics embedded in the PDF.
+    """
+    figures_dir = output_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    doc = fitz.open(str(pdf_path))
+    figures: list[Figure] = []
+    seen_xrefs: set[int] = set()
+    fig_counter = 0
+
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+        image_list = page.get_images(full=True)
+
+        for img_info in image_list:
+            xref = img_info[0]
+
+            # Skip duplicate images (same xref = same image object)
+            if xref in seen_xrefs:
+                continue
+            seen_xrefs.add(xref)
+
+            try:
+                base_image = doc.extract_image(xref)
+            except Exception:
+                continue
+
+            if not base_image:
+                continue
+
+            width = base_image.get("width", 0)
+            height = base_image.get("height", 0)
+
+            # Skip small/decorative images
+            if width < MIN_IMAGE_WIDTH or height < MIN_IMAGE_HEIGHT:
+                continue
+            if width * height < MIN_IMAGE_AREA:
+                continue
+
+            image_bytes = base_image["image"]
+            ext = base_image.get("ext", "png")
+
+            fig_counter += 1
+            fig_id = f"fig_{fig_counter:04d}"
+            image_filename = f"{fig_id}.{ext}"
+            image_path = figures_dir / image_filename
+
+            image_path.write_bytes(image_bytes)
+
+            # Try to find the image's position on the page
+            bbox = _find_image_bbox(page, xref)
+
+            figures.append(Figure(
+                figure_id=fig_id,
+                source_page=page_num + 1,
+                image_path=f"figures/{image_filename}",
+                bbox=bbox,
+                extraction_method="embedded",
+            ))
+
+    doc.close()
+    return figures
+
+
+def _find_image_bbox(page: fitz.Page, xref: int) -> list[float]:
+    """Try to find the bounding box of an image on a page by its xref."""
+    for img in page.get_images(full=True):
+        if img[0] == xref:
+            # Get image rects - returns list of Rect where this image appears
+            rects = page.get_image_rects(img)
+            if rects:
+                r = rects[0]
+                return [r.x0, r.y0, r.x1, r.y1]
+    return []
+
+
+def rasterize_pages(
+    pdf_path: Path,
+    output_dir: Path,
+    dpi: int = 200,
+    existing_figures: list[Figure] | None = None,
+) -> list[Figure]:
+    """Rasterize PDF pages and detect visual regions that aren't embedded images.
+
+    This catches vector drawings, composite layouts, diagrams, and other
+    page-native graphics that aren't extractable as embedded images.
+
+    Strategy:
+    - Rasterize each page at the given DPI
+    - Detect regions with significant visual content but little text
+    - Crop and save those regions as separate figures
+    - Skip regions that overlap with already-extracted embedded images
+    """
+    figures_dir = output_dir / "figures"
+    figures_dir.mkdir(parents=True, exist_ok=True)
+
+    doc = fitz.open(str(pdf_path))
+    figures: list[Figure] = []
+
+    # Build a set of existing figure bboxes per page for overlap detection
+    existing_bboxes: dict[int, list[list[float]]] = {}
+    if existing_figures:
+        for fig in existing_figures:
+            if fig.bbox:
+                existing_bboxes.setdefault(fig.source_page, []).append(fig.bbox)
+
+    # Count existing figures to continue numbering
+    fig_offset = len(existing_figures) if existing_figures else 0
+
+    for page_num in range(len(doc)):
+        page = doc[page_num]
+
+        # Detect drawing-heavy regions on this page
+        regions = _detect_visual_regions(page)
+
+        page_existing = existing_bboxes.get(page_num + 1, [])
+
+        for region_rect in regions:
+            # Skip if this region overlaps significantly with an existing embedded image
+            if _overlaps_existing(region_rect, page_existing):
+                continue
+
+            # Rasterize just this region
+            clip = fitz.Rect(region_rect)
+            mat = fitz.Matrix(dpi / 72, dpi / 72)
+            pix = page.get_pixmap(matrix=mat, clip=clip)
+
+            # Skip if too small after rasterization
+            if pix.width < MIN_IMAGE_WIDTH or pix.height < MIN_IMAGE_HEIGHT:
+                continue
+
+            fig_offset += 1
+            fig_id = f"fig_{fig_offset:04d}"
+            image_filename = f"{fig_id}.png"
+            image_path = figures_dir / image_filename
+
+            pix.save(str(image_path))
+
+            figures.append(Figure(
+                figure_id=fig_id,
+                source_page=page_num + 1,
+                image_path=f"figures/{image_filename}",
+                bbox=list(region_rect),
+                extraction_method="rasterized_region",
+            ))
+
+    doc.close()
+    return figures
+
+
+def _detect_visual_regions(page: fitz.Page) -> list[list[float]]:
+    """Detect regions on a page that contain significant drawings/graphics.
+
+    Uses PyMuPDF's drawing extraction to find areas with vector content.
+    Groups nearby drawings into regions.
+    """
+    drawings = page.get_drawings()
+    if not drawings:
+        return []
+
+    # Collect bounding boxes of all drawing elements
+    draw_rects: list[fitz.Rect] = []
+    for drawing in drawings:
+        rect = fitz.Rect(drawing["rect"])
+        # Skip tiny decorative elements (lines, dots)
+        if rect.width < 20 or rect.height < 20:
+            continue
+        draw_rects.append(rect)
+
+    if not draw_rects:
+        return []
+
+    # Cluster nearby drawing rects into regions
+    regions = _cluster_rects(draw_rects, margin=20)
+
+    # Filter: only keep regions that are large enough to be meaningful
+    page_area = page.rect.width * page.rect.height
+    meaningful = []
+    for region in regions:
+        r = fitz.Rect(region)
+        area = r.width * r.height
+        # Region should be at least 5% of page area
+        if area >= page_area * 0.05:
+            meaningful.append(region)
+
+    return meaningful
+
+
+def _cluster_rects(rects: list[fitz.Rect], margin: float = 20) -> list[list[float]]:
+    """Cluster overlapping/nearby rectangles into merged regions."""
+    if not rects:
+        return []
+
+    # Start with each rect as its own cluster
+    clusters = [[r.x0 - margin, r.y0 - margin, r.x1 + margin, r.y1 + margin] for r in rects]
+
+    # Merge overlapping clusters iteratively
+    changed = True
+    while changed:
+        changed = False
+        merged = []
+        used = [False] * len(clusters)
+
+        for i in range(len(clusters)):
+            if used[i]:
+                continue
+            current = list(clusters[i])
+            for j in range(i + 1, len(clusters)):
+                if used[j]:
+                    continue
+                if _rects_overlap(current, clusters[j]):
+                    # Merge
+                    current[0] = min(current[0], clusters[j][0])
+                    current[1] = min(current[1], clusters[j][1])
+                    current[2] = max(current[2], clusters[j][2])
+                    current[3] = max(current[3], clusters[j][3])
+                    used[j] = True
+                    changed = True
+            merged.append(current)
+            used[i] = True
+
+        clusters = merged
+
+    return clusters
+
+
+def _rects_overlap(a: list[float], b: list[float]) -> bool:
+    """Check if two rectangles [x0, y0, x1, y1] overlap."""
+    return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
+
+
+def _overlaps_existing(region: list[float], existing: list[list[float]], threshold: float = 0.5) -> bool:
+    """Check if a region overlaps significantly with any existing figure bbox."""
+    r = fitz.Rect(region)
+    for ex in existing:
+        ex_rect = fitz.Rect(ex)
+        intersection = r & ex_rect
+        if intersection.is_empty:
+            continue
+        overlap_area = intersection.width * intersection.height
+        region_area = r.width * r.height
+        if region_area > 0 and overlap_area / region_area > threshold:
+            return True
+    return False
+
+
+def extract_all_figures(
+    pdf_path: Path,
+    output_dir: Path,
+    dpi: int = 200,
+    extract_embedded: bool = True,
+    extract_rasterized: bool = True,
+) -> list[Figure]:
+    """Extract all figures from a PDF using both strategies.
+
+    Args:
+        pdf_path: Path to the PDF file.
+        output_dir: The material's output directory (extracted/<material_id>/).
+        dpi: Resolution for page rasterization.
+        extract_embedded: Whether to extract embedded images.
+        extract_rasterized: Whether to rasterize and detect visual regions.
+
+    Returns:
+        List of all extracted Figure objects.
+    """
+    all_figures: list[Figure] = []
+
+    if extract_embedded:
+        embedded = extract_embedded_images(pdf_path, output_dir)
+        all_figures.extend(embedded)
+
+    if extract_rasterized:
+        rasterized = rasterize_pages(pdf_path, output_dir, dpi=dpi, existing_figures=all_figures)
+        all_figures.extend(rasterized)
+
+    # Write figure sidecars
+    for fig in all_figures:
+        sidecar_path = output_dir / "figures" / f"{fig.figure_id}.json"
+        sidecar_path.write_text(
+            json.dumps(fig.to_dict(), indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    return all_figures

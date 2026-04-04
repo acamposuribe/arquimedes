@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+.venv/
+venv/
+
+# Local config
+config/config.local.yaml
+
+# Search index (rebuilt locally via `arq index ensure`)
+indexes/search.sqlite
+indexes/search.sqlite-*
+
+# Embeddings (optional, rebuilt locally)
+indexes/embeddings/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs
+*.log
+~/.arquimedes/
+
+# Lint reports (regenerated)
+wiki/_lint_report.md

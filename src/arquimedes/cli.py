@@ -55,16 +55,106 @@ def extract_raw(material_id: str | None):
 
 @cli.command()
 @click.argument("material_id", required=False)
-def enrich(material_id: str | None):
+@click.option("--force", is_flag=True, help="Re-enrich even if not stale.")
+@click.option(
+    "--stage",
+    "stages",
+    multiple=True,
+    type=click.Choice(["document", "chunk", "figure"]),
+    help="Run only specific stage(s). Repeatable. Default: all stages.",
+)
+@click.option("--dry-run", is_flag=True, help="Report staleness without calling LLM.")
+def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_run: bool):
     """LLM enrichment: summaries, facets, descriptions (with provenance)."""
-    click.echo("arq enrich: not yet implemented")
+    from arquimedes.enrich import enrich as do_enrich
+    from arquimedes.enrich_llm import EnrichmentError
+
+    try:
+        results, all_succeeded = do_enrich(
+            material_id=material_id,
+            force=force,
+            stages=list(stages) if stages else None,
+            dry_run=dry_run,
+        )
+    except EnrichmentError as e:
+        raise click.ClickException(str(e))
+    except (ValueError, FileNotFoundError) as e:
+        raise click.ClickException(str(e))
+
+    if not results:
+        click.echo("Nothing to enrich (all materials up to date).")
+        return
+
+    for mid, material_result in results.items():
+        title = material_result.get("title", mid)
+        click.echo(f"\n{mid}  {title}")
+        for stage_name in ["document", "chunk", "figure"]:
+            if stage_name in material_result:
+                r = material_result[stage_name]
+                status = r.get("status", "?")
+                detail = r.get("detail", "")
+                click.echo(f"  [{stage_name}] {status}: {detail}")
+
+    if not all_succeeded:
+        raise SystemExit(1)
 
 
 @cli.command()
 @click.argument("material_id", required=False)
-def extract(material_id: str | None):
+@click.option("--force", is_flag=True, help="Re-extract and re-enrich even if not stale.")
+@click.option(
+    "--stage",
+    "stages",
+    multiple=True,
+    type=click.Choice(["document", "chunk", "figure"]),
+    help="Run only specific enrichment stage(s). Repeatable. Default: all stages.",
+)
+def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
     """Convenience: runs extract-raw + enrich."""
-    click.echo("arq extract: not yet implemented")
+    from arquimedes.extract import extract_raw as do_extract_raw
+    from arquimedes.enrich import enrich as do_enrich
+    from arquimedes.enrich_llm import EnrichmentError
+
+    click.echo("Running deterministic extraction...")
+    try:
+        extracted = do_extract_raw(material_id=material_id)
+    except (ValueError, FileNotFoundError) as e:
+        raise click.ClickException(str(e))
+
+    if extracted:
+        click.echo(f"Extracted {len(extracted)} material(s):")
+        for mid in extracted:
+            click.echo(f"  {mid}")
+    else:
+        click.echo("Nothing to extract (all materials already extracted).")
+
+    click.echo("Running LLM enrichment...")
+    try:
+        results, all_succeeded = do_enrich(
+            material_id=material_id,
+            force=force,
+            stages=list(stages) if stages else None,
+        )
+    except EnrichmentError as e:
+        raise click.ClickException(str(e))
+    except (ValueError, FileNotFoundError) as e:
+        raise click.ClickException(str(e))
+
+    if not results:
+        click.echo("Nothing to enrich (all materials up to date).")
+    else:
+        for mid, material_result in results.items():
+            title = material_result.get("title", mid)
+            click.echo(f"\n{mid}  {title}")
+            for stage_name in ["document", "chunk", "figure"]:
+                if stage_name in material_result:
+                    r = material_result[stage_name]
+                    status = r.get("status", "?")
+                    detail = r.get("detail", "")
+                    click.echo(f"  [{stage_name}] {status}: {detail}")
+
+    if not all_succeeded:
+        raise SystemExit(1)
 
 
 @cli.command()

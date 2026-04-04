@@ -1,6 +1,6 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phase 4 — Search Index (next)
+> **Status:** Phase 5 — Wiki Compiler (next)
 > **Last updated:** 2026-04-04
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
@@ -63,11 +63,11 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 4: Search Index
 
-- [ ] SQLite FTS5 index builder (`arq index rebuild`)
-- [ ] `arq index ensure` — auto-rebuild if stale
-- [ ] `arq search` — card-level lexical search
-- [ ] `arq search --deep` — multi-layer retrieval (cards → chunks → full text)
-- [ ] Faceted search support
+- [x] SQLite FTS5 index builder (`arq index rebuild`)
+- [x] `arq index ensure` — auto-rebuild if stale
+- [x] `arq search` — card-level lexical search
+- [x] `arq search --deep` — multi-layer retrieval (cards → chunks → full text)
+- [x] Faceted search support
 
 ## Phase 5: Wiki Compiler
 

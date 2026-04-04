@@ -105,10 +105,27 @@ def build_document_context(
         f"Collection: {collection}",
         f"Raw document type: {raw_document_type}",
         f"Raw keywords: {keywords_str}",
-        "",
-        "Table of Contents:",
-        toc_str,
     ]
+
+    # Include enriched summary/document_type when available (for chunk/figure context)
+    enriched_summary = meta.get("summary")
+    if isinstance(enriched_summary, dict) and "value" in enriched_summary:
+        lines.append(f"Document summary: {enriched_summary['value']}")
+    enriched_doc_type = meta.get("document_type")
+    if isinstance(enriched_doc_type, dict) and "value" in enriched_doc_type:
+        lines.append(f"Document type: {enriched_doc_type['value']}")
+
+    lines.append("")
+    lines.append("Table of Contents:")
+    lines.append(toc_str)
+
+    # Include headings if provided and TOC was empty
+    if headings and (not toc):
+        lines.append("")
+        lines.append("Section headings:")
+        for h in headings[:50]:  # cap to avoid very long context
+            lines.append(f"  - {h}")
+
     return "\n".join(lines)
 
 
@@ -168,6 +185,11 @@ Return ONLY valid JSON, no markdown fences, no explanations.
 """
 
 
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate: ~4 characters per token."""
+    return len(text) // 4
+
+
 def _build_chunks_text(chunks: list[dict], annotations: list[dict]) -> str:
     """Render all chunks with annotation markers injected."""
     parts = []
@@ -175,7 +197,6 @@ def _build_chunks_text(chunks: list[dict], annotations: list[dict]) -> str:
         chunk_id = chunk.get("chunk_id", "")
         source_pages = chunk.get("source_pages", [])
         text = chunk.get("text", "")
-        # Inject annotations for each page covered by this chunk
         for page_num in source_pages:
             text = inject_annotations(text, annotations, page_num)
         pages_str = ", ".join(str(p) for p in source_pages)
@@ -183,19 +204,102 @@ def _build_chunks_text(chunks: list[dict], annotations: list[dict]) -> str:
     return "\n".join(parts)
 
 
+def _curate_context_for_large_doc(
+    chunks: list[dict],
+    annotations: list[dict],
+    toc: list | None,
+    max_tokens: int,
+) -> str:
+    """Build curated context for documents too large to send in full.
+
+    Strategy from spec: TOC/headings + first chunks + last chunks +
+    chunks overlapping annotations + top emphasized chunks.
+    """
+    # Reserve space for TOC and framing
+    toc_text = format_toc(toc)
+    overhead_tokens = estimate_tokens(toc_text) + 500
+    budget = max_tokens - overhead_tokens
+
+    # Collect annotated page numbers
+    annotated_pages: set[int] = set()
+    for ann in annotations:
+        p = ann.get("page")
+        if isinstance(p, int):
+            annotated_pages.add(p)
+
+    # Score chunks: position priority + annotation overlap + emphasis
+    n = len(chunks) if chunks else 1
+    scored: list[tuple[float, int, dict]] = []
+    for idx, chunk in enumerate(chunks):
+        score = 0.0
+        # First 10% and last 10% of chunks get priority
+        if idx < n * 0.1 or idx >= n * 0.9:
+            score += 2.0
+        pages = set(chunk.get("source_pages", []))
+        if pages & annotated_pages:
+            score += 3.0
+        if chunk.get("emphasized"):
+            score += 1.0
+        scored.append((score, idx, chunk))
+
+    # Sort by score desc, then by original position
+    scored.sort(key=lambda t: (-t[0], t[1]))
+
+    # Greedily select chunks within budget
+    selected_indices: list[int] = []
+    used_tokens = 0
+    for _score, idx, chunk in scored:
+        text = chunk.get("text", "")
+        tok = estimate_tokens(text)
+        if used_tokens + tok > budget:
+            continue
+        selected_indices.append(idx)
+        used_tokens += tok
+
+    # Render in original order
+    selected_indices.sort()
+    parts = [f"[Curated context: {len(selected_indices)} of {len(chunks)} chunks selected]\n"]
+    for idx in selected_indices:
+        chunk = chunks[idx]
+        chunk_id = chunk.get("chunk_id", "")
+        source_pages = chunk.get("source_pages", [])
+        text = chunk.get("text", "")
+        for page_num in source_pages:
+            text = inject_annotations(text, annotations, page_num)
+        pages_str = ", ".join(str(p) for p in source_pages)
+        parts.append(f"--- Chunk {chunk_id} (pages {pages_str}) ---\n{text}\n")
+    return "\n".join(parts)
+
+
+# Default context token limit for document prompts (characters / 4)
+_DEFAULT_MAX_CONTEXT_TOKENS = 80_000
+
+
 def build_document_prompt(
     meta: dict,
     toc: list | None,
     chunks: list[dict],
     annotations: list[dict],
+    *,
+    max_context_tokens: int = _DEFAULT_MAX_CONTEXT_TOKENS,
 ) -> tuple[str, list[dict]]:
     """Build (system_prompt, messages) for document-level LLM enrichment.
 
-    The LLM is asked to return summary, document_type, keywords, facets,
-    and concepts for the entire document.
+    For small/moderate materials, sends all chunk text. For large materials
+    where full chunk text exceeds max_context_tokens, uses curated context
+    (first/last chunks, annotated chunks, emphasized chunks).
     """
     doc_context = build_document_context(meta, toc, None)
-    chunks_text = _build_chunks_text(chunks, annotations)
+    full_chunks_text = _build_chunks_text(chunks, annotations)
+
+    # Check if full text fits within token budget
+    total_tokens = estimate_tokens(doc_context + full_chunks_text + _DOCUMENT_SCHEMA)
+    if total_tokens <= max_context_tokens:
+        chunks_text = full_chunks_text
+    else:
+        chunks_text = _curate_context_for_large_doc(
+            chunks, annotations, toc, max_context_tokens
+        )
 
     user_content = _DOCUMENT_USER_TEMPLATE.format(
         doc_context=doc_context,

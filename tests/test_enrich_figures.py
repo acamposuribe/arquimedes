@@ -132,16 +132,9 @@ def _make_extracted_dir(
     return d
 
 
-def _make_client_returning(response_texts: list[str]) -> MagicMock:
-    """Create a mock client returning each response_text in sequence."""
-    client = MagicMock()
-    responses = []
-    for text in response_texts:
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text=text)]
-        responses.append(mock_resp)
-    client.messages.create.side_effect = responses
-    return client
+def _make_llm_fn(response_texts: list[str]) -> MagicMock:
+    """Create a mock llm_fn returning each response_text in sequence."""
+    return MagicMock(side_effect=response_texts)
 
 
 def _make_config(figure_batch_size: int = 6) -> dict:
@@ -152,6 +145,7 @@ def _make_config(figure_batch_size: int = 6) -> dict:
             "enrichment_schema_version": "1",
             "chunk_batch_target": 50,
             "figure_batch_size": figure_batch_size,
+            "max_retries": 3,
         },
     }
 
@@ -165,10 +159,10 @@ class TestEnrichFiguresStage:
     def test_vision_path_has_analysis_mode_vision(self, tmp_path):
         """When figure has an image file, analysis_mode should be 'vision'."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
-        client = _make_client_returning([_make_figure_response(["fig_0001"])])
+        llm_fn = _make_llm_fn([_make_figure_response(["fig_0001"])])
         config = _make_config()
 
-        result = enrich_figures_stage(output_dir, config, client, force=True)
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
 
         assert result["status"] == "enriched", result["detail"]
 
@@ -179,10 +173,10 @@ class TestEnrichFiguresStage:
     def test_text_fallback_when_no_image(self, tmp_path):
         """When figure has no image, analysis_mode should be 'text_fallback'."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
-        client = _make_client_returning([_make_figure_response(["fig_0001"])])
+        llm_fn = _make_llm_fn([_make_figure_response(["fig_0001"])])
         config = _make_config()
 
-        result = enrich_figures_stage(output_dir, config, client, force=True)
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
 
         assert result["status"] == "enriched", result["detail"]
 
@@ -193,10 +187,10 @@ class TestEnrichFiguresStage:
     def test_stamp_written_per_figure_sidecar(self, tmp_path):
         """After enrichment, each sidecar should contain _enrichment_stamp."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
-        client = _make_client_returning([_make_figure_response(["fig_0001"])])
+        llm_fn = _make_llm_fn([_make_figure_response(["fig_0001"])])
         config = _make_config()
 
-        enrich_figures_stage(output_dir, config, client, force=True)
+        enrich_figures_stage(output_dir, config, llm_fn, force=True)
 
         sidecar_path = output_dir / "figures" / "fig_0001.json"
         sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
@@ -209,10 +203,10 @@ class TestEnrichFiguresStage:
     def test_enriched_fields_written_to_sidecar(self, tmp_path):
         """visual_type, description, and caption should be written to the sidecar."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
-        client = _make_client_returning([_make_figure_response(["fig_0001"])])
+        llm_fn = _make_llm_fn([_make_figure_response(["fig_0001"])])
         config = _make_config()
 
-        enrich_figures_stage(output_dir, config, client, force=True)
+        enrich_figures_stage(output_dir, config, llm_fn, force=True)
 
         sidecar_path = output_dir / "figures" / "fig_0001.json"
         sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
@@ -241,42 +235,42 @@ class TestEnrichFiguresStage:
         (output_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
         (output_dir / "pages.jsonl").write_text("", encoding="utf-8")
 
-        client = MagicMock()
+        llm_fn = MagicMock()
         config = _make_config()
 
-        result = enrich_figures_stage(output_dir, config, client, force=True)
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "skipped"
-        client.messages.create.assert_not_called()
+        llm_fn.assert_not_called()
 
     def test_skipped_when_not_stale(self, tmp_path):
         """Second run without force should be skipped if nothing changed."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
-        client = _make_client_returning([
+        llm_fn = _make_llm_fn([
             _make_figure_response(["fig_0001"]),
             _make_figure_response(["fig_0001"]),
         ])
         config = _make_config()
 
-        result1 = enrich_figures_stage(output_dir, config, client, force=True)
+        result1 = enrich_figures_stage(output_dir, config, llm_fn, force=True)
         assert result1["status"] == "enriched"
 
-        call_count_after_first = client.messages.create.call_count
+        call_count_after_first = llm_fn.call_count
 
-        result2 = enrich_figures_stage(output_dir, config, client, force=False)
+        result2 = enrich_figures_stage(output_dir, config, llm_fn, force=False)
         assert result2["status"] == "skipped"
-        assert client.messages.create.call_count == call_count_after_first
+        assert llm_fn.call_count == call_count_after_first
 
     def test_multiple_figures_single_batch(self, tmp_path):
         """Two figures within batch_size should result in a single LLM call."""
         figure_ids = ["fig_0001", "fig_0002"]
         output_dir = _make_extracted_dir(tmp_path, figure_ids=figure_ids, with_image=False)
-        client = _make_client_returning([_make_figure_response(figure_ids)])
+        llm_fn = _make_llm_fn([_make_figure_response(figure_ids)])
         config = _make_config(figure_batch_size=6)
 
-        result = enrich_figures_stage(output_dir, config, client, force=True)
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
 
         assert result["status"] == "enriched"
-        assert client.messages.create.call_count == 1
+        assert llm_fn.call_count == 1
 
         # Both sidecars should be enriched
         for fid in figure_ids:
@@ -285,3 +279,53 @@ class TestEnrichFiguresStage:
             )
             assert "_enrichment_stamp" in sidecar
             assert "analysis_mode" in sidecar
+
+    def test_fails_when_figure_missing_from_response(self, tmp_path):
+        """If LLM omits a figure_id from its response, stage should fail."""
+        figure_ids = ["fig_0001", "fig_0002"]
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=figure_ids, with_image=False)
+        # Only return fig_0001, omit fig_0002
+        incomplete = _make_figure_response(["fig_0001"])
+        llm_fn = _make_llm_fn([incomplete])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "fig_0002" in result["detail"]
+
+    def test_fails_when_required_field_missing(self, tmp_path):
+        """If a figure response lacks visual_type, stage should fail."""
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
+        bad = json.dumps({
+            "figures": [{
+                "figure_id": "fig_0001",
+                # no visual_type
+                "description": {"value": "A plan", "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+                "caption": {"value": "Fig 1", "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+            }]
+        })
+        llm_fn = _make_llm_fn([bad])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "visual_type" in result["detail"]
+
+    def test_fails_when_field_dict_missing_value_key(self, tmp_path):
+        """If a field dict is present but lacks 'value', stage should fail."""
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
+        bad = json.dumps({
+            "figures": [{
+                "figure_id": "fig_0001",
+                "visual_type": {"confidence": 0.9},  # dict but no 'value'
+                "description": {"value": "A plan", "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+                "caption": {"value": "Fig 1", "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+            }]
+        })
+        llm_fn = _make_llm_fn([bad])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "visual_type" in result["detail"]
+        assert "value" in result["detail"]

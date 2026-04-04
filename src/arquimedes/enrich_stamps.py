@@ -97,7 +97,7 @@ def document_fingerprint(output_dir: Path) -> str:
 
 
 def chunk_fingerprint(output_dir: Path, doc_context: dict) -> str:
-    """Fingerprint for a chunk enrichment pass.
+    """Fingerprint for a chunk enrichment pass (all chunks combined).
 
     Hashes:
     - All chunk records from chunks.jsonl (text, source_pages, emphasized,
@@ -132,6 +132,36 @@ def chunk_fingerprint(output_dir: Path, doc_context: dict) -> str:
     annotations_text = ann_path.read_text(encoding="utf-8") if ann_path.exists() else "[]"
 
     return canonical_hash(raw_chunks, annotations_text, doc_context)
+
+
+def single_chunk_fingerprint(
+    chunk_record: dict,
+    annotations: list[dict],
+    doc_context: dict,
+) -> str:
+    """Fingerprint for a single chunk.
+
+    Hashes:
+    - The chunk's raw fields (chunk_id, text, source_pages, emphasized)
+    - Annotations that overlap with this chunk's pages
+    - doc_context digest (title, raw_document_type, headings, summary if present)
+
+    This enables per-chunk staleness detection: if an annotation changes on
+    page 5, only chunks covering page 5 become stale.
+    """
+    raw_chunk = {
+        "chunk_id": chunk_record.get("chunk_id", ""),
+        "text": chunk_record.get("text", ""),
+        "source_pages": chunk_record.get("source_pages", []),
+        "emphasized": chunk_record.get("emphasized", False),
+    }
+    # Filter annotations to pages this chunk covers
+    chunk_pages = set(chunk_record.get("source_pages", []))
+    relevant_annotations = sorted(
+        [a for a in annotations if a.get("page") in chunk_pages],
+        key=lambda a: (a.get("page", 0), a.get("quoted_text", "")),
+    )
+    return canonical_hash(raw_chunk, relevant_annotations, doc_context)
 
 
 # ---------------------------------------------------------------------------

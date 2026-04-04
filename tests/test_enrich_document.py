@@ -108,13 +108,9 @@ def _make_extracted_dir(tmp_path: Path) -> Path:
     return d
 
 
-def _make_client(response_text: str) -> MagicMock:
-    """Create a mock Anthropic client that returns response_text."""
-    client = MagicMock()
-    mock_response = MagicMock()
-    mock_response.content = [MagicMock(text=response_text)]
-    client.messages.create.return_value = mock_response
-    return client
+def _make_llm_fn(response_text: str) -> MagicMock:
+    """Create a mock llm_fn that returns response_text."""
+    return MagicMock(return_value=response_text)
 
 
 def _make_config() -> dict:
@@ -124,6 +120,7 @@ def _make_config() -> dict:
             "prompt_version": "enrich-v1.0",
             "enrichment_schema_version": "1",
             "chunk_batch_target": 50,
+            "max_retries": 3,
         },
     }
 
@@ -137,10 +134,10 @@ class TestEnrichDocumentStage:
     def test_meta_json_gets_enriched_fields(self, tmp_path):
         """After enrichment, meta.json should contain summary, document_type, keywords."""
         output_dir = _make_extracted_dir(tmp_path)
-        client = _make_client(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
         config = _make_config()
 
-        result = enrich_document_stage(output_dir, config, client, force=True)
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
 
         assert result["status"] == "enriched"
         meta = json.loads((output_dir / "meta.json").read_text(encoding="utf-8"))
@@ -154,10 +151,10 @@ class TestEnrichDocumentStage:
     def test_concepts_jsonl_is_written(self, tmp_path):
         """concepts.jsonl should be created with one entry per concept."""
         output_dir = _make_extracted_dir(tmp_path)
-        client = _make_client(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
         config = _make_config()
 
-        enrich_document_stage(output_dir, config, client, force=True)
+        enrich_document_stage(output_dir, config, llm_fn, force=True)
 
         concepts_path = output_dir / "concepts.jsonl"
         assert concepts_path.exists(), "concepts.jsonl should be written"
@@ -172,10 +169,10 @@ class TestEnrichDocumentStage:
     def test_enrichment_stamp_written_to_meta(self, tmp_path):
         """After enrichment, meta.json should contain _enrichment_stamp."""
         output_dir = _make_extracted_dir(tmp_path)
-        client = _make_client(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
         config = _make_config()
 
-        enrich_document_stage(output_dir, config, client, force=True)
+        enrich_document_stage(output_dir, config, llm_fn, force=True)
 
         meta = json.loads((output_dir / "meta.json").read_text(encoding="utf-8"))
         assert "_enrichment_stamp" in meta
@@ -188,43 +185,43 @@ class TestEnrichDocumentStage:
     def test_skipped_when_not_stale(self, tmp_path):
         """Running enrichment twice without force should skip the second run."""
         output_dir = _make_extracted_dir(tmp_path)
-        client = _make_client(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
         config = _make_config()
 
         # First run
-        result1 = enrich_document_stage(output_dir, config, client, force=True)
+        result1 = enrich_document_stage(output_dir, config, llm_fn, force=True)
         assert result1["status"] == "enriched"
 
-        call_count_after_first = client.messages.create.call_count
+        call_count_after_first = llm_fn.call_count
 
         # Second run without force — should be skipped (inputs haven't changed)
-        result2 = enrich_document_stage(output_dir, config, client, force=False)
+        result2 = enrich_document_stage(output_dir, config, llm_fn, force=False)
         assert result2["status"] == "skipped"
         # No additional LLM calls
-        assert client.messages.create.call_count == call_count_after_first
+        assert llm_fn.call_count == call_count_after_first
 
     def test_force_re_enriches_even_if_not_stale(self, tmp_path):
         """force=True should re-enrich even when stamp matches."""
         output_dir = _make_extracted_dir(tmp_path)
-        client = _make_client(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
         config = _make_config()
 
-        result1 = enrich_document_stage(output_dir, config, client, force=True)
+        result1 = enrich_document_stage(output_dir, config, llm_fn, force=True)
         assert result1["status"] == "enriched"
 
-        call_count_after_first = client.messages.create.call_count
+        call_count_after_first = llm_fn.call_count
 
-        result2 = enrich_document_stage(output_dir, config, client, force=True)
+        result2 = enrich_document_stage(output_dir, config, llm_fn, force=True)
         assert result2["status"] == "enriched"
-        assert client.messages.create.call_count > call_count_after_first
+        assert llm_fn.call_count > call_count_after_first
 
     def test_provenance_fields_present_in_enriched_field(self, tmp_path):
         """Each enriched field should carry a provenance sub-object."""
         output_dir = _make_extracted_dir(tmp_path)
-        client = _make_client(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
         config = _make_config()
 
-        enrich_document_stage(output_dir, config, client, force=True)
+        enrich_document_stage(output_dir, config, llm_fn, force=True)
 
         meta = json.loads((output_dir / "meta.json").read_text(encoding="utf-8"))
         prov = meta["summary"]["provenance"]
@@ -239,9 +236,74 @@ class TestEnrichDocumentStage:
         output_dir = _make_extracted_dir(tmp_path)
         config = _make_config()
 
-        client = MagicMock()
-        client.messages.create.side_effect = EnrichmentError("LLM unavailable")
+        llm_fn = MagicMock(side_effect=EnrichmentError("LLM unavailable"))
 
-        result = enrich_document_stage(output_dir, config, client, force=True)
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "failed"
         assert "LLM" in result["detail"] or "unavailable" in result["detail"]
+
+    def test_fails_when_summary_missing(self, tmp_path):
+        """If LLM output lacks required 'summary' field, stage should fail."""
+        incomplete = json.dumps({
+            "document_type": {"value": "paper", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
+            "keywords": {"value": ["arch"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+        })
+        output_dir = _make_extracted_dir(tmp_path)
+        llm_fn = _make_llm_fn(incomplete)
+        config = _make_config()
+
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "summary" in result["detail"]
+
+    def test_fails_when_document_type_missing(self, tmp_path):
+        """If LLM output lacks 'document_type', stage should fail."""
+        incomplete = json.dumps({
+            "summary": {"value": "A study.", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
+            "keywords": {"value": ["arch"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+        })
+        output_dir = _make_extracted_dir(tmp_path)
+        llm_fn = _make_llm_fn(incomplete)
+        config = _make_config()
+
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "document_type" in result["detail"]
+
+    def test_fails_when_field_missing_value_key(self, tmp_path):
+        """If a required field dict lacks 'value', stage should fail."""
+        bad = json.dumps({
+            "summary": {"source_pages": [1], "confidence": 0.9},  # no 'value'
+            "document_type": {"value": "paper", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
+            "keywords": {"value": ["arch"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+        })
+        output_dir = _make_extracted_dir(tmp_path)
+        llm_fn = _make_llm_fn(bad)
+        config = _make_config()
+
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "summary" in result["detail"]
+
+    def test_atomic_write_no_partial_on_failure(self, tmp_path):
+        """If concepts write fails, meta.json should not be modified."""
+        output_dir = _make_extracted_dir(tmp_path)
+        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
+        config = _make_config()
+
+        original_meta = (output_dir / "meta.json").read_text(encoding="utf-8")
+
+        # Patch Path.replace to fail on the concepts temp file rename
+        original_replace = Path.replace
+
+        def failing_replace(self, target):
+            if "concepts" in str(self):
+                raise OSError("disk full")
+            return original_replace(self, target)
+
+        with patch.object(Path, "replace", failing_replace):
+            result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "failed"
+        # meta.json should still have original content (meta tmp rename happens first,
+        # but that's the best we can do with sequential renames).

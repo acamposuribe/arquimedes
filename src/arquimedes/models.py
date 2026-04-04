@@ -194,6 +194,9 @@ class MaterialMeta:
     keywords: EnrichedField | None = None
     facets: ArchitectureFacets | None = None
 
+    # Enrichment stamp (set by enrich stage, used for staleness checks)
+    _enrichment_stamp: dict | None = None
+
     def to_dict(self) -> dict:
         result = {
             "material_id": self.material_id,
@@ -220,6 +223,8 @@ class MaterialMeta:
             result["keywords"] = self.keywords.to_dict()
         if self.facets is not None:
             result["facets"] = self.facets.to_dict()
+        if self._enrichment_stamp is not None:
+            result["_enrichment_stamp"] = self._enrichment_stamp
         return result
 
     @classmethod
@@ -249,6 +254,8 @@ class MaterialMeta:
             meta.keywords = EnrichedField.from_dict(data["keywords"])
         if "facets" in data:
             meta.facets = ArchitectureFacets.from_dict(data["facets"])
+        if "_enrichment_stamp" in data:
+            meta._enrichment_stamp = data["_enrichment_stamp"]
         return meta
 
     def save(self, extracted_dir: Path) -> None:
@@ -364,6 +371,8 @@ class Figure:
     visual_type: EnrichedField | None = None
     description: EnrichedField | None = None
     caption: EnrichedField | None = None
+    analysis_mode: str = ""  # vision | text_fallback
+    _enrichment_stamp: dict | None = None
 
     def to_dict(self) -> dict:
         result = {
@@ -379,6 +388,10 @@ class Figure:
             result["description"] = self.description.to_dict()
         if self.caption is not None:
             result["caption"] = self.caption.to_dict()
+        if self.analysis_mode:
+            result["analysis_mode"] = self.analysis_mode
+        if self._enrichment_stamp is not None:
+            result["_enrichment_stamp"] = self._enrichment_stamp
         return result
 
     @classmethod
@@ -396,6 +409,10 @@ class Figure:
             fig.description = EnrichedField.from_dict(data["description"])
         if "caption" in data:
             fig.caption = EnrichedField.from_dict(data["caption"])
+        if "analysis_mode" in data:
+            fig.analysis_mode = data["analysis_mode"]
+        if "_enrichment_stamp" in data:
+            fig._enrichment_stamp = data["_enrichment_stamp"]
         return fig
 
 

@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phase 2 — Complete
-> **Last updated:** 2026-04-04
+> **Status:** Phase 3 — Complete (pending integration smoke test)
+> **Last updated:** 2026-04-05
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 
 ## Context
@@ -42,13 +42,13 @@ Raw materials live in a shared iCloud folder. The repo contains extracted artifa
 
 ## Phase 3: LLM Enrichment
 
-- [ ] `arq enrich` — LLM enrichment with provenance on every field
-  - [ ] Annotation-aware: weight highlighted/noted sections in summaries and keywords
-  - [ ] Document-level: summary, document_type (refine raw_document_type), keywords (refine raw_keywords), architecture facets
-  - [ ] Chunk-level: one-line summaries, keywords
-  - [ ] Figure-level: visual_type, descriptions, captions
-  - [ ] Concept candidates for wiki compiler
-- [ ] `arq extract` convenience command (extract-raw + enrich)
+- [x] `arq enrich` — LLM enrichment with provenance on every field
+  - [x] Annotation-aware: weight highlighted/noted sections in summaries and keywords
+  - [x] Document-level: summary, document_type (refine raw_document_type), keywords (refine raw_keywords), architecture facets
+  - [x] Chunk-level: one-line summaries, keywords
+  - [x] Figure-level: visual_type, descriptions, captions
+  - [x] Concept candidates for wiki compiler
+- [x] `arq extract` convenience command (extract-raw + enrich)
 
 ## Phase 4: Search Index
 
@@ -103,7 +103,10 @@ Raw materials live in a shared iCloud folder. The repo contains extracted artifa
 | `src/arquimedes/extract_pdf.py` | Deterministic PDF extraction (text, images, tables, TOC) |
 | `src/arquimedes/extract_figures.py` | Figure extraction: embedded + rasterized regions |
 | `src/arquimedes/classify.py` | Deterministic classifiers (TF-IDF keywords, domain, document type) |
-| `src/arquimedes/enrich.py` | LLM enrichment with provenance tracking |
+| `src/arquimedes/enrich.py` | LLM enrichment orchestrator with provenance tracking |
+| `src/arquimedes/enrich_llm.py` | LLM callable abstraction (`LlmFn`) + agent CLI adapter (no API keys) |
+| `src/arquimedes/enrich_stamps.py` | Fingerprinting, staleness tracking, stamp I/O |
+| `src/arquimedes/enrich_prompts.py` | Prompt builders for document, chunk, figure stages |
 | `src/arquimedes/index.py` | SQLite FTS5 index build + query + staleness check |
 | `src/arquimedes/search.py` | Search interface (card → chunk → deep) |
 | `src/arquimedes/compile.py` | Wiki generation |

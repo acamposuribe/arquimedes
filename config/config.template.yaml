@@ -9,11 +9,10 @@
 # Adjust if your iCloud folder or OS is different.
 library_root: "~/Arquimedes-Library"
 
-# LLM provider override (if you prefer a different provider/model)
+# LLM agent CLI override (default: "claude --print")
+# The agent authenticates with its own credentials — no API keys needed here.
 # llm:
-#   provider: anthropic
-#   model: claude-sonnet-4-6
-#   api_key_env: ANTHROPIC_API_KEY
+#   agent_cmd: "claude --print"   # or openai-cli, gemini-cli, etc.
 
 # Extraction settings
 # extraction:

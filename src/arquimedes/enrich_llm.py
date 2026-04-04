@@ -1,20 +1,35 @@
-"""Thin LLM client wrapper for Phase 3 enrichment.
+"""LLM abstraction layer for Phase 3 enrichment.
 
-Provides:
-- call_llm: retry-aware Anthropic messages.create call
-- parse_json_or_repair: JSON parse with markdown fence stripping and one-shot
-  LLM schema repair fallback
-- make_client: construct anthropic.Anthropic from config + env
+The enrichment pipeline does not depend on any specific LLM provider.
+All stages receive an ``LlmFn`` — a callable with signature::
+
+    (system: str, messages: list[dict]) -> str
+
+The default implementation (``make_cli_llm_fn``) shells out to a
+configurable agent CLI (e.g. ``claude``, ``openai``, ``gemini``).
+The agent authenticates with its own credentials — no API keys needed
+in this codebase.  Callers can also supply a custom ``LlmFn`` directly.
+
+Also provides:
+- parse_json_or_repair: JSON parse with markdown fence stripping and
+  one-shot LLM schema repair fallback
+- EnrichmentError: raised on unrecoverable enrichment failures
 """
 
 from __future__ import annotations
 
 import json
-import os
 import re
-import time
+import shutil
+import subprocess
+from typing import Callable
 
-import anthropic
+# ---------------------------------------------------------------------------
+# Type alias
+# ---------------------------------------------------------------------------
+
+LlmFn = Callable[[str, list[dict]], str]
+"""(system_prompt, messages) -> response_text"""
 
 
 # ---------------------------------------------------------------------------
@@ -24,41 +39,6 @@ import anthropic
 
 class EnrichmentError(Exception):
     """Raised when LLM enrichment fails unrecoverably."""
-
-
-# ---------------------------------------------------------------------------
-# LLM call with retry
-# ---------------------------------------------------------------------------
-
-
-def call_llm(
-    client,
-    model: str,
-    system: str,
-    messages: list[dict],
-    max_tokens: int = 4096,
-    max_retries: int = 3,
-) -> str:
-    """Call client.messages.create and return the first text content block.
-
-    Retries on RateLimitError and APIConnectionError with exponential backoff
-    (``time.sleep(2 ** attempt)``).  After max_retries exhausted, re-raises
-    the last exception.  All other errors propagate immediately.
-    """
-    last_exc: Exception | None = None
-    for attempt in range(max_retries):
-        try:
-            response = client.messages.create(
-                model=model,
-                max_tokens=max_tokens,
-                system=system,
-                messages=messages,
-            )
-            return response.content[0].text
-        except (anthropic.RateLimitError, anthropic.APIConnectionError) as exc:
-            last_exc = exc
-            time.sleep(2 ** attempt)
-    raise last_exc
 
 
 # ---------------------------------------------------------------------------
@@ -75,8 +55,7 @@ def _strip_fences(text: str) -> str:
 
 
 def parse_json_or_repair(
-    client,
-    model: str,
+    llm_fn: LlmFn,
     text: str,
     schema_description: str,
 ) -> dict:
@@ -102,11 +81,9 @@ def parse_json_or_repair(
         pass
 
     # Step 3: one-shot LLM schema repair
-    repair_response = call_llm(
-        client=client,
-        model=model,
-        system="You are a JSON repair assistant. Return ONLY valid JSON, no markdown fences.",
-        messages=[
+    repair_response = llm_fn(
+        "You are a JSON repair assistant. Return ONLY valid JSON, no markdown fences.",
+        [
             {
                 "role": "user",
                 "content": (
@@ -115,8 +92,6 @@ def parse_json_or_repair(
                 ),
             }
         ],
-        max_tokens=4096,
-        max_retries=1,
     )
 
     try:
@@ -126,18 +101,87 @@ def parse_json_or_repair(
 
 
 # ---------------------------------------------------------------------------
-# Client factory
+# Agent CLI adapter (default — shells out to configurable agent command)
 # ---------------------------------------------------------------------------
 
 
-def make_client(config: dict) -> anthropic.Anthropic:
-    """Construct an anthropic.Anthropic client from *config* and environment.
+def _build_prompt_text(system: str, messages: list[dict]) -> str:
+    """Flatten system + messages into a single text prompt for the CLI agent.
 
-    Reads the API key env var name from ``config["llm"]["api_key_env"]``
-    (default ``"ANTHROPIC_API_KEY"``).  Raises EnrichmentError if the env var
-    is missing or empty.
+    For multimodal messages (image blocks in figure enrichment), the image
+    content is skipped — the agent CLI doesn't support inline images.
+    Text blocks and plain strings are concatenated.
     """
-    key_env: str = config.get("llm", {}).get("api_key_env", "ANTHROPIC_API_KEY")
-    if not os.environ.get(key_env):
-        raise EnrichmentError(f"Set {key_env} environment variable to use LLM enrichment")
-    return anthropic.Anthropic(api_key=os.environ[key_env])
+    parts = [f"[SYSTEM]\n{system}\n"]
+    for msg in messages:
+        role = msg.get("role", "user").upper()
+        content = msg.get("content", "")
+        if isinstance(content, str):
+            parts.append(f"[{role}]\n{content}\n")
+        elif isinstance(content, list):
+            # Multimodal content blocks (text + image)
+            text_parts = []
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    text_parts.append(block["text"])
+                elif isinstance(block, str):
+                    text_parts.append(block)
+                # Skip image blocks — agent CLI doesn't support inline images
+            if text_parts:
+                parts.append(f"[{role}]\n{''.join(text_parts)}\n")
+    return "\n".join(parts)
+
+
+def make_cli_llm_fn(config: dict) -> LlmFn:
+    """Build an LlmFn that shells out to an agent CLI.
+
+    Reads the command from ``config["llm"]["agent_cmd"]`` (default:
+    ``"claude --print"``).  The agent authenticates with its own
+    credentials — no API keys needed in this codebase.
+
+    The prompt is passed via stdin. The agent's stdout is the response.
+
+    Raises EnrichmentError if the agent command is not found on PATH.
+    """
+    agent_cmd: str = config.get("llm", {}).get("agent_cmd", "claude --print")
+    cmd_parts = agent_cmd.split()
+
+    # Verify the command exists on PATH
+    if not shutil.which(cmd_parts[0]):
+        raise EnrichmentError(
+            f"Agent CLI not found: {cmd_parts[0]!r}. "
+            f"Install it or set llm.agent_cmd in config.yaml to your agent "
+            f"(e.g. 'claude --print', 'openai-cli', 'gemini-cli')."
+        )
+
+    max_retries: int = config.get("enrichment", {}).get("max_retries", 3)
+
+    def llm_fn(system: str, messages: list[dict]) -> str:
+        prompt_text = _build_prompt_text(system, messages)
+        last_exc: Exception | None = None
+
+        for attempt in range(max_retries):
+            try:
+                result = subprocess.run(
+                    cmd_parts,
+                    input=prompt_text,
+                    capture_output=True,
+                    text=True,
+                    timeout=300,  # 5-minute timeout per call
+                )
+                if result.returncode != 0:
+                    raise EnrichmentError(
+                        f"Agent CLI failed (exit {result.returncode}): "
+                        f"{result.stderr.strip()[:500]}"
+                    )
+                return result.stdout
+            except subprocess.TimeoutExpired:
+                last_exc = EnrichmentError(
+                    f"Agent CLI timed out after 300s (attempt {attempt + 1}/{max_retries})"
+                )
+            except FileNotFoundError:
+                raise EnrichmentError(f"Agent CLI not found: {cmd_parts[0]!r}")
+
+        raise last_exc
+
+    return llm_fn

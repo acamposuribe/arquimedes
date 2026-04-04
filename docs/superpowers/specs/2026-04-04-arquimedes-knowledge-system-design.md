@@ -135,9 +135,8 @@ Collections let collaborators scope work to a subset of materials — useful for
 # config.yaml (committed defaults)
 library_root: "~/Arquimedes-Library"
 llm:
-  provider: anthropic        # or openai, google
-  model: claude-sonnet-4-6
-  api_key_env: ANTHROPIC_API_KEY
+  agent_cmd: "claude --print"   # agent CLI (claude, openai-cli, gemini-cli, etc.)
+                                 # agent authenticates with its own credentials
 extraction:
   chunk_size: 500            # tokens per chunk
   generate_thumbnails: true
@@ -463,7 +462,7 @@ No auth initially (local network). Basic auth can be added later.
 - **Tesseract** (via pytesseract, optional) for OCR on scanned documents and images
 - **SQLite FTS5** for search index (stdlib, no extra dependency)
 - **FastAPI + Jinja2** for web UI
-- **anthropic SDK** for LLM enrichment (configurable provider)
+- **Agent CLI** (configurable: claude, openai-cli, gemini-cli) for LLM enrichment — no API keys in codebase
 - **watchdog** (cross-platform) or **pyobjc-FSEvents** (macOS native) for file watching
 - **launchd** for daemon management on macOS
 

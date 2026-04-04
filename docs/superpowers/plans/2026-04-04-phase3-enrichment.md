@@ -2,6 +2,15 @@
 
 **Spec:** [Phase 3 enrichment design](../specs/2026-04-04-phase3-enrichment-design.md)
 **Date:** 2026-04-04
+**Status:** Complete (2026-04-04)
+
+## Resolved v1 Simplifications
+
+All previously noted simplifications have been implemented:
+
+- ~~**Token-budget batching:**~~ Chunk batching now uses token-budget estimation (`estimate_tokens`) to fill batches proportionally rather than fixed count splitting.
+- ~~**Large material context curating:**~~ `build_document_prompt` detects when total tokens exceed `max_context_tokens` (default 80k) and calls `_curate_context_for_large_doc` which scores chunks by position, annotation overlap, and emphasis, then greedily selects within budget.
+- ~~**Multi-file stage atomicity:**~~ All three stages use backup-commit-rollback: originals moved to `.bak`, temps renamed to final, with rollback on any failure.
 
 ---
 
@@ -12,7 +21,7 @@
 | 1 | `config/config.yaml` | Modify | Add `enrichment_schema_version`, `chunk_batch_target`, `figure_batch_size`, `max_retries` |
 | 2 | `src/arquimedes/enrich_stamps.py` | Create | Canonical fingerprinting, staleness check, stamp read/write |
 | 3 | `src/arquimedes/enrich_prompts.py` | Create | Prompt builders for document, chunk, figure stages |
-| 4 | `src/arquimedes/enrich_llm.py` | Create | Thin LLM client wrapper: call with retry, JSON parse, schema-repair retry |
+| 4 | `src/arquimedes/enrich_llm.py` | Create | LLM callable abstraction (`LlmFn`), JSON parse, schema-repair retry. Default adapter via `make_cli_llm_fn` shells out to configurable agent CLI (no API keys). |
 | 5 | `src/arquimedes/enrich_document.py` | Create | Document stage: LLM call → write `meta.json` enriched fields + `concepts.jsonl` |
 | 6 | `src/arquimedes/enrich_chunks.py` | Create | Chunk stage: batched LLM calls → atomic write to `chunks.jsonl` + `chunk_enrichment_stamps.json` |
 | 7 | `src/arquimedes/enrich_figures.py` | Create | Figure stage: vision + text fallback → write figure sidecar JSONs |
@@ -37,7 +46,7 @@ enrich_prompts ──────────────────┘
 | Module | Test file | Strategy |
 |--------|-----------|----------|
 | `enrich_stamps` | `tests/test_enrich_stamps.py` | Pure functions — no mocks needed. Fixture: minimal `extracted/<id>/` on `tmp_path` |
-| `enrich_llm` | `tests/test_enrich_llm.py` | Mock `anthropic.Anthropic` — test retry, schema-repair, error propagation |
+| `enrich_llm` | `tests/test_enrich_llm.py` | Test JSON parse/fence-stripping, schema-repair, prompt flattening, CLI adapter (fake shell script) |
 | `enrich_document` | `tests/test_enrich_document.py` | Mock `enrich_llm.call_llm` — test JSON→model mapping, meta.json + concepts.jsonl writes |
 | `enrich_chunks` | `tests/test_enrich_chunks.py` | Mock LLM — test batching logic, atomic write (all-or-nothing), stamp map |
 | `enrich_figures` | `tests/test_enrich_figures.py` | Mock LLM — test vision path, text-fallback path, `analysis_mode` field |
@@ -63,7 +72,7 @@ enrich_prompts ──────────────────┘
 - [ ] Commit
 
 ### Task 3: `enrich_llm.py` + tests
-- [ ] `call_llm(client, model, system, messages, max_tokens, max_retries) → str` — Anthropic SDK call with exponential backoff retry on `RateLimitError`/`APIConnectionError`
+- [ ] `make_cli_llm_fn(config) → LlmFn` — shells out to configurable agent CLI (`config["llm"]["agent_cmd"]`), retries on timeout
 - [ ] `parse_json_or_repair(client, model, text, schema_description) → dict` — JSON parse, one schema-repair retry on failure, raise `EnrichmentError` if still invalid
 - [ ] Custom `EnrichmentError` exception
 - [ ] Tests: mock client — success, retry on rate limit, schema-repair path, final failure

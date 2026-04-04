@@ -184,11 +184,11 @@ Passes through `--force` and `--stage` flags to the enrich step.
 
 ## Error Handling
 
-- **API errors** (rate limits, timeouts): retry with exponential backoff, max 3 attempts per call
+- **Agent CLI errors** (timeouts, non-zero exit): retry up to max_retries per call
 - **Invalid LLM output** (malformed JSON, missing fields): one schema-repair retry ("return valid JSON matching the schema"), then fail the stage if still invalid
 - **Partial failure:** if one stage fails, save what succeeded in other stages. Stamps track independence.
 - **Stage atomicity:** either a stage completes fully or it doesn't write. No partial enrichment within a stage.
-- **Missing API key:** fail fast with message: "Set ANTHROPIC_API_KEY (see config.yaml → llm.api_key_env)"
+- **Missing agent CLI:** fail fast with message: "Agent CLI not found: '<cmd>'. Install it or set llm.agent_cmd in config.yaml"
 - **Missing material:** clear error message with material_id
 
 ## File Layout After Enrichment
@@ -210,16 +210,15 @@ From `config.yaml`:
 
 ```yaml
 llm:
-  provider: anthropic
-  model: claude-sonnet-4-6
-  api_key_env: ANTHROPIC_API_KEY
+  agent_cmd: "claude --print"   # agent CLI (claude, openai-cli, gemini-cli, etc.)
+                                 # agent authenticates with its own credentials
 
 enrichment:
   prompt_version: "enrich-v1.0"
   enrichment_schema_version: "1"
   chunk_batch_target: 50        # target chunks per batch (adjusted by token budget)
   figure_batch_size: 6          # figures per multimodal call
-  max_retries: 3                # API call retries
+  max_retries: 3                # agent CLI call retries
 ```
 
 ## Scope Boundaries

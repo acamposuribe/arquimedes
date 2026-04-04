@@ -96,16 +96,9 @@ def _make_extracted_dir(tmp_path: Path, n_chunks: int = 1) -> Path:
     return d
 
 
-def _make_client_returning(response_texts: list[str]) -> MagicMock:
-    """Create a mock client returning each response_text in sequence."""
-    client = MagicMock()
-    responses = []
-    for text in response_texts:
-        mock_resp = MagicMock()
-        mock_resp.content = [MagicMock(text=text)]
-        responses.append(mock_resp)
-    client.messages.create.side_effect = responses
-    return client
+def _make_llm_fn(response_texts: list[str]) -> MagicMock:
+    """Create a mock llm_fn returning each response_text in sequence."""
+    return MagicMock(side_effect=response_texts)
 
 
 def _make_config(batch_target: int = 50) -> dict:
@@ -115,6 +108,7 @@ def _make_config(batch_target: int = 50) -> dict:
             "prompt_version": "enrich-v1.0",
             "enrichment_schema_version": "1",
             "chunk_batch_target": batch_target,
+            "max_retries": 3,
         },
     }
 
@@ -129,10 +123,10 @@ class TestEnrichChunksStage:
         """After enrichment, chunks.jsonl records should have summary and keywords."""
         output_dir = _make_extracted_dir(tmp_path, n_chunks=1)
         chunk_ids = ["c001"]
-        client = _make_client_returning([_make_chunk_response(chunk_ids)])
+        llm_fn = _make_llm_fn([_make_chunk_response(chunk_ids)])
         config = _make_config()
 
-        result = enrich_chunks_stage(output_dir, config, client, force=True)
+        result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
 
         assert result["status"] == "enriched", result["detail"]
 
@@ -150,20 +144,25 @@ class TestEnrichChunksStage:
         assert "term1" in c["keywords"]["value"]
 
     def test_chunk_enrichment_stamps_written(self, tmp_path):
-        """chunk_enrichment_stamps.json should be written after successful enrichment."""
-        output_dir = _make_extracted_dir(tmp_path, n_chunks=1)
-        client = _make_client_returning([_make_chunk_response(["c001"])])
+        """chunk_enrichment_stamps.json should contain per-chunk stamp map."""
+        output_dir = _make_extracted_dir(tmp_path, n_chunks=2)
+        llm_fn = _make_llm_fn([_make_chunk_response(["c001", "c002"])])
         config = _make_config()
 
-        enrich_chunks_stage(output_dir, config, client, force=True)
+        enrich_chunks_stage(output_dir, config, llm_fn, force=True)
 
         stamps_path = output_dir / "chunk_enrichment_stamps.json"
         assert stamps_path.exists(), "chunk_enrichment_stamps.json should be created"
         stamps = json.loads(stamps_path.read_text(encoding="utf-8"))
-        assert "_stage" in stamps
-        stage_stamp = stamps["_stage"]
-        assert "prompt_version" in stage_stamp
-        assert "input_fingerprint" in stage_stamp
+        # Per-chunk stamps: each chunk_id maps to a stamp dict
+        assert "c001" in stamps
+        assert "c002" in stamps
+        for chunk_id in ["c001", "c002"]:
+            stamp = stamps[chunk_id]
+            assert "prompt_version" in stamp
+            assert "input_fingerprint" in stamp
+            assert "model" in stamp
+            assert "enrichment_schema_version" in stamp
 
     def test_batch_failure_no_writes(self, tmp_path):
         """If the LLM call fails for any batch, no writes should occur (atomic)."""
@@ -175,10 +174,9 @@ class TestEnrichChunksStage:
         # Read original chunks before enrichment
         original_chunks_text = (output_dir / "chunks.jsonl").read_text(encoding="utf-8")
 
-        client = MagicMock()
-        client.messages.create.side_effect = EnrichmentError("LLM failed")
+        llm_fn = MagicMock(side_effect=EnrichmentError("LLM failed"))
 
-        result = enrich_chunks_stage(output_dir, config, client, force=True)
+        result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
 
         assert result["status"] == "failed"
         # chunks.jsonl should be unchanged
@@ -194,42 +192,42 @@ class TestEnrichChunksStage:
         # Prepare two batch responses
         batch1_ids = [f"c{i:03d}" for i in range(1, 51)]
         batch2_ids = [f"c{i:03d}" for i in range(51, 101)]
-        client = _make_client_returning([
+        llm_fn = _make_llm_fn([
             _make_chunk_response(batch1_ids),
             _make_chunk_response(batch2_ids),
         ])
 
-        result = enrich_chunks_stage(output_dir, config, client, force=True)
+        result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
 
         assert result["status"] == "enriched", result["detail"]
-        assert client.messages.create.call_count == 2
+        assert llm_fn.call_count == 2
 
     def test_skipped_when_not_stale(self, tmp_path):
         """Second run without force should be skipped."""
         output_dir = _make_extracted_dir(tmp_path, n_chunks=1)
         chunk_ids = ["c001"]
-        client = _make_client_returning([
+        llm_fn = _make_llm_fn([
             _make_chunk_response(chunk_ids),
             _make_chunk_response(chunk_ids),
         ])
         config = _make_config()
 
-        result1 = enrich_chunks_stage(output_dir, config, client, force=True)
+        result1 = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
         assert result1["status"] == "enriched"
 
-        call_count_after_first = client.messages.create.call_count
+        call_count_after_first = llm_fn.call_count
 
-        result2 = enrich_chunks_stage(output_dir, config, client, force=False)
+        result2 = enrich_chunks_stage(output_dir, config, llm_fn, force=False)
         assert result2["status"] == "skipped"
-        assert client.messages.create.call_count == call_count_after_first
+        assert llm_fn.call_count == call_count_after_first
 
     def test_original_chunk_fields_preserved(self, tmp_path):
         """Original chunk fields (text, source_pages, emphasized) must be kept."""
         output_dir = _make_extracted_dir(tmp_path, n_chunks=1)
-        client = _make_client_returning([_make_chunk_response(["c001"])])
+        llm_fn = _make_llm_fn([_make_chunk_response(["c001"])])
         config = _make_config()
 
-        enrich_chunks_stage(output_dir, config, client, force=True)
+        enrich_chunks_stage(output_dir, config, llm_fn, force=True)
 
         chunks = [
             json.loads(line)
@@ -242,14 +240,49 @@ class TestEnrichChunksStage:
         assert c["source_pages"] == [1]
         assert c["emphasized"] is False
 
+    def test_fails_when_chunk_missing_from_response(self, tmp_path):
+        """If LLM omits a chunk_id from its response, stage should fail."""
+        output_dir = _make_extracted_dir(tmp_path, n_chunks=2)
+        # Only return enrichment for c001, omit c002
+        incomplete = json.dumps({
+            "chunks": [{
+                "chunk_id": "c001",
+                "summary": {"value": "S", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
+                "keywords": {"value": ["k"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+            }]
+        })
+        llm_fn = _make_llm_fn([incomplete])
+        config = _make_config()
+
+        result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "c002" in result["detail"]
+
+    def test_fails_when_chunk_missing_summary(self, tmp_path):
+        """If a chunk response lacks summary, stage should fail."""
+        output_dir = _make_extracted_dir(tmp_path, n_chunks=1)
+        bad = json.dumps({
+            "chunks": [{
+                "chunk_id": "c001",
+                # no summary
+                "keywords": {"value": ["k"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+            }]
+        })
+        llm_fn = _make_llm_fn([bad])
+        config = _make_config()
+
+        result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "c001" in result["detail"]
+
     def test_no_chunks_returns_skipped(self, tmp_path):
         """If chunks.jsonl is empty or absent, the stage should be skipped."""
         output_dir = _make_extracted_dir(tmp_path, n_chunks=0)
         # Overwrite with empty file
         (output_dir / "chunks.jsonl").write_text("", encoding="utf-8")
-        client = MagicMock()
+        llm_fn = MagicMock()
         config = _make_config()
 
-        result = enrich_chunks_stage(output_dir, config, client, force=True)
+        result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "skipped"
-        client.messages.create.assert_not_called()
+        llm_fn.assert_not_called()

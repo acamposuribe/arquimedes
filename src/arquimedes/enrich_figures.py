@@ -101,7 +101,7 @@ def _make_enriched_field(llm_field: dict, model: str, prompt_version: str) -> En
 def enrich_figures_stage(
     output_dir: Path,
     config: dict,
-    client,
+    llm_fn,
     *,
     force: bool = False,
 ) -> dict:
@@ -110,7 +110,7 @@ def enrich_figures_stage(
     Args:
         output_dir: Path to extracted/<material_id>/ directory.
         config: Full config dict.
-        client: anthropic.Anthropic client (or mock).
+        llm_fn: Callable (system, messages) -> str. The LLM implementation.
         force: Re-enrich even if not stale.
 
     Returns:
@@ -258,9 +258,9 @@ def enrich_figures_stage(
             system, messages = enrich_prompts.build_figure_batch_prompt(
                 figures_with_context, doc_context_str
             )
-            raw_text = enrich_llm.call_llm(client, model, system, messages)
+            raw_text = llm_fn(system, messages)
             parsed = enrich_llm.parse_json_or_repair(
-                client, model, raw_text, _FIGURE_BATCH_SCHEMA_DESC
+                llm_fn, raw_text, _FIGURE_BATCH_SCHEMA_DESC
             )
         except enrich_llm.EnrichmentError as exc:
             return {
@@ -289,42 +289,96 @@ def enrich_figures_stage(
             has_image = image_path is not None and image_path.exists()
             analysis_mode = "vision" if has_image else "text_fallback"
 
-            fig_response = response_by_id.get(figure_id, {})
+            fig_response = response_by_id.get(figure_id)
+            if fig_response is None:
+                return {
+                    "status": "failed",
+                    "detail": f"Batch {batch_idx + 1}/{len(batches)}: LLM output missing figure '{figure_id}'",
+                }
+
+            # Validate required fields and their 'value' key
+            for req_field in ("visual_type", "description", "caption"):
+                if req_field not in fig_response or not isinstance(fig_response[req_field], dict):
+                    return {
+                        "status": "failed",
+                        "detail": f"Figure '{figure_id}' missing required field '{req_field}'",
+                    }
+                if "value" not in fig_response[req_field]:
+                    return {
+                        "status": "failed",
+                        "detail": f"Figure '{figure_id}' field '{req_field}' missing 'value'",
+                    }
 
             # Build enriched sidecar fields
             enriched: dict = dict(sidecar)
             enriched["analysis_mode"] = analysis_mode
 
-            if "visual_type" in fig_response and isinstance(fig_response["visual_type"], dict):
-                try:
-                    ef = _make_enriched_field(fig_response["visual_type"], model, prompt_version)
-                    enriched["visual_type"] = ef.to_dict()
-                except Exception:
-                    pass
+            try:
+                ef = _make_enriched_field(fig_response["visual_type"], model, prompt_version)
+                enriched["visual_type"] = ef.to_dict()
 
-            if "description" in fig_response and isinstance(fig_response["description"], dict):
-                try:
-                    ef = _make_enriched_field(fig_response["description"], model, prompt_version)
-                    enriched["description"] = ef.to_dict()
-                except Exception:
-                    pass
+                ef = _make_enriched_field(fig_response["description"], model, prompt_version)
+                enriched["description"] = ef.to_dict()
 
-            if "caption" in fig_response and isinstance(fig_response["caption"], dict):
-                try:
-                    ef = _make_enriched_field(fig_response["caption"], model, prompt_version)
-                    enriched["caption"] = ef.to_dict()
-                except Exception:
-                    pass
+                ef = _make_enriched_field(fig_response["caption"], model, prompt_version)
+                enriched["caption"] = ef.to_dict()
+            except Exception as exc:
+                return {
+                    "status": "failed",
+                    "detail": f"Figure '{figure_id}' field mapping error: {exc}",
+                }
 
             enriched["_enrichment_stamp"] = fig["stamp"]
             enriched_by_path[fig["path"]] = enriched
 
-    # 9. Write enriched sidecar JSONs
+    # 9. Atomic write: stage all sidecar files, then commit with rollback
     try:
+        # Stage: write all to temp files
+        temp_pairs: list[tuple[Path, Path]] = []
         for sidecar_path, enriched in enriched_by_path.items():
-            sidecar_path.write_text(
+            tmp = sidecar_path.with_suffix(".json.tmp")
+            tmp.write_text(
                 json.dumps(enriched, indent=2, ensure_ascii=False), encoding="utf-8"
             )
+            temp_pairs.append((tmp, sidecar_path))
+
+        # Backup originals for rollback
+        backup_pairs: list[tuple[Path, Path]] = []  # (final, backup)
+        for _tmp, final in temp_pairs:
+            bak = final.with_suffix(".json.bak")
+            if final.exists():
+                final.replace(bak)
+            backup_pairs.append((final, bak))
+
+        # Commit: rename all temps to final
+        committed: list[tuple[Path, Path]] = []
+        try:
+            for tmp, final in temp_pairs:
+                tmp.replace(final)
+                bak = final.with_suffix(".json.bak")
+                committed.append((final, bak))
+        except Exception:
+            # Rollback: restore backups for committed files
+            for final_path, backup_path in committed:
+                try:
+                    if backup_path.exists():
+                        backup_path.replace(final_path)
+                except Exception:
+                    pass
+            # Clean up remaining temp files
+            for tmp, _ in temp_pairs:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
+
+        # Clean up backups on success
+        for _final, bak in backup_pairs:
+            try:
+                bak.unlink(missing_ok=True)
+            except Exception:
+                pass
     except Exception as exc:
         return {"status": "failed", "detail": f"Write sidecar error: {exc}"}
 

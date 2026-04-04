@@ -91,6 +91,7 @@ def _make_config() -> dict:
             "enrichment_schema_version": "1",
             "chunk_batch_target": 50,
             "figure_batch_size": 6,
+            "max_retries": 3,
         },
     }
 
@@ -106,10 +107,12 @@ def _make_stage_result(status: str = "enriched") -> dict:
 _PATCH_DOC = "arquimedes.enrich.enrich_document_stage"
 _PATCH_CHUNK = "arquimedes.enrich.enrich_chunks_stage"
 _PATCH_FIGURE = "arquimedes.enrich.enrich_figures_stage"
-# make_client is imported inside the function body, so patch the source module
-_PATCH_CLIENT = "arquimedes.enrich_llm.make_client"
+# make_cli_llm_fn is imported inside the function body, so patch the source module
+_PATCH_CLIENT = "arquimedes.enrich_llm.make_cli_llm_fn"
 _PATCH_PROJECT_ROOT = "arquimedes.enrich.get_project_root"
 _PATCH_LOAD_CONFIG = "arquimedes.enrich.load_config"
+_PATCH_SHOULD_COMBINE = "arquimedes.enrich._should_combine"
+_PATCH_RUN_COMBINED = "arquimedes.enrich._run_combined_enrichment"
 
 
 # ---------------------------------------------------------------------------
@@ -122,11 +125,12 @@ class TestEnrichOrchestrator:
         """force=True should be passed to each stage function."""
         project_root = _setup_project(tmp_path)
         config = _make_config()
-        mock_client = MagicMock()
+        mock_llm_fn = MagicMock()
 
         with (
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_client),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
             patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
             patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
             patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
@@ -150,11 +154,12 @@ class TestEnrichOrchestrator:
         """stages=['document'] should only call enrich_document_stage."""
         project_root = _setup_project(tmp_path)
         config = _make_config()
-        mock_client = MagicMock()
+        mock_llm_fn = MagicMock()
 
         with (
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_client),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
             patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
             patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
             patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
@@ -172,13 +177,13 @@ class TestEnrichOrchestrator:
         assert all_succeeded is True
 
     def test_dry_run_does_not_create_client(self, tmp_path):
-        """dry_run=True should not call make_client."""
+        """dry_run=True should not call make_cli_llm_fn."""
         project_root = _setup_project(tmp_path)
         config = _make_config()
 
         with (
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT) as mock_make_client,
+            patch(_PATCH_CLIENT) as mock_make_llm_fn,
             patch(_PATCH_DOC) as mock_doc,
             patch(_PATCH_CHUNK) as mock_chunk,
             patch(_PATCH_FIGURE) as mock_figure,
@@ -190,7 +195,7 @@ class TestEnrichOrchestrator:
                 force=True,
             )
 
-        mock_make_client.assert_not_called()
+        mock_make_llm_fn.assert_not_called()
         # Stage functions should NOT have been called (dry_run path uses staleness checks only)
         mock_doc.assert_not_called()
         mock_chunk.assert_not_called()
@@ -223,11 +228,12 @@ class TestEnrichOrchestrator:
         """With no stages filter, all three stage functions should be called."""
         project_root = _setup_project(tmp_path)
         config = _make_config()
-        mock_client = MagicMock()
+        mock_llm_fn = MagicMock()
 
         with (
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_client),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
             patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
             patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
             patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
@@ -246,11 +252,12 @@ class TestEnrichOrchestrator:
         """If any stage returns status='failed', all_succeeded should be False."""
         project_root = _setup_project(tmp_path)
         config = _make_config()
-        mock_client = MagicMock()
+        mock_llm_fn = MagicMock()
 
         with (
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_client),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
             patch(_PATCH_DOC, return_value={"status": "failed", "detail": "LLM error"}),
             patch(_PATCH_CHUNK, return_value=_make_stage_result()),
             patch(_PATCH_FIGURE, return_value=_make_stage_result()),
@@ -300,11 +307,12 @@ class TestEnrichOrchestrator:
         """Result dict for each material should include the title."""
         project_root = _setup_project(tmp_path)
         config = _make_config()
-        mock_client = MagicMock()
+        mock_llm_fn = MagicMock()
 
         with (
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_client),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
             patch(_PATCH_DOC, return_value=_make_stage_result()),
             patch(_PATCH_CHUNK, return_value=_make_stage_result()),
             patch(_PATCH_FIGURE, return_value=_make_stage_result()),
@@ -321,11 +329,12 @@ class TestEnrichOrchestrator:
         """stages=['chunk'] should only call enrich_chunks_stage."""
         project_root = _setup_project(tmp_path)
         config = _make_config()
-        mock_client = MagicMock()
+        mock_llm_fn = MagicMock()
 
         with (
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_client),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
             patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
             patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
             patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
@@ -340,3 +349,127 @@ class TestEnrichOrchestrator:
         mock_doc.assert_not_called()
         mock_chunk.assert_called_once()
         mock_figure.assert_not_called()
+
+
+class TestCombinedCall:
+    """Tests for the combined doc+chunk enrichment call optimization."""
+
+    def test_combined_call_used_when_both_stages_stale(self, tmp_path):
+        """When both doc and chunk are stale and material is small, combined call is used."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=True),
+            patch(_PATCH_RUN_COMBINED, return_value=(
+                _make_stage_result(), _make_stage_result()
+            )) as mock_combined,
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()),
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                force=True,
+            )
+
+        mock_combined.assert_called_once()
+        assert all_succeeded is True
+        assert results["test123"]["document"]["status"] == "enriched"
+        assert results["test123"]["chunk"]["status"] == "enriched"
+
+    def test_combined_call_not_used_for_single_stage(self, tmp_path):
+        """stages=['document'] should not trigger combined call even if _should_combine is True."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=True),
+            patch(_PATCH_RUN_COMBINED) as mock_combined,
+            patch(_PATCH_DOC, return_value=_make_stage_result()),
+        ):
+            results, _ = enrich(
+                material_id="test123",
+                config=config,
+                stages=["document"],
+                force=True,
+            )
+
+        mock_combined.assert_not_called()
+
+    def test_combined_call_fallback_on_failure(self, tmp_path):
+        """When combined call returns None (full parse failure), stages fall back to individual calls."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=True),
+            patch(_PATCH_RUN_COMBINED, return_value=(None, None)),
+            patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+            patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()),
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                force=True,
+            )
+
+        # Both stages should fall back to individual calls
+        mock_doc.assert_called_once()
+        mock_chunk.assert_called_once()
+        assert all_succeeded is True
+
+    def test_combined_call_not_used_in_dry_run(self, tmp_path):
+        """dry_run should never trigger combined call."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT),
+            patch(_PATCH_SHOULD_COMBINE, return_value=True),
+            patch(_PATCH_RUN_COMBINED) as mock_combined,
+        ):
+            results, _ = enrich(
+                material_id="test123",
+                config=config,
+                dry_run=True,
+                force=True,
+            )
+
+        mock_combined.assert_not_called()
+
+    def test_combined_partial_failure_doc_succeeds_chunk_fails(self, tmp_path):
+        """If combined call doc succeeds but chunk fails, doc is committed, chunk fails."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_client = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_client),
+            patch(_PATCH_SHOULD_COMBINE, return_value=True),
+            patch(_PATCH_RUN_COMBINED, return_value=(
+                _make_stage_result("enriched"),
+                {"status": "failed", "detail": "Combined call: chunks portion invalid"},
+            )),
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()),
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                force=True,
+            )
+
+        assert all_succeeded is False
+        assert results["test123"]["document"]["status"] == "enriched"
+        assert results["test123"]["chunk"]["status"] == "failed"

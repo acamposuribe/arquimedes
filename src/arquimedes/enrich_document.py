@@ -106,17 +106,20 @@ _DOCUMENT_SCHEMA_DESC = """\
 def enrich_document_stage(
     output_dir: Path,
     config: dict,
-    client,
+    llm_fn,
     *,
     force: bool = False,
+    _pre_parsed_response: dict | None = None,
 ) -> dict:
     """Enrich document-level metadata for a single material.
 
     Args:
         output_dir: Path to extracted/<material_id>/ directory.
         config: Full config dict (enrichment section read from config["enrichment"]).
-        client: anthropic.Anthropic client (or mock).
+        llm_fn: Callable (system, messages) -> str. The LLM implementation.
         force: Re-enrich even if not stale.
+        _pre_parsed_response: If provided, skip LLM call and use this parsed
+            dict directly (used by combined doc+chunk call in orchestrator).
 
     Returns:
         {"status": "enriched"|"skipped"|"failed", "detail": str}
@@ -148,34 +151,44 @@ def enrich_document_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"Load error: {exc}"}
 
-    # 4. Build prompt and call LLM
+    # 4. Build prompt and call LLM (or use pre-parsed response)
     try:
-        system, messages = enrich_prompts.build_document_prompt(meta, toc, chunks, annotations)
-        raw_text = enrich_llm.call_llm(client, model, system, messages)
-        parsed = enrich_llm.parse_json_or_repair(client, model, raw_text, _DOCUMENT_SCHEMA_DESC)
+        if _pre_parsed_response is not None:
+            parsed = _pre_parsed_response
+        else:
+            system, messages = enrich_prompts.build_document_prompt(meta, toc, chunks, annotations)
+            raw_text = llm_fn(system, messages)
+            parsed = enrich_llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_SCHEMA_DESC)
     except enrich_llm.EnrichmentError as exc:
         return {"status": "failed", "detail": str(exc)}
     except Exception as exc:
         return {"status": "failed", "detail": f"LLM error: {exc}"}
 
-    # 5. Map parsed JSON to model objects and merge into meta dict
+    # 5. Validate required fields are present
+    _REQUIRED_FIELDS = ("summary", "document_type", "keywords")
+    missing = [f for f in _REQUIRED_FIELDS if f not in parsed or not isinstance(parsed[f], dict)]
+    if missing:
+        return {"status": "failed", "detail": f"LLM output missing required fields: {', '.join(missing)}"}
+
+    for req_field in _REQUIRED_FIELDS:
+        if "value" not in parsed[req_field]:
+            return {"status": "failed", "detail": f"LLM output field '{req_field}' missing 'value'"}
+
+    # 6. Map parsed JSON to model objects and merge into meta dict
     try:
         meta_out = dict(meta)
 
         enriched_count = {"keywords": 0, "facets": 0, "concepts": 0}
 
-        if "summary" in parsed and isinstance(parsed["summary"], dict):
-            ef = _make_enriched_field(parsed["summary"], model, prompt_version)
-            meta_out["summary"] = ef.to_dict()
+        ef = _make_enriched_field(parsed["summary"], model, prompt_version)
+        meta_out["summary"] = ef.to_dict()
 
-        if "document_type" in parsed and isinstance(parsed["document_type"], dict):
-            ef = _make_enriched_field(parsed["document_type"], model, prompt_version)
-            meta_out["document_type"] = ef.to_dict()
+        ef = _make_enriched_field(parsed["document_type"], model, prompt_version)
+        meta_out["document_type"] = ef.to_dict()
 
-        if "keywords" in parsed and isinstance(parsed["keywords"], dict):
-            ef = _make_enriched_field(parsed["keywords"], model, prompt_version)
-            meta_out["keywords"] = ef.to_dict()
-            enriched_count["keywords"] = len(ef.value) if isinstance(ef.value, list) else 1
+        ef = _make_enriched_field(parsed["keywords"], model, prompt_version)
+        meta_out["keywords"] = ef.to_dict()
+        enriched_count["keywords"] = len(ef.value) if isinstance(ef.value, list) else 1
 
         facets_data = parsed.get("facets", {})
         if facets_data and isinstance(facets_data, dict):
@@ -197,29 +210,65 @@ def enrich_document_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"Mapping error: {exc}"}
 
-    # 6. Write meta.json (with enriched fields merged)
+    # 7. Atomic write: stage all files first, then commit all renames
     try:
-        meta_path = output_dir / "meta.json"
-        meta_path.write_text(json.dumps(meta_out, indent=2, ensure_ascii=False), encoding="utf-8")
-    except Exception as exc:
-        return {"status": "failed", "detail": f"Write meta error: {exc}"}
+        meta_out["_enrichment_stamp"] = stamp
 
-    # 7. Write concepts.jsonl
-    try:
+        meta_path = output_dir / "meta.json"
         concepts_path = output_dir / "concepts.jsonl"
-        with open(concepts_path, "w", encoding="utf-8") as f:
+
+        # Stage: write to temp files
+        tmp_meta = meta_path.with_suffix(".json.tmp")
+        tmp_concepts = concepts_path.with_suffix(".jsonl.tmp")
+
+        tmp_meta.write_text(
+            json.dumps(meta_out, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        with open(tmp_concepts, "w", encoding="utf-8") as f:
             for concept in concepts:
                 f.write(json.dumps(concept.to_dict(), ensure_ascii=False) + "\n")
-    except Exception as exc:
-        return {"status": "failed", "detail": f"Write concepts error: {exc}"}
 
-    # 8. Write stamp
-    try:
-        enrich_stamps.write_document_stamp(output_dir, stamp)
-    except Exception as exc:
-        return {"status": "failed", "detail": f"Write stamp error: {exc}"}
+        # Backup originals for rollback
+        bak_meta = meta_path.with_suffix(".json.bak")
+        bak_concepts = concepts_path.with_suffix(".jsonl.bak")
+        if meta_path.exists():
+            meta_path.replace(bak_meta)
+        if concepts_path.exists():
+            concepts_path.replace(bak_concepts)
 
-    # 9. Build detail string
+        # Commit: rename all temps to final
+        committed: list[tuple[Path, Path]] = []  # (final, backup)
+        try:
+            tmp_meta.replace(meta_path)
+            committed.append((meta_path, bak_meta))
+            tmp_concepts.replace(concepts_path)
+            committed.append((concepts_path, bak_concepts))
+        except Exception:
+            # Rollback: restore backups for any committed files
+            for final_path, backup_path in committed:
+                try:
+                    if backup_path.exists():
+                        backup_path.replace(final_path)
+                except Exception:
+                    pass
+            # Clean up temps
+            for tmp in (tmp_meta, tmp_concepts):
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
+
+        # Clean up backups on success
+        for bak in (bak_meta, bak_concepts):
+            try:
+                bak.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception as exc:
+        return {"status": "failed", "detail": f"Write error: {exc}"}
+
+    # 8. Build detail string
     parts = []
     if "summary" in meta_out:
         parts.append("summary")

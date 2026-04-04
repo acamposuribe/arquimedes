@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
+from arquimedes.enrich_prompts import estimate_tokens
 from arquimedes.models import EnrichedField, Provenance
 
 
@@ -78,17 +79,21 @@ def _make_enriched_field(llm_field: dict, model: str, prompt_version: str) -> En
 def enrich_chunks_stage(
     output_dir: Path,
     config: dict,
-    client,
+    llm_fn,
     *,
     force: bool = False,
+    _pre_parsed_response: dict | None = None,
 ) -> dict:
     """Enrich chunk-level metadata for a single material.
 
     Args:
         output_dir: Path to extracted/<material_id>/ directory.
         config: Full config dict.
-        client: anthropic.Anthropic client (or mock).
+        llm_fn: Callable (system, messages) -> str. The LLM implementation.
         force: Re-enrich even if not stale.
+        _pre_parsed_response: If provided, skip LLM calls and use this parsed
+            dict directly. Expected shape: {"chunks": [...]}.
+            Used by combined doc+chunk call in orchestrator.
 
     Returns:
         {"status": "enriched"|"skipped"|"failed", "detail": str}
@@ -102,7 +107,6 @@ def enrich_chunks_stage(
     # 1. Load artifacts
     try:
         chunks = _load_jsonl(output_dir / "chunks.jsonl")
-        annotations = _load_jsonl(output_dir / "annotations.jsonl")
         meta = _load_json(output_dir / "meta.json", default={})
         toc = _load_json(output_dir / "toc.json", default=None)
     except Exception as exc:
@@ -133,53 +137,39 @@ def enrich_chunks_stage(
     if existing_doc_stamp:
         doc_context["doc_stamp"] = existing_doc_stamp
 
-    # 3. Compute fingerprint and staleness
+    # 3. Compute per-chunk fingerprints and staleness
     try:
-        fingerprint = enrich_stamps.chunk_fingerprint(output_dir, doc_context)
+        annotations = _load_jsonl(output_dir / "annotations.jsonl")
     except Exception as exc:
-        return {"status": "failed", "detail": f"Fingerprint error: {exc}"}
-
-    stamp = enrich_stamps.make_stamp(prompt_version, model, schema_version, fingerprint)
+        return {"status": "failed", "detail": f"Load annotations error: {exc}"}
 
     existing_stamps = enrich_stamps.read_chunk_stamps(output_dir)
-    # Use a single stamp for the whole chunk stage: check the "_stage" key
-    existing_stage_stamp = existing_stamps.get("_stage")
-    if not force and not enrich_stamps.is_stale(existing_stage_stamp, stamp):
+    any_stale = False
+    for chunk in chunks:
+        chunk_id = chunk.get("chunk_id", "")
+        fp = enrich_stamps.single_chunk_fingerprint(chunk, annotations, doc_context)
+        current_stamp = enrich_stamps.make_stamp(prompt_version, model, schema_version, fp)
+        existing = existing_stamps.get(chunk_id)
+        if force or enrich_stamps.is_stale(existing, current_stamp):
+            any_stale = True
+            break
+
+    if not any_stale:
         return {"status": "skipped", "detail": "up to date"}
 
     # 4. Build doc_context_str for prompts
     doc_context_str = enrich_prompts.build_document_context(meta, toc, headings if headings else None)
 
-    # 5. Split chunks into batches
-    batches = [chunks[i : i + batch_target] for i in range(0, len(chunks), batch_target)]
-    n_batches = len(batches)
-
-    # 6. Process each batch, accumulate results in memory
+    # 5. Get chunk enrichment results — either from pre-parsed response or batched LLM calls
     # Key: chunk_id → {"summary": EnrichedField, "keywords": EnrichedField}
     chunk_enrichments: dict[str, dict] = {}
 
-    for batch_idx, batch in enumerate(batches):
-        try:
-            system, messages = enrich_prompts.build_chunk_batch_prompt(
-                batch, doc_context_str, annotations
-            )
-            raw_text = enrich_llm.call_llm(client, model, system, messages)
-            parsed = enrich_llm.parse_json_or_repair(
-                client, model, raw_text, _CHUNK_BATCH_SCHEMA_DESC
-            )
-        except enrich_llm.EnrichmentError as exc:
-            return {"status": "failed", "detail": f"Batch {batch_idx + 1}/{n_batches} LLM error: {exc}"}
-        except Exception as exc:
-            return {"status": "failed", "detail": f"Batch {batch_idx + 1}/{n_batches} error: {exc}"}
-
-        # Parse response
-        chunks_response = parsed.get("chunks", [])
+    if _pre_parsed_response is not None:
+        # Pre-parsed: all chunk results already available (from combined call)
+        chunks_response = _pre_parsed_response.get("chunks", [])
         if not isinstance(chunks_response, list):
-            return {
-                "status": "failed",
-                "detail": f"Batch {batch_idx + 1}/{n_batches}: invalid response (no chunks list)",
-            }
-
+            return {"status": "failed", "detail": "Pre-parsed response: invalid chunks list"}
+        n_batches = 0
         for chunk_data in chunks_response:
             chunk_id = chunk_data.get("chunk_id", "")
             if not chunk_id:
@@ -201,6 +191,93 @@ def enrich_chunks_stage(
                     pass
             if enrichment:
                 chunk_enrichments[chunk_id] = enrichment
+    else:
+        # Standard path: batch by token budget and call LLM
+        # chunk_batch_target is the heuristic count; actual batching adjusts by token size
+        # Budget: average tokens per batch ≈ (batch_target chunks × avg chunk tokens)
+        # We estimate a per-batch token budget from the target count
+        avg_chunk_tokens = max(
+            sum(estimate_tokens(c.get("text", "")) for c in chunks) // len(chunks), 1
+        )
+        batch_token_budget = batch_target * avg_chunk_tokens
+
+        batches: list[list[dict]] = []
+        current_batch: list[dict] = []
+        current_tokens = 0
+        for chunk in chunks:
+            tok = estimate_tokens(chunk.get("text", ""))
+            if current_batch and current_tokens + tok > batch_token_budget:
+                batches.append(current_batch)
+                current_batch = [chunk]
+                current_tokens = tok
+            else:
+                current_batch.append(chunk)
+                current_tokens += tok
+        if current_batch:
+            batches.append(current_batch)
+
+        n_batches = len(batches)
+
+        for batch_idx, batch in enumerate(batches):
+            try:
+                system, messages = enrich_prompts.build_chunk_batch_prompt(
+                    batch, doc_context_str, annotations
+                )
+                raw_text = llm_fn(system, messages)
+                parsed = enrich_llm.parse_json_or_repair(
+                    llm_fn, raw_text, _CHUNK_BATCH_SCHEMA_DESC
+                )
+            except enrich_llm.EnrichmentError as exc:
+                return {"status": "failed", "detail": f"Batch {batch_idx + 1}/{n_batches} LLM error: {exc}"}
+            except Exception as exc:
+                return {"status": "failed", "detail": f"Batch {batch_idx + 1}/{n_batches} error: {exc}"}
+
+            # Parse response
+            chunks_response = parsed.get("chunks", [])
+            if not isinstance(chunks_response, list):
+                return {
+                    "status": "failed",
+                    "detail": f"Batch {batch_idx + 1}/{n_batches}: invalid response (no chunks list)",
+                }
+
+            for chunk_data in chunks_response:
+                chunk_id = chunk_data.get("chunk_id", "")
+                if not chunk_id:
+                    continue
+                enrichment = {}
+                if "summary" in chunk_data and isinstance(chunk_data["summary"], dict):
+                    try:
+                        enrichment["summary"] = _make_enriched_field(
+                            chunk_data["summary"], model, prompt_version
+                        ).to_dict()
+                    except Exception:
+                        pass
+                if "keywords" in chunk_data and isinstance(chunk_data["keywords"], dict):
+                    try:
+                        enrichment["keywords"] = _make_enriched_field(
+                            chunk_data["keywords"], model, prompt_version
+                        ).to_dict()
+                    except Exception:
+                        pass
+                if enrichment:
+                    chunk_enrichments[chunk_id] = enrichment
+
+    # 6. Validate completeness — every chunk must have been enriched
+    input_ids = {chunk.get("chunk_id", "") for chunk in chunks if chunk.get("chunk_id")}
+    missing_ids = input_ids - set(chunk_enrichments.keys())
+    if missing_ids:
+        return {
+            "status": "failed",
+            "detail": f"LLM output missing {len(missing_ids)} chunk(s): {sorted(missing_ids)[:5]}",
+        }
+
+    # Validate each enriched chunk has required fields (summary + keywords)
+    for cid, enrichment in chunk_enrichments.items():
+        if "summary" not in enrichment or "keywords" not in enrichment:
+            return {
+                "status": "failed",
+                "detail": f"Chunk '{cid}' missing required fields (need summary + keywords)",
+            }
 
     # 7. All batches succeeded — merge enriched fields into chunk dicts
     enriched_chunks = []
@@ -211,23 +288,71 @@ def enrich_chunks_stage(
             chunk_out.update(chunk_enrichments[chunk_id])
         enriched_chunks.append(chunk_out)
 
-    # 8. Atomic write of chunks.jsonl
+    # 8. Atomic write: stage all files first, then commit with rollback
     try:
+        new_stamps = {}
+        for chunk in chunks:
+            chunk_id = chunk.get("chunk_id", "")
+            fp = enrich_stamps.single_chunk_fingerprint(chunk, annotations, doc_context)
+            new_stamps[chunk_id] = enrich_stamps.make_stamp(
+                prompt_version, model, schema_version, fp
+            )
+
         chunks_path = output_dir / "chunks.jsonl"
-        tmp_path = chunks_path.with_suffix(".jsonl.tmp")
-        with open(tmp_path, "w", encoding="utf-8") as f:
+        stamps_path = output_dir / "chunk_enrichment_stamps.json"
+
+        # Stage: write to temp files
+        tmp_chunks = chunks_path.with_suffix(".jsonl.tmp")
+        tmp_stamps = stamps_path.with_suffix(".json.tmp")
+
+        with open(tmp_chunks, "w", encoding="utf-8") as f:
             for chunk in enriched_chunks:
                 f.write(json.dumps(chunk, ensure_ascii=False) + "\n")
-        tmp_path.replace(chunks_path)
-    except Exception as exc:
-        return {"status": "failed", "detail": f"Write chunks error: {exc}"}
 
-    # 9. Write chunk_enrichment_stamps.json
-    try:
-        new_stamps = {"_stage": stamp}
-        enrich_stamps.write_chunk_stamps(output_dir, new_stamps)
-    except Exception as exc:
-        return {"status": "failed", "detail": f"Write stamps error: {exc}"}
+        tmp_stamps.write_text(
+            json.dumps(new_stamps, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
 
-    detail = f"{len(chunks)} chunks, {n_batches} batch{'es' if n_batches != 1 else ''}"
+        # Backup originals for rollback
+        bak_chunks = chunks_path.with_suffix(".jsonl.bak")
+        bak_stamps = stamps_path.with_suffix(".json.bak")
+        if chunks_path.exists():
+            chunks_path.replace(bak_chunks)
+        if stamps_path.exists():
+            stamps_path.replace(bak_stamps)
+
+        # Commit: rename all temps to final
+        committed: list[tuple[Path, Path]] = []
+        try:
+            tmp_chunks.replace(chunks_path)
+            committed.append((chunks_path, bak_chunks))
+            tmp_stamps.replace(stamps_path)
+            committed.append((stamps_path, bak_stamps))
+        except Exception:
+            for final_path, backup_path in committed:
+                try:
+                    if backup_path.exists():
+                        backup_path.replace(final_path)
+                except Exception:
+                    pass
+            for tmp in (tmp_chunks, tmp_stamps):
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
+
+        # Clean up backups on success
+        for bak in (bak_chunks, bak_stamps):
+            try:
+                bak.unlink(missing_ok=True)
+            except Exception:
+                pass
+    except Exception as exc:
+        return {"status": "failed", "detail": f"Write error: {exc}"}
+
+    if _pre_parsed_response is not None:
+        detail = f"{len(chunks)} chunks, combined call"
+    else:
+        detail = f"{len(chunks)} chunks, {n_batches} batch{'es' if n_batches != 1 else ''}"
     return {"status": "enriched", "detail": detail}

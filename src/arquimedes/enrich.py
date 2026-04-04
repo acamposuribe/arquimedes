@@ -17,6 +17,29 @@ from arquimedes.ingest import load_manifest
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _load_jsonl(path: Path) -> list[dict]:
+    """Load a .jsonl file into a list of dicts. Returns [] if absent."""
+    if not path.exists():
+        return []
+    records = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            records.append(json.loads(line))
+    return records
+
+
+def _load_json(path: Path, default=None):
+    """Load a JSON file. Returns default if absent."""
+    if not path.exists():
+        return default
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+# ---------------------------------------------------------------------------
 # Staleness check helpers (for dry_run and "all stale" filtering)
 # ---------------------------------------------------------------------------
 
@@ -70,11 +93,31 @@ def _is_chunk_stale(output_dir: Path, config: dict) -> bool:
         if existing_doc_stamp:
             doc_context["doc_stamp"] = existing_doc_stamp
 
-        fingerprint = enrich_stamps.chunk_fingerprint(output_dir, doc_context)
-        stamp = enrich_stamps.make_stamp(prompt_version, model, schema_version, fingerprint)
+        # Load chunks and annotations for per-chunk fingerprinting
+        chunks = []
+        for line in chunks_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                chunks.append(json.loads(line))
+
+        ann_path = output_dir / "annotations.jsonl"
+        annotations = []
+        if ann_path.exists():
+            for line in ann_path.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line:
+                    annotations.append(json.loads(line))
+
         existing_stamps = enrich_stamps.read_chunk_stamps(output_dir)
-        existing_stage_stamp = existing_stamps.get("_stage")
-        return enrich_stamps.is_stale(existing_stage_stamp, stamp)
+
+        for chunk in chunks:
+            chunk_id = chunk.get("chunk_id", "")
+            fp = enrich_stamps.single_chunk_fingerprint(chunk, annotations, doc_context)
+            current_stamp = enrich_stamps.make_stamp(prompt_version, model, schema_version, fp)
+            existing = existing_stamps.get(chunk_id)
+            if enrich_stamps.is_stale(existing, current_stamp):
+                return True
+        return False
     except Exception:
         return True
 
@@ -160,6 +203,133 @@ def _has_extraction(output_dir: Path) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# Combined doc+chunk call
+# ---------------------------------------------------------------------------
+
+# ~4 chars per token, threshold for fitting doc+chunk in one call
+_COMBINED_TOKEN_THRESHOLD = 80_000
+
+_COMBINED_SCHEMA_DESC = """\
+{
+  "document": {
+    "summary": {"value": "...", ...},
+    "document_type": {"value": "...", ...},
+    "keywords": {"value": [...], ...},
+    "facets": {...},
+    "concepts": [...]
+  },
+  "chunks": [
+    {"chunk_id": "...", "summary": {"value": "...", ...}, "keywords": {"value": [...], ...}}
+  ]
+}"""
+
+
+def _should_combine(output_dir: Path) -> bool:
+    """Return True if this material is small enough for a combined doc+chunk call."""
+    chunks_path = output_dir / "chunks.jsonl"
+    if not chunks_path.exists():
+        return False
+    total_chars = 0
+    for line in chunks_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            c = json.loads(line)
+            total_chars += len(c.get("text", ""))
+    return total_chars // 4 < _COMBINED_TOKEN_THRESHOLD
+
+
+def _run_combined_enrichment(
+    output_dir: Path,
+    config: dict,
+    llm_fn,
+    *,
+    force: bool = False,
+) -> tuple[dict, dict]:
+    """Run doc+chunk enrichment in a single LLM call.
+
+    Returns (doc_result, chunk_result). Each stage is committed independently
+    per the spec's combined-call failure semantics.
+    """
+    from arquimedes import enrich_llm, enrich_prompts
+
+    enrichment_config = config.get("enrichment", {})
+    model = config.get("llm", {}).get("model", "claude-sonnet-4-6")
+
+    # Load artifacts
+    meta = _load_json(output_dir / "meta.json", {})
+    toc = _load_json(output_dir / "toc.json")
+    chunks = _load_jsonl(output_dir / "chunks.jsonl")
+    annotations = _load_jsonl(output_dir / "annotations.jsonl")
+
+    # Build combined prompt and make one LLM call
+    system, messages = enrich_prompts.build_combined_prompt(meta, toc, chunks, annotations)
+    try:
+        raw_text = llm_fn(system, messages)
+        parsed = enrich_llm.parse_json_or_repair(
+            llm_fn, raw_text, _COMBINED_SCHEMA_DESC
+        )
+    except (enrich_llm.EnrichmentError, Exception):
+        # Full parse failed — fall back to separate calls
+        return None, None
+
+    # Extract and validate portions independently
+    doc_data = parsed.get("document")
+    chunks_data = parsed.get("chunks")
+
+    # If a portion is missing or wrong type, try a targeted schema-repair
+    if not isinstance(doc_data, dict):
+        try:
+            repair_text = llm_fn(
+                "You are a JSON repair assistant. Return ONLY valid JSON, no markdown fences.",
+                [{"role": "user", "content": (
+                    "Extract and return ONLY the document portion as valid JSON.\n"
+                    f"Original response:\n{raw_text}\n"
+                )}],
+            )
+            doc_data = enrich_llm.parse_json_or_repair(
+                llm_fn, repair_text, "document enrichment object"
+            )
+            if not isinstance(doc_data, dict):
+                doc_data = None
+        except Exception:
+            doc_data = None
+
+    if not isinstance(chunks_data, list):
+        try:
+            repair_text = llm_fn(
+                "You are a JSON repair assistant. Return ONLY valid JSON, no markdown fences.",
+                [{"role": "user", "content": (
+                    "Extract and return ONLY the chunks array as valid JSON "
+                    "wrapped in {\"chunks\": [...]}.\n"
+                    f"Original response:\n{raw_text}\n"
+                )}],
+            )
+            repaired = enrich_llm.parse_json_or_repair(
+                llm_fn, repair_text, "chunks enrichment array"
+            )
+            chunks_data = repaired.get("chunks") if isinstance(repaired, dict) else None
+            if not isinstance(chunks_data, list):
+                chunks_data = None
+        except Exception:
+            chunks_data = None
+
+    # Commit each portion independently via the stage functions
+    doc_result = enrich_document_stage(
+        output_dir, config, llm_fn,
+        force=force,
+        _pre_parsed_response=doc_data,
+    ) if doc_data is not None else {"status": "failed", "detail": "Combined call: document portion invalid"}
+
+    chunk_result = enrich_chunks_stage(
+        output_dir, config, llm_fn,
+        force=force,
+        _pre_parsed_response={"chunks": chunks_data},
+    ) if chunks_data is not None else {"status": "failed", "detail": "Combined call: chunks portion invalid"}
+
+    return doc_result, chunk_result
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -168,6 +338,7 @@ def enrich(
     material_id: str | None = None,
     config: dict | None = None,
     *,
+    llm_fn=None,
     force: bool = False,
     stages: list[str] | None = None,
     dry_run: bool = False,
@@ -177,6 +348,8 @@ def enrich(
     Args:
         material_id: Specific material to enrich, or None for all with stale enrichment.
         config: Optional config dict. Loaded from disk if not provided.
+        llm_fn: Callable (system, messages) -> str. If not provided and not
+            dry_run, falls back to make_cli_llm_fn(config).
         force: Re-enrich even if not stale.
         stages: List of stage names to run (default: all three).
         dry_run: Report staleness without calling LLM.
@@ -198,11 +371,10 @@ def enrich(
         if s not in _ALL_STAGES:
             raise ValueError(f"Unknown stage: {s!r}. Valid stages: {_ALL_STAGES}")
 
-    # Create client (not needed for dry_run)
-    client = None
-    if not dry_run:
-        from arquimedes.enrich_llm import make_client
-        client = make_client(config)
+    # Build llm_fn if not provided (not needed for dry_run)
+    if not dry_run and llm_fn is None:
+        from arquimedes.enrich_llm import make_cli_llm_fn
+        llm_fn = make_cli_llm_fn(config)
 
     # Determine which materials to process
     if material_id:
@@ -248,7 +420,40 @@ def enrich(
 
         material_results: dict = {"title": title}
 
+        # Check if combined doc+chunk call is appropriate
+        use_combined = (
+            not dry_run
+            and "document" in requested_stages
+            and "chunk" in requested_stages
+            and _should_combine(output_dir)
+        )
+
+        # Track which stages were handled by the combined call
+        combined_handled: set[str] = set()
+
+        if use_combined:
+            # Check if at least one of doc/chunk is stale (or force)
+            doc_stale = force or _is_document_stale(output_dir, config)
+            chunk_stale = force or _is_chunk_stale(output_dir, config)
+
+            if doc_stale and chunk_stale:
+                doc_result, chunk_result = _run_combined_enrichment(
+                    output_dir, config, llm_fn, force=force,
+                )
+                if doc_result is not None:
+                    material_results["document"] = doc_result
+                    combined_handled.add("document")
+                    if doc_result["status"] == "failed":
+                        all_succeeded = False
+                if chunk_result is not None:
+                    material_results["chunk"] = chunk_result
+                    combined_handled.add("chunk")
+                    if chunk_result["status"] == "failed":
+                        all_succeeded = False
+
         for stage_name in requested_stages:
+            if stage_name in combined_handled:
+                continue
             if dry_run:
                 # Report staleness only
                 if stage_name == "document":
@@ -265,11 +470,11 @@ def enrich(
 
             # Run the stage
             if stage_name == "document":
-                result = enrich_document_stage(output_dir, config, client, force=force)
+                result = enrich_document_stage(output_dir, config, llm_fn, force=force)
             elif stage_name == "chunk":
-                result = enrich_chunks_stage(output_dir, config, client, force=force)
+                result = enrich_chunks_stage(output_dir, config, llm_fn, force=force)
             else:  # figure
-                result = enrich_figures_stage(output_dir, config, client, force=force)
+                result = enrich_figures_stage(output_dir, config, llm_fn, force=force)
 
             material_results[stage_name] = result
             if result["status"] == "failed":

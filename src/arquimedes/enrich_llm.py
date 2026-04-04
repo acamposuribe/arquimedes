@@ -108,9 +108,8 @@ def parse_json_or_repair(
 def _build_prompt_text(system: str, messages: list[dict]) -> str:
     """Flatten system + messages into a single text prompt for the CLI agent.
 
-    For multimodal messages (image blocks in figure enrichment), the image
-    content is skipped — the agent CLI doesn't support inline images.
-    Text blocks and plain strings are concatenated.
+    For multimodal messages (image blocks in figure enrichment), image files
+    are referenced by their original file path so the agent can read them.
     """
     parts = [f"[SYSTEM]\n{system}\n"]
     for msg in messages:
@@ -124,9 +123,16 @@ def _build_prompt_text(system: str, messages: list[dict]) -> str:
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
                     text_parts.append(block["text"])
+                elif isinstance(block, dict) and block.get("type") == "image":
+                    # Include image file reference for the agent CLI
+                    source_path = block.get("_source_path", "")
+                    if source_path:
+                        text_parts.append(
+                            f"[IMAGE: {source_path}]\n"
+                            f"(Read and analyze this image file for figure enrichment)\n"
+                        )
                 elif isinstance(block, str):
                     text_parts.append(block)
-                # Skip image blocks — agent CLI doesn't support inline images
             if text_parts:
                 parts.append(f"[{role}]\n{''.join(text_parts)}\n")
     return "\n".join(parts)

@@ -60,13 +60,14 @@ class TestBuildPromptText:
         assert "[SYSTEM]\nBe helpful." in result
         assert "[USER]\nHello" in result
 
-    def test_multimodal_skips_image_blocks(self):
+    def test_multimodal_includes_image_paths(self):
         messages = [
             {
                 "role": "user",
                 "content": [
                     {"type": "text", "text": "Describe this figure."},
-                    {"type": "image", "source": {"type": "base64", "data": "abc123"}},
+                    {"type": "image", "source": {"type": "base64", "data": "abc123"},
+                     "_source_path": "/path/to/fig_0001.png"},
                     {"type": "text", "text": "It shows a floor plan."},
                 ],
             }
@@ -74,7 +75,9 @@ class TestBuildPromptText:
         result = _build_prompt_text("system", messages)
         assert "Describe this figure." in result
         assert "floor plan" in result
-        assert "abc123" not in result
+        assert "abc123" not in result  # base64 data not leaked
+        assert "/path/to/fig_0001.png" in result
+        assert "[IMAGE:" in result
 
 
 # ---------------------------------------------------------------------------

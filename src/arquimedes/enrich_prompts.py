@@ -588,6 +588,7 @@ def build_figure_batch_prompt(
                             "media_type": media_type,
                             "data": b64_data,
                         },
+                        "_source_path": str(image_path),
                     }
                 )
             except (OSError, ValueError):

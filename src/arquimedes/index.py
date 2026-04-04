@@ -124,6 +124,20 @@ CREATE VIRTUAL TABLE IF NOT EXISTS annotations_fts USING fts5(
     content_rowid='rowid'
 );
 
+CREATE TABLE IF NOT EXISTS concepts (
+    concept_name  TEXT NOT NULL,
+    material_id   TEXT NOT NULL,
+    relevance     TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (material_id, concept_name)
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
+    concept_name,
+    material_id UNINDEXED,
+    content='concepts',
+    content_rowid='rowid'
+);
+
 CREATE TABLE IF NOT EXISTS index_state (
     id                INTEGER PRIMARY KEY CHECK (id = 1),
     built_at          TEXT NOT NULL,
@@ -140,6 +154,7 @@ class IndexStats:
     chunks: int = 0
     figures: int = 0
     annotations: int = 0
+    concepts: int = 0
     elapsed: float = 0.0
 
 
@@ -335,11 +350,37 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
                         )
                         stats.annotations += 1
 
+            # --- concepts ---
+            concepts_path = mat_dir / "concepts.jsonl"
+            if concepts_path.exists():
+                with open(concepts_path) as f:
+                    for line in f:
+                        line = line.strip()
+                        if not line:
+                            continue
+                        try:
+                            c = json.loads(line)
+                        except json.JSONDecodeError:
+                            continue
+                        concept_name = c.get("concept_name", "").strip()
+                        if not concept_name:
+                            continue
+                        con.execute(
+                            "INSERT OR REPLACE INTO concepts VALUES (?,?,?)",
+                            (
+                                concept_name,
+                                mid,
+                                c.get("relevance", ""),
+                            ),
+                        )
+                        stats.concepts += 1
+
         # Populate FTS tables
         con.execute("INSERT INTO materials_fts(materials_fts) VALUES ('rebuild')")
         con.execute("INSERT INTO chunks_fts(chunks_fts) VALUES ('rebuild')")
         con.execute("INSERT INTO figures_fts(figures_fts) VALUES ('rebuild')")
         con.execute("INSERT INTO annotations_fts(annotations_fts) VALUES ('rebuild')")
+        con.execute("INSERT INTO concepts_fts(concepts_fts) VALUES ('rebuild')")
 
         # Write index_state
         manifest_hash = _compute_manifest_hash(manifest_path)
@@ -442,7 +483,7 @@ def _compute_extracted_snapshot(extracted_dir: Path, material_ids: list[str]) ->
     parts: list[str] = []
     for mid in sorted(material_ids):
         mat_dir = extracted_dir / mid
-        for fname in ("meta.json", "chunks.jsonl", "annotations.jsonl"):
+        for fname in ("meta.json", "chunks.jsonl", "annotations.jsonl", "concepts.jsonl"):
             p = mat_dir / fname
             if p.exists():
                 try:
@@ -494,7 +535,7 @@ def _newest_input_mtime(extracted_dir: Path) -> float | None:
     if not extracted_dir.is_dir():
         return None
     newest: float | None = None
-    for pattern in ("*/meta.json", "*/chunks.jsonl", "*/annotations.jsonl", "*/figures/fig_*.json"):
+    for pattern in ("*/meta.json", "*/chunks.jsonl", "*/annotations.jsonl", "*/concepts.jsonl", "*/figures/fig_*.json"):
         for p in extracted_dir.glob(pattern):
             try:
                 mtime = p.stat().st_mtime

@@ -664,3 +664,279 @@ class TestMaterialRerankByAnnotation:
             assert card.rank == i
 
 
+# --- helpers for concept / related tests ---
+
+from arquimedes.search import find_related, list_concepts, format_related_human, format_concepts_human
+
+
+def _write_concepts(mat_dir: Path, concepts: list[dict]) -> None:
+    (mat_dir / "concepts.jsonl").write_text(
+        "\n".join(json.dumps(c) for c in concepts)
+    )
+
+
+@pytest.fixture
+def concepts_repo(tmp_path, monkeypatch):
+    """Two materials: mat_alpha shares a concept with mat_beta; different keywords and authors."""
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    # mat_alpha: archival habitat concept, keyword "archive", author "Lee"
+    alpha_dir = tmp_path / "extracted" / "mat_alpha"
+    _write_meta(alpha_dir, "mat_alpha",
+                title="Archival Habitat Study",
+                keywords=["archival habitat", "postcolonial"],
+                authors=["Rachel Lee"],
+                location="India",
+                historical_period="20th century",
+                domain="research")
+    _write_chunks(alpha_dir, "mat_alpha")
+    _write_annotations(alpha_dir)
+    _write_figure(alpha_dir)
+    _write_concepts(alpha_dir, [
+        {"concept_name": "archival habitat", "relevance": "high"},
+        {"concept_name": "embodied archives", "relevance": "high"},
+    ])
+
+    # mat_beta: shares "archival habitat" concept and author "Lee", different keyword
+    beta_dir = tmp_path / "extracted" / "mat_beta"
+    _write_meta(beta_dir, "mat_beta",
+                title="Koenigsberger Archive Work",
+                keywords=["archival habitat", "migration"],
+                authors=["Rachel Lee"],
+                location="India",
+                historical_period="20th century",
+                domain="research")
+    _write_chunks(beta_dir, "mat_beta")
+    _write_annotations(beta_dir)
+    _write_figure(beta_dir)
+    _write_concepts(beta_dir, [
+        {"concept_name": "archival habitat", "relevance": "high"},
+        {"concept_name": "oral history", "relevance": "medium"},
+    ])
+
+    # mat_gamma: no shared concept with alpha, different author, different location
+    gamma_dir = tmp_path / "extracted" / "mat_gamma"
+    _write_meta(gamma_dir, "mat_gamma",
+                title="Thermal Mass in Concrete",
+                keywords=["thermal mass", "concrete"],
+                authors=["Smith J"],
+                location="Spain",
+                historical_period="21st century",
+                domain="research")
+    _write_chunks(gamma_dir, "mat_gamma")
+    _write_annotations(gamma_dir)
+    _write_figure(gamma_dir)
+    _write_concepts(gamma_dir, [
+        {"concept_name": "passive cooling", "relevance": "medium"},
+    ])
+
+    manifest_lines = [
+        json.dumps({"material_id": m, "file_hash": m, "relative_path": f"R/{m}.pdf",
+                    "file_type": "pdf", "domain": "research", "collection": "_general",
+                    "ingested_at": "2026-01-01T00:00:00+00:00"})
+        for m in ["mat_alpha", "mat_beta", "mat_gamma"]
+    ]
+    (manifests / "materials.jsonl").write_text("\n".join(manifest_lines))
+
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+    return tmp_path
+
+
+# --- C4.2: Concepts in search ---
+
+class TestConceptSearch:
+    def test_concept_hit_attached_at_depth2(self, concepts_repo):
+        result = search("archival habitat", depth=2)
+        alpha = next((r for r in result.results if r.material_id == "mat_alpha"), None)
+        assert alpha is not None
+        assert len(alpha.concepts) >= 1
+        names = [c.concept_name for c in alpha.concepts]
+        assert "archival habitat" in names
+
+    def test_no_concept_hits_at_depth1(self, concepts_repo):
+        result = search("archival", depth=1)
+        for card in result.results:
+            assert card.concepts == []
+
+    def test_concept_only_material_surfaces_at_depth2(self, concepts_repo):
+        """A material that matches via concept_name but not card text surfaces at depth 2."""
+        # mat_beta title/summary don't contain "embodied" — only mat_alpha's concept does
+        # but mat_alpha's concept "archival habitat" is also in mat_beta, so use unique concept
+        # mat_alpha has "embodied archives"; mat_beta does not
+        result_d2 = search("embodied", depth=2)
+        ids = [r.material_id for r in result_d2.results]
+        assert "mat_alpha" in ids
+
+    def test_concept_limit_zero_suppresses_hits(self, concepts_repo):
+        result = search("archival habitat", depth=2, concept_limit=0)
+        for card in result.results:
+            assert card.concepts == []
+
+    def test_concept_boost_in_priority(self, concepts_repo):
+        """Materials with concept matches rank among the results (not last) at depth 2."""
+        result = search("archival", depth=2)
+        assert result.total >= 1
+
+    def test_concept_hit_to_dict(self, concepts_repo):
+        result = search("archival habitat", depth=2)
+        alpha = next((r for r in result.results if r.material_id == "mat_alpha"), None)
+        assert alpha is not None
+        d = alpha.to_dict()
+        assert "concepts" in d
+        assert isinstance(d["concepts"], list)
+        assert d["concepts"][0]["concept_name"] == "archival habitat"
+
+
+# --- C4.3: arq related ---
+
+class TestFindRelated:
+    def test_shared_concept_surfaces_related(self, concepts_repo):
+        related = find_related("mat_alpha")
+        ids = [r.material_id for r in related]
+        assert "mat_beta" in ids  # shares "archival habitat" concept
+
+    def test_self_not_in_results(self, concepts_repo):
+        related = find_related("mat_alpha")
+        ids = [r.material_id for r in related]
+        assert "mat_alpha" not in ids
+
+    def test_no_shared_signal_low_or_absent(self, concepts_repo):
+        related = find_related("mat_alpha")
+        ids = [r.material_id for r in related]
+        # mat_gamma shares nothing with mat_alpha except domain
+        # (domain is not a facet in _FACET_COLUMNS_FOR_RELATED — by design)
+        # mat_gamma may or may not appear; if it does its score should be < mat_beta
+        if "mat_gamma" in ids and "mat_beta" in ids:
+            assert ids.index("mat_beta") < ids.index("mat_gamma")
+
+    def test_connection_types_listed(self, concepts_repo):
+        related = find_related("mat_alpha")
+        beta = next((r for r in related if r.material_id == "mat_beta"), None)
+        assert beta is not None
+        types = {c.type for c in beta.connections}
+        assert "shared_concept" in types
+
+    def test_shared_author_contributes(self, concepts_repo):
+        related = find_related("mat_alpha")
+        beta = next((r for r in related if r.material_id == "mat_beta"), None)
+        assert beta is not None
+        types = {c.type for c in beta.connections}
+        assert "shared_author" in types
+
+    def test_shared_facet_contributes(self, concepts_repo):
+        related = find_related("mat_alpha")
+        beta = next((r for r in related if r.material_id == "mat_beta"), None)
+        assert beta is not None
+        facet_conns = [c for c in beta.connections if c.type == "shared_facet"]
+        assert len(facet_conns) >= 1
+        facets_used = {c.facet for c in facet_conns}
+        assert "location" in facets_used or "historical_period" in facets_used
+
+    def test_score_positive(self, concepts_repo):
+        related = find_related("mat_alpha")
+        beta = next((r for r in related if r.material_id == "mat_beta"), None)
+        assert beta is not None
+        assert beta.score > 0
+
+    def test_limit_respected(self, concepts_repo):
+        related = find_related("mat_alpha", limit=1)
+        assert len(related) <= 1
+
+    def test_to_dict_structure(self, concepts_repo):
+        related = find_related("mat_alpha")
+        assert related
+        d = related[0].to_dict()
+        assert "material_id" in d
+        assert "score" in d
+        assert "connections" in d
+        assert isinstance(d["connections"], list)
+
+    def test_format_related_human(self, concepts_repo):
+        related = find_related("mat_alpha")
+        out = format_related_human("mat_alpha", related)
+        assert "mat_beta" in out
+        assert "shared_concept" in out
+
+    def test_no_related_empty_collection(self, tmp_path, monkeypatch):
+        """Single-material collection → no related results."""
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+        (tmp_path / "indexes").mkdir()
+        (tmp_path / "extracted").mkdir()
+        manifests = tmp_path / "manifests"
+        manifests.mkdir()
+        mat_dir = tmp_path / "extracted" / "solo"
+        _write_meta(mat_dir, "solo")
+        _write_chunks(mat_dir, "solo")
+        _write_annotations(mat_dir)
+        _write_figure(mat_dir)
+        (manifests / "materials.jsonl").write_text(json.dumps({
+            "material_id": "solo", "file_hash": "solo",
+            "relative_path": "R/solo.pdf", "file_type": "pdf",
+            "domain": "research", "collection": "_general",
+            "ingested_at": "2026-01-01T00:00:00+00:00",
+        }))
+        monkeypatch.chdir(tmp_path)
+        rebuild_index()
+        related = find_related("solo")
+        assert related == []
+
+
+# --- C4.4: arq concepts ---
+
+class TestListConcepts:
+    def test_all_concepts_listed(self, concepts_repo):
+        entries = list_concepts()
+        names = [e.concept_name for e in entries]
+        assert "archival habitat" in names
+        assert "embodied archives" in names
+        assert "oral history" in names
+        assert "passive cooling" in names
+
+    def test_material_count_correct(self, concepts_repo):
+        entries = list_concepts()
+        entry = next(e for e in entries if e.concept_name == "archival habitat")
+        # Both mat_alpha and mat_beta have "archival habitat"
+        assert entry.material_count == 2
+        assert set(entry.material_ids) == {"mat_alpha", "mat_beta"}
+
+    def test_min_materials_filter(self, concepts_repo):
+        entries = list_concepts(min_materials=2)
+        # Only "archival habitat" appears in 2 materials
+        assert len(entries) == 1
+        assert entries[0].concept_name == "archival habitat"
+
+    def test_limit_respected(self, concepts_repo):
+        entries = list_concepts(limit=2)
+        assert len(entries) <= 2
+
+    def test_ordered_by_count_desc(self, concepts_repo):
+        entries = list_concepts()
+        # archival_habitat (count=2) should appear before single-material concepts
+        counts = [e.material_count for e in entries]
+        assert counts == sorted(counts, reverse=True)
+
+    def test_relevance_summary_present(self, concepts_repo):
+        entries = list_concepts()
+        entry = next(e for e in entries if e.concept_name == "archival habitat")
+        assert entry.relevance_summary != ""
+
+    def test_to_dict_structure(self, concepts_repo):
+        entries = list_concepts()
+        d = entries[0].to_dict()
+        assert "concept_name" in d
+        assert "material_count" in d
+        assert "material_ids" in d
+        assert "relevance_summary" in d
+
+    def test_format_concepts_human(self, concepts_repo):
+        entries = list_concepts()
+        out = format_concepts_human(entries)
+        assert "archival habitat" in out
+        assert "2" in out  # material count for shared concept

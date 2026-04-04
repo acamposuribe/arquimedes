@@ -167,6 +167,7 @@ def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
 @click.option("--chunk-limit", default=5, show_default=True, help="Max chunks per material at depth 2+.")
 @click.option("--annotation-limit", default=3, show_default=True, help="Max annotations per material at depth 2+.")
 @click.option("--figure-limit", default=3, show_default=True, help="Max figures per material at depth 2+.")
+@click.option("--concept-limit", default=3, show_default=True, help="Max concept hits per material at depth 2+.")
 @click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
 def search(
     query: str,
@@ -178,6 +179,7 @@ def search(
     chunk_limit: int,
     annotation_limit: int,
     figure_limit: int,
+    concept_limit: int,
     human: bool,
 ):
     """Search the knowledge base (JSON output by default)."""
@@ -201,6 +203,7 @@ def search(
             chunk_limit=chunk_limit,
             annotation_limit=annotation_limit,
             figure_limit=figure_limit,
+            concept_limit=concept_limit,
         )
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
@@ -212,6 +215,52 @@ def search(
 
     if result.total == 0:
         raise SystemExit(0)
+
+
+@cli.command()
+@click.argument("material_id")
+@click.option("--limit", default=10, show_default=True, help="Max related materials to return.")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def related(material_id: str, limit: int, human: bool):
+    """Find materials related to MATERIAL_ID via shared concepts, keywords, facets, or authors."""
+    import json as _json
+    from arquimedes.search import find_related, format_related_human
+
+    try:
+        results = find_related(material_id, limit=limit)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if human:
+        click.echo(format_related_human(material_id, results))
+    else:
+        click.echo(_json.dumps(
+            {"material_id": material_id, "related": [r.to_dict() for r in results]},
+            ensure_ascii=False, indent=2,
+        ))
+
+
+@cli.command()
+@click.option("--min-materials", default=1, show_default=True, help="Only show concepts appearing in at least N materials.")
+@click.option("--limit", default=100, show_default=True, help="Max concepts to return.")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def concepts(min_materials: int, limit: int, human: bool):
+    """List concept candidates across the collection with material counts."""
+    import json as _json
+    from arquimedes.search import list_concepts, format_concepts_human
+
+    try:
+        entries = list_concepts(min_materials=min_materials, limit=limit)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if human:
+        click.echo(format_concepts_human(entries))
+    else:
+        click.echo(_json.dumps(
+            [e.to_dict() for e in entries],
+            ensure_ascii=False, indent=2,
+        ))
 
 
 @cli.command()
@@ -266,6 +315,7 @@ def index_rebuild():
     click.echo(f"  chunks:      {stats.chunks}")
     click.echo(f"  figures:     {stats.figures}")
     click.echo(f"  annotations: {stats.annotations}")
+    click.echo(f"  concepts:    {stats.concepts}")
     click.echo(f"Index built in {stats.elapsed:.1f}s → indexes/search.sqlite")
 
 
@@ -285,6 +335,7 @@ def index_ensure():
         click.echo(f"  chunks:      {stats.chunks}")
         click.echo(f"  figures:     {stats.figures}")
         click.echo(f"  annotations: {stats.annotations}")
+        click.echo(f"  concepts:    {stats.concepts}")
         click.echo(f"Index rebuilt in {stats.elapsed:.1f}s → indexes/search.sqlite")
     else:
         click.echo("Index is current.")

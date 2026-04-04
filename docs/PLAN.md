@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phase 5 — Wiki Compiler (next)
-> **Last updated:** 2026-04-04
+> **Status:** Phase 4 — Connection model gaps (in progress); Phase 5 next
+> **Last updated:** 2026-04-05
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 
@@ -50,6 +50,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
   - [x] Page thumbnails
   - [x] Image files: OCR for scanned documents, pass-through for project/inspiration images
   - [x] Deterministic classification (TF-IDF keywords, rule-based document type)
+  - [ ] **(connection model)** `Chunk.annotation_overlap_ids: list[str]` — store explicit annotation IDs per chunk, not just the boolean emphasis flag (LOW — needed for Phase 5 annotation backlinks; see [connection model plan](superpowers/plans/2026-04-05-connection-model.md))
 
 ## Phase 3: LLM Enrichment
 
@@ -68,6 +69,11 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - [x] `arq search` — card-level lexical search
 - [x] `arq search --deep` — multi-layer retrieval (cards → chunks → full text)
 - [x] Faceted search support
+- [ ] **(connection model C4.1)** `concepts` + `concepts_fts` table in index — read `concepts.jsonl` during rebuild; add to staleness scope; `IndexStats.concepts`
+- [ ] **(connection model C4.2)** `ConceptHit` in search; concepts in content-first pass; concept boost in ranking; `--concept-limit` CLI option
+- [ ] **(connection model C4.3)** `arq related <material_id>` — find related materials through shared concepts, keywords, facets, authors; scored and explained connections
+- [ ] **(connection model C4.4)** `arq concepts` — list all concept candidates across the collection with material counts; Phase 5 uses this to decide which concept pages to compile
+- See [connection model plan](superpowers/plans/2026-04-05-connection-model.md) for full design
 
 ## Phase 5: Wiki Compiler
 

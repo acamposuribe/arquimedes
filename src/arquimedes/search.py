@@ -23,6 +23,20 @@ from arquimedes.index import get_index_path
 # --- Result models ---
 
 @dataclass
+class ConceptHit:
+    concept_name: str
+    relevance: str
+    rank: int = 0
+
+    def to_dict(self) -> dict:
+        return {
+            "concept_name": self.concept_name,
+            "relevance": self.relevance,
+            "rank": self.rank,
+        }
+
+
+@dataclass
 class AnnotationHit:
     annotation_id: str
     type: str
@@ -99,6 +113,7 @@ class MaterialCard:
     chunks: list[ChunkHit] = field(default_factory=list)
     annotations: list[AnnotationHit] = field(default_factory=list)
     figures: list[FigureHit] = field(default_factory=list)
+    concepts: list[ConceptHit] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d: dict[str, Any] = {
@@ -119,6 +134,8 @@ class MaterialCard:
             d["annotations"] = [a.to_dict() for a in self.annotations]
         if self.figures:
             d["figures"] = [f.to_dict() for f in self.figures]
+        if self.concepts:
+            d["concepts"] = [c.to_dict() for c in self.concepts]
         return d
 
 
@@ -200,6 +217,7 @@ def search(
     chunk_limit: int = 5,
     annotation_limit: int = 3,
     figure_limit: int = 3,
+    concept_limit: int = 3,
 ) -> SearchResult:
     """Search the index. Returns a SearchResult.
 
@@ -207,9 +225,9 @@ def search(
     depth=2: cards + chunk summaries + annotation/figure hits (content-first)
     depth=3: cards + chunks with full text + annotation/figure hits (content-first)
 
-    At depth >= 2 the search is content-first: materials that match in chunks or
-    annotations but not at the card layer are still surfaced (appended after
-    card-layer matches).
+    At depth >= 2 the search is content-first: materials that match in chunks,
+    annotations, or figures but not at the card layer are still surfaced
+    (appended after card-layer matches).
     """
     if config is None:
         config = load_config()
@@ -232,6 +250,7 @@ def search(
             chunk_limit=chunk_limit,
             annotation_limit=annotation_limit,
             figure_limit=figure_limit,
+            concept_limit=concept_limit,
         )
     finally:
         con.close()
@@ -282,7 +301,7 @@ def _fetch_material_row(
 
 
 def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int) -> list[str]:
-    """Return ordered distinct material_ids with chunk, annotation, or figure FTS matches."""
+    """Return ordered distinct material_ids with chunk, annotation, figure, or concept FTS matches."""
     seen: set[str] = set()
     result: list[str] = []
     for sql in (
@@ -295,6 +314,9 @@ def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int) 
         """SELECT DISTINCT f.material_id FROM figures_fts
            JOIN figures f ON figures_fts.rowid = f.rowid
            WHERE figures_fts MATCH ? LIMIT ?""",
+        """SELECT DISTINCT co.material_id FROM concepts_fts
+           JOIN concepts co ON concepts_fts.rowid = co.rowid
+           WHERE concepts_fts MATCH ? LIMIT ?""",
     ):
         for row in con.execute(sql, [query, limit]).fetchall():
             mid = row[0]
@@ -305,13 +327,14 @@ def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int) 
 
 
 def _combined_priority(card: "MaterialCard") -> float:
-    """Lower score = better rank. Boosts: comment hit > quoted_text hit > emphasized chunk."""
+    """Lower score = better rank. Boosts: comment hit > quoted_text hit > concept match > emphasized chunk."""
     annotation_boost = sum(
         0.8 if a.comment else 0.5
         for a in card.annotations
     )
     chunk_boost = sum(0.2 for c in card.chunks if c.emphasized)
-    return card.rank - annotation_boost - chunk_boost
+    concept_boost = sum(0.3 for _ in card.concepts)
+    return card.rank - annotation_boost - chunk_boost - concept_boost
 
 
 def _do_search(
@@ -325,6 +348,7 @@ def _do_search(
     chunk_limit: int,
     annotation_limit: int,
     figure_limit: int,
+    concept_limit: int,
 ) -> SearchResult:
     facet_where, facet_params = _build_facet_where(facets, collection)
 
@@ -380,6 +404,9 @@ def _do_search(
             )
             card.figures = _search_figures(
                 con, query, card.material_id, figure_limit
+            )
+            card.concepts = _search_concepts(
+                con, query, card.material_id, concept_limit
             )
 
         # Rerank materials using annotation + emphasized-chunk evidence
@@ -485,6 +512,31 @@ def _search_figures(
     ]
 
 
+def _search_concepts(
+    con: sqlite3.Connection,
+    query: str,
+    material_id: str,
+    limit: int,
+) -> list[ConceptHit]:
+    sql = """
+        SELECT co.concept_name, co.relevance
+        FROM concepts_fts
+        JOIN concepts co ON concepts_fts.rowid = co.rowid
+        WHERE concepts_fts MATCH ? AND co.material_id = ?
+        ORDER BY concepts_fts.rank
+        LIMIT ?
+    """
+    rows = con.execute(sql, [query, material_id, limit]).fetchall()
+    return [
+        ConceptHit(
+            concept_name=row["concept_name"],
+            relevance=row["relevance"],
+            rank=i,
+        )
+        for i, row in enumerate(rows, 1)
+    ]
+
+
 # --- Human-readable formatting ---
 
 def format_human(result: SearchResult) -> str:
@@ -542,7 +594,322 @@ def format_human(result: SearchResult) -> str:
                     desc = fig.description[:80] + "…" if len(fig.description) > 80 else fig.description
                     lines.append(f"      p.{fig.source_page} [{fig.visual_type}] {desc}")
 
+            if card.concepts:
+                lines.append("")
+                lines.append("    Concepts:")
+                for con_hit in card.concepts:
+                    lines.append(f"      [{con_hit.relevance}] {con_hit.concept_name}")
+
         lines.append("")
         lines.append(f'{result.total} result(s) for "{result.query}" (depth {result.depth})')
 
+    return "\n".join(lines)
+
+
+# --- Related materials (C4.3) ---
+
+@dataclass
+class Connection:
+    type: str   # shared_concept | shared_keyword | shared_facet | shared_author
+    value: str  # the shared term
+    facet: str = ""   # for shared_facet: which facet column
+    weight: float = 0.0
+
+    def to_dict(self) -> dict:
+        d: dict[str, Any] = {
+            "type": self.type,
+            "value": self.value,
+            "weight": self.weight,
+        }
+        if self.facet:
+            d["facet"] = self.facet
+        return d
+
+
+@dataclass
+class RelatedMaterial:
+    material_id: str
+    title: str
+    domain: str
+    collection: str
+    document_type: str
+    year: str
+    score: float
+    connections: list[Connection]
+
+    def to_dict(self) -> dict:
+        return {
+            "material_id": self.material_id,
+            "title": self.title,
+            "domain": self.domain,
+            "collection": self.collection,
+            "document_type": self.document_type,
+            "year": self.year,
+            "score": round(self.score, 3),
+            "connections": [c.to_dict() for c in self.connections],
+        }
+
+
+_FACET_COLUMNS_FOR_RELATED = (
+    "location", "historical_period", "scale", "jurisdiction",
+    "climate", "program", "material_system", "structural_system",
+    "course_topic", "studio_project", "building_type",
+)
+
+
+def find_related(
+    material_id: str,
+    config: dict | None = None,
+    *,
+    limit: int = 10,
+) -> list[RelatedMaterial]:
+    """Return materials related to material_id via shared concepts, keywords, facets, or authors."""
+    if config is None:
+        config = load_config()
+
+    index_path = get_index_path(config)
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+
+    con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        return _do_find_related(con, material_id, limit)
+    finally:
+        con.close()
+
+
+def _do_find_related(
+    con: sqlite3.Connection,
+    material_id: str,
+    limit: int,
+) -> list[RelatedMaterial]:
+    scores: dict[str, float] = {}
+    connections: dict[str, list[Connection]] = {}
+
+    def _add(mid: str, conn: Connection) -> None:
+        if mid == material_id:
+            return
+        scores[mid] = scores.get(mid, 0.0) + conn.weight
+        connections.setdefault(mid, []).append(conn)
+
+    # Shared concepts (weight 1.0 each — LLM-identified meaning, strongest signal)
+    rows = con.execute(
+        "SELECT concept_name FROM concepts WHERE material_id = ?", [material_id]
+    ).fetchall()
+    for row in rows:
+        concept_name = row["concept_name"]
+        peers = con.execute(
+            "SELECT material_id FROM concepts WHERE concept_name = ? AND material_id != ?",
+            [concept_name, material_id],
+        ).fetchall()
+        for p in peers:
+            _add(p["material_id"], Connection(
+                type="shared_concept", value=concept_name, weight=1.0
+            ))
+
+    # Shared enriched keywords (weight 0.3 each)
+    kw_row = con.execute(
+        "SELECT keywords FROM materials WHERE material_id = ?", [material_id]
+    ).fetchone()
+    source_keywords: list[str] = []
+    if kw_row:
+        try:
+            source_keywords = json.loads(kw_row["keywords"] or "[]")
+            if not isinstance(source_keywords, list):
+                source_keywords = []
+        except (json.JSONDecodeError, TypeError):
+            source_keywords = []
+
+    if source_keywords:
+        all_others = con.execute(
+            "SELECT material_id, keywords FROM materials WHERE material_id != ?",
+            [material_id],
+        ).fetchall()
+        for other in all_others:
+            try:
+                other_kws = json.loads(other["keywords"] or "[]")
+                if not isinstance(other_kws, list):
+                    continue
+            except (json.JSONDecodeError, TypeError):
+                continue
+            # Normalize for comparison
+            src_set = {k.lower().strip() for k in source_keywords if k}
+            other_set = {k.lower().strip() for k in other_kws if k}
+            shared = src_set & other_set
+            for kw in shared:
+                _add(other["material_id"], Connection(
+                    type="shared_keyword", value=kw, weight=0.3
+                ))
+
+    # Shared authors (weight 0.8 each)
+    auth_row = con.execute(
+        "SELECT authors FROM materials WHERE material_id = ?", [material_id]
+    ).fetchone()
+    source_authors: list[str] = []
+    if auth_row:
+        try:
+            source_authors = json.loads(auth_row["authors"] or "[]")
+            if not isinstance(source_authors, list):
+                source_authors = []
+        except (json.JSONDecodeError, TypeError):
+            source_authors = []
+
+    if source_authors:
+        all_others = con.execute(
+            "SELECT material_id, authors FROM materials WHERE material_id != ?",
+            [material_id],
+        ).fetchall()
+        for other in all_others:
+            try:
+                other_authors = json.loads(other["authors"] or "[]")
+                if not isinstance(other_authors, list):
+                    continue
+            except (json.JSONDecodeError, TypeError):
+                continue
+            src_set = {a.lower().strip() for a in source_authors if a}
+            other_set = {a.lower().strip() for a in other_authors if a}
+            shared = src_set & other_set
+            for author in shared:
+                _add(other["material_id"], Connection(
+                    type="shared_author", value=author, weight=0.8
+                ))
+
+    # Shared facet values (weight 0.5 each, skip empty values)
+    facet_row = con.execute(
+        f"SELECT {', '.join(_FACET_COLUMNS_FOR_RELATED)} FROM materials WHERE material_id = ?",
+        [material_id],
+    ).fetchone()
+    if facet_row:
+        all_others = con.execute(
+            f"SELECT material_id, {', '.join(_FACET_COLUMNS_FOR_RELATED)} FROM materials WHERE material_id != ?",
+            [material_id],
+        ).fetchall()
+        for col in _FACET_COLUMNS_FOR_RELATED:
+            src_val = (facet_row[col] or "").strip()
+            if not src_val:
+                continue
+            for other in all_others:
+                other_val = (other[col] or "").strip()
+                if other_val and other_val.lower() == src_val.lower():
+                    _add(other["material_id"], Connection(
+                        type="shared_facet", value=src_val, facet=col, weight=0.5
+                    ))
+
+    if not scores:
+        return []
+
+    # Fetch card info for all candidates
+    sorted_mids = sorted(scores, key=lambda m: -scores[m])[:limit]
+    related: list[RelatedMaterial] = []
+    for mid in sorted_mids:
+        row = con.execute(
+            "SELECT title, domain, collection, document_type, year FROM materials WHERE material_id = ?",
+            [mid],
+        ).fetchone()
+        if not row:
+            continue
+        related.append(RelatedMaterial(
+            material_id=mid,
+            title=row["title"],
+            domain=row["domain"],
+            collection=row["collection"],
+            document_type=row["document_type"],
+            year=row["year"],
+            score=scores[mid],
+            connections=connections[mid],
+        ))
+
+    return related
+
+
+def format_related_human(material_id: str, related: list[RelatedMaterial]) -> str:
+    if not related:
+        return f"No related materials found for {material_id}."
+    lines = [f"Related to {material_id}:\n"]
+    for i, r in enumerate(related, 1):
+        lines.append(f"  {i:>2}. {r.title[:60]} ({r.material_id})  score={r.score:.2f}")
+        for conn in r.connections[:5]:
+            facet_label = f" [{conn.facet}]" if conn.facet else ""
+            lines.append(f"        {conn.type}{facet_label}: {conn.value}")
+    return "\n".join(lines)
+
+
+# --- Concept listing (C4.4) ---
+
+@dataclass
+class ConceptEntry:
+    concept_name: str
+    material_count: int
+    material_ids: list[str]
+    relevance_summary: str   # most common relevance value
+
+    def to_dict(self) -> dict:
+        return {
+            "concept_name": self.concept_name,
+            "material_count": self.material_count,
+            "material_ids": self.material_ids,
+            "relevance_summary": self.relevance_summary,
+        }
+
+
+def list_concepts(
+    config: dict | None = None,
+    *,
+    min_materials: int = 1,
+    limit: int = 100,
+) -> list[ConceptEntry]:
+    """List all concept candidates across the collection, grouped by concept name."""
+    if config is None:
+        config = load_config()
+
+    index_path = get_index_path(config)
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+
+    con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        rows = con.execute(
+            """
+            SELECT concept_name,
+                   COUNT(DISTINCT material_id) AS material_count,
+                   GROUP_CONCAT(material_id, ',') AS material_ids_csv,
+                   MAX(relevance) AS relevance_summary
+            FROM concepts
+            GROUP BY concept_name
+            HAVING COUNT(DISTINCT material_id) >= ?
+            ORDER BY material_count DESC, concept_name
+            LIMIT ?
+            """,
+            [min_materials, limit],
+        ).fetchall()
+    finally:
+        con.close()
+
+    entries: list[ConceptEntry] = []
+    for row in rows:
+        mids = [m.strip() for m in (row["material_ids_csv"] or "").split(",") if m.strip()]
+        entries.append(ConceptEntry(
+            concept_name=row["concept_name"],
+            material_count=row["material_count"],
+            material_ids=mids,
+            relevance_summary=row["relevance_summary"] or "",
+        ))
+    return entries
+
+
+def format_concepts_human(entries: list[ConceptEntry]) -> str:
+    if not entries:
+        return "No concepts found."
+    lines = [f' {"#":>3}  {"Concept":<45}  {"Materials":>9}  {"Relevance"}']
+    lines.append(" " + "-" * 80)
+    for i, e in enumerate(entries, 1):
+        name = e.concept_name[:43] + ".." if len(e.concept_name) > 45 else e.concept_name
+        lines.append(f" {i:>3}  {name:<45}  {e.material_count:>9}  {e.relevance_summary}")
+    lines.append(f"\n{len(entries)} concept(s) across collection.")
     return "\n".join(lines)

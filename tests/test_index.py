@@ -373,3 +373,92 @@ class TestEnsureIndexDetectsContentChanges:
         rebuilt, _ = ensure_index()
         assert rebuilt is True
 
+
+# --- concepts.jsonl helpers ---
+
+def _write_concepts(mat_dir: Path, concepts: list[dict]) -> None:
+    lines = [json.dumps(c) for c in concepts]
+    (mat_dir / "concepts.jsonl").write_text("\n".join(lines))
+
+
+# --- C4.1: Concepts indexing ---
+
+class TestConceptsIndexed:
+    def test_concepts_in_stats(self, repo):
+        mat_dir = _add_material(repo)
+        _write_concepts(mat_dir, [
+            {"concept_name": "archival habitat", "relevance": "high"},
+            {"concept_name": "embodied archives", "relevance": "high"},
+        ])
+        stats = rebuild_index()
+        assert stats.concepts == 2
+
+    def test_concepts_table_populated(self, repo):
+        import sqlite3
+        mat_dir = _add_material(repo)
+        _write_concepts(mat_dir, [
+            {"concept_name": "archival habitat", "relevance": "high"},
+        ])
+        rebuild_index()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        rows = con.execute("SELECT concept_name, material_id, relevance FROM concepts").fetchall()
+        con.close()
+        assert len(rows) == 1
+        assert rows[0][0] == "archival habitat"
+        assert rows[0][1] == "aabbcc112233"
+        assert rows[0][2] == "high"
+
+    def test_concepts_fts_searchable(self, repo):
+        import sqlite3
+        mat_dir = _add_material(repo)
+        _write_concepts(mat_dir, [
+            {"concept_name": "postcolonial historiography", "relevance": "medium"},
+        ])
+        rebuild_index()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        rows = con.execute(
+            "SELECT co.material_id FROM concepts_fts JOIN concepts co ON concepts_fts.rowid = co.rowid WHERE concepts_fts MATCH 'postcolonial'"
+        ).fetchall()
+        con.close()
+        assert len(rows) == 1
+
+    def test_no_concepts_file_ok(self, repo):
+        _add_material(repo)
+        # No concepts.jsonl written — should not crash, concepts count = 0
+        stats = rebuild_index()
+        assert stats.concepts == 0
+
+    def test_concept_deduplication_by_primary_key(self, repo):
+        import sqlite3
+        mat_dir = _add_material(repo)
+        # Same concept_name + material_id twice — INSERT OR REPLACE deduplicates
+        _write_concepts(mat_dir, [
+            {"concept_name": "shared concept", "relevance": "high"},
+            {"concept_name": "shared concept", "relevance": "medium"},
+        ])
+        rebuild_index()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        count = con.execute("SELECT COUNT(*) FROM concepts").fetchone()[0]
+        con.close()
+        assert count == 1
+
+    def test_staleness_when_concepts_changed(self, repo):
+        mat_dir = _add_material(repo)
+        _write_concepts(mat_dir, [
+            {"concept_name": "archival habitat", "relevance": "high"},
+        ])
+        ensure_index()
+        # Backdate index
+        import sqlite3
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        con.execute("UPDATE index_state SET built_at = '2020-01-01T00:00:00+00:00' WHERE id = 1")
+        con.commit()
+        con.close()
+        # Modify concepts.jsonl
+        _write_concepts(mat_dir, [
+            {"concept_name": "archival habitat", "relevance": "high"},
+            {"concept_name": "new concept xyz", "relevance": "medium"},
+        ])
+        rebuilt, _ = ensure_index()
+        assert rebuilt is True
+

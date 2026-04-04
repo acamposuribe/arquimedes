@@ -176,9 +176,10 @@ def make_cli_llm_fn(config: dict) -> LlmFn:
                     timeout=300,  # 5-minute timeout per call
                 )
                 if result.returncode != 0:
+                    detail = result.stderr.strip() or result.stdout.strip()
                     raise EnrichmentError(
                         f"Agent CLI failed (exit {result.returncode}): "
-                        f"{result.stderr.strip()[:500]}"
+                        f"{detail[:500]}"
                     )
                 return result.stdout
             except subprocess.TimeoutExpired:

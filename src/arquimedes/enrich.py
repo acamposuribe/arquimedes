@@ -83,6 +83,14 @@ def _is_chunk_stale(output_dir: Path, config: dict) -> bool:
         headings: list[str] = []
         if toc and isinstance(toc, list):
             headings = [e.get("title", "") for e in toc if e.get("title")]
+        if not headings:
+            pages_path = output_dir / "pages.jsonl"
+            if pages_path.exists():
+                for line in pages_path.read_text(encoding="utf-8").splitlines():
+                    line = line.strip()
+                    if line:
+                        p = json.loads(line)
+                        headings.extend(p.get("headings", []))
 
         doc_context: dict = {
             "title": meta.get("title", ""),

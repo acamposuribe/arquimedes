@@ -328,6 +328,7 @@ class Chunk:
     # Enriched (added by enrich step)
     summary: EnrichedField | None = None
     keywords: EnrichedField | None = None
+    content_class: str = ""  # argument|methodology|case_study|bibliography|front_matter|caption|appendix
 
     def to_dict(self) -> dict:
         result = {
@@ -340,6 +341,8 @@ class Chunk:
             result["summary"] = self.summary.to_dict()
         if self.keywords is not None:
             result["keywords"] = self.keywords.to_dict()
+        if self.content_class:
+            result["content_class"] = self.content_class
         return result
 
     @classmethod
@@ -354,6 +357,8 @@ class Chunk:
             chunk.summary = EnrichedField.from_dict(data["summary"])
         if "keywords" in data:
             chunk.keywords = EnrichedField.from_dict(data["keywords"])
+        if "content_class" in data:
+            chunk.content_class = data["content_class"]
         return chunk
 
 
@@ -371,6 +376,7 @@ class Figure:
     visual_type: EnrichedField | None = None
     description: EnrichedField | None = None
     caption: EnrichedField | None = None
+    relevance: str = ""  # substantive|decorative|front_matter
     analysis_mode: str = ""  # vision | text_fallback
     _enrichment_stamp: dict | None = None
 
@@ -388,6 +394,8 @@ class Figure:
             result["description"] = self.description.to_dict()
         if self.caption is not None:
             result["caption"] = self.caption.to_dict()
+        if self.relevance:
+            result["relevance"] = self.relevance
         if self.analysis_mode:
             result["analysis_mode"] = self.analysis_mode
         if self._enrichment_stamp is not None:
@@ -409,6 +417,8 @@ class Figure:
             fig.description = EnrichedField.from_dict(data["description"])
         if "caption" in data:
             fig.caption = EnrichedField.from_dict(data["caption"])
+        if "relevance" in data:
+            fig.relevance = data["relevance"]
         if "analysis_mode" in data:
             fig.analysis_mode = data["analysis_mode"]
         if "_enrichment_stamp" in data:

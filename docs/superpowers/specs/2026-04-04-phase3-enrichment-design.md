@@ -45,6 +45,7 @@
 **Outputs added to each chunk in `chunks.jsonl`:**
 - `summary` (EnrichedField) — one-line summary
 - `keywords` (EnrichedField) — extracted terms
+- `content_class` (string) — chunk role classification: `argument` | `methodology` | `case_study` | `bibliography` | `front_matter` | `caption` | `appendix`
 
 **Outputs written to `chunk_enrichment_stamps.json`:**
 - `{chunk_id: stamp}` map for per-chunk staleness tracking
@@ -68,6 +69,7 @@
 - `visual_type` (EnrichedField) — plan | section | elevation | detail | photo | diagram | chart | render | sketch
 - `description` (EnrichedField) — visual description of what the figure shows
 - `caption` (EnrichedField) — extracted or inferred caption
+- `relevance` (string) — figure relevance classification: `substantive` | `decorative` | `front_matter`
 - `analysis_mode` — "vision" or "text_fallback"
 - `_enrichment_stamp`
 
@@ -106,7 +108,9 @@ A hash of **all inputs that can change the enrichment result**, including contex
 
 ### Staleness Rules
 
-**"Current" = exact match** on all four stamp fields (prompt_version, model, enrichment_schema_version, input_fingerprint). Any difference = stale.
+**"Current" = exact match** on three stamp fields: `prompt_version`, `enrichment_schema_version`, `input_fingerprint`. Any difference = stale.
+
+The `model` field is **audit-only** — it records which model actually produced the output (which may vary due to ordered agent fallback) but is not compared for staleness. To force re-enrichment with a different model, use `--force`.
 
 - Stale or missing stamp: re-enrich
 - Current stamp: skip
@@ -227,7 +231,7 @@ enrichment:
 ### Performance
 
 - **Lazy LLM init:** agent CLI is never constructed if nothing is stale
-- **`--bare` mode:** claude is called with `--bare --no-session-persistence --system-prompt` to skip workspace discovery, hooks, LSP, and session saving
+- **Claude optimizations:** called with `--no-session-persistence --disable-slash-commands --tools "" --model sonnet --system-prompt` to skip session saving, skill resolution, and built-in tools (`--bare` is intentionally avoided — it breaks credential discovery)
 - **Codex optimizations:** codex is called with `--ephemeral --skip-git-repo-check` to reduce startup overhead
 - **Parallel materials:** when multiple materials need enrichment, they are processed concurrently via `ThreadPoolExecutor(max_workers=parallel)`
 - **Early skip:** orchestrator checks staleness before dispatching to stage functions, avoiding unnecessary LLM construction

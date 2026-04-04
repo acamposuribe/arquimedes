@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phase 3 — Complete (pending integration smoke test)
-> **Last updated:** 2026-04-05
+> **Status:** Phase 3 — Complete
+> **Last updated:** 2026-04-04
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 
 ## Context

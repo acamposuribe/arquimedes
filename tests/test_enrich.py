@@ -473,3 +473,99 @@ class TestCombinedCall:
         assert all_succeeded is False
         assert results["test123"]["document"]["status"] == "enriched"
         assert results["test123"]["chunk"]["status"] == "failed"
+
+
+class TestParallelStages:
+    """Tests for parallel document + figure execution."""
+
+    def test_doc_and_figure_run_in_parallel_when_both_stale(self, tmp_path):
+        """When combined mode is off and all stages are stale, doc+figure run concurrently."""
+        import threading
+
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        # Track which threads each stage runs on
+        stage_threads: dict[str, int] = {}
+
+        def _doc_stage(*args, **kwargs):
+            stage_threads["document"] = threading.current_thread().ident
+            return _make_stage_result()
+
+        def _chunk_stage(*args, **kwargs):
+            stage_threads["chunk"] = threading.current_thread().ident
+            return _make_stage_result()
+
+        def _figure_stage(*args, **kwargs):
+            stage_threads["figure"] = threading.current_thread().ident
+            return _make_stage_result()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
+            patch(_PATCH_DOC, side_effect=_doc_stage),
+            patch(_PATCH_CHUNK, side_effect=_chunk_stage),
+            patch(_PATCH_FIGURE, side_effect=_figure_stage),
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                force=True,
+            )
+
+        assert all_succeeded is True
+        # Figure should run on a different thread than document (parallel)
+        assert stage_threads["figure"] != stage_threads["document"]
+        # Chunk should run on the same thread as document (waits for doc)
+        assert stage_threads["chunk"] == stage_threads["document"]
+
+    def test_parallel_not_used_when_only_doc_stale(self, tmp_path):
+        """When figure is up-to-date, no parallel scheduling — just sequential."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
+            patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+            patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
+        ):
+            results, _ = enrich(
+                material_id="test123",
+                config=config,
+                stages=["document", "chunk"],
+                force=True,
+            )
+
+        mock_doc.assert_called_once()
+        mock_chunk.assert_called_once()
+        mock_figure.assert_not_called()
+
+    def test_parallel_figure_failure_reported(self, tmp_path):
+        """If figure fails in parallel path, all_succeeded should be False."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_SHOULD_COMBINE, return_value=False),
+            patch(_PATCH_DOC, return_value=_make_stage_result()),
+            patch(_PATCH_CHUNK, return_value=_make_stage_result()),
+            patch(_PATCH_FIGURE, return_value={"status": "failed", "detail": "vision error"}),
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                force=True,
+            )
+
+        assert all_succeeded is False
+        assert results["test123"]["document"]["status"] == "enriched"
+        assert results["test123"]["figure"]["status"] == "failed"

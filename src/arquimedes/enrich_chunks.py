@@ -49,7 +49,8 @@ _CHUNK_BATCH_SCHEMA_DESC = """\
     {
       "chunk_id": "...",
       "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "keywords": {"value": ["..."], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
+      "keywords": {"value": ["..."], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+      "content_class": "one of: argument|methodology|case_study|bibliography|front_matter|caption|appendix"
     }
   ]
 }"""
@@ -192,6 +193,8 @@ def enrich_chunks_stage(
                     ).to_dict()
                 except Exception:
                     pass
+            if "content_class" in chunk_data and isinstance(chunk_data["content_class"], str):
+                enrichment["content_class"] = chunk_data["content_class"]
             if enrichment:
                 chunk_enrichments[chunk_id] = enrichment
     else:
@@ -263,6 +266,8 @@ def enrich_chunks_stage(
                         ).to_dict()
                     except Exception:
                         pass
+                if "content_class" in chunk_data and isinstance(chunk_data["content_class"], str):
+                    enrichment["content_class"] = chunk_data["content_class"]
                 if enrichment:
                     chunk_enrichments[chunk_id] = enrichment
 
@@ -298,9 +303,9 @@ def enrich_chunks_stage(
         for chunk in chunks:
             chunk_id = chunk.get("chunk_id", "")
             fp = enrich_stamps.single_chunk_fingerprint(chunk, annotations, doc_context)
-            new_stamps[chunk_id] = enrich_stamps.make_stamp(
-                prompt_version, model, schema_version, fp
-            )
+            st = enrich_stamps.make_stamp(prompt_version, model, schema_version, fp)
+            st["model"] = actual_model  # actual responding model for audit
+            new_stamps[chunk_id] = st
 
         chunks_path = output_dir / "chunks.jsonl"
         stamps_path = output_dir / "chunk_enrichment_stamps.json"

@@ -234,12 +234,15 @@ def make_stamp(
 def is_stale(existing_stamp: dict | None, current_stamp: dict) -> bool:
     """Return True if the artifact needs re-enrichment.
 
-    Stale when existing_stamp is None or any of the 4 fields differ from
-    current_stamp.  Exact match on all 4 fields = not stale.
+    Stale when existing_stamp is None or the prompt_version, schema_version,
+    or input_fingerprint differ.  The ``model`` field is stored for audit
+    purposes only — it records which model actually produced the output and
+    is NOT compared for staleness (since the responding model may vary due to
+    fallback).  To force re-enrichment with a different model, use --force.
     """
     if existing_stamp is None:
         return True
-    fields = ("prompt_version", "model", "enrichment_schema_version", "input_fingerprint")
+    fields = ("prompt_version", "enrichment_schema_version", "input_fingerprint")
     return any(existing_stamp.get(f) != current_stamp.get(f) for f in fields)
 
 

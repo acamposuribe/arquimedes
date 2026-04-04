@@ -6,6 +6,8 @@ Collaborative LLM knowledge base for architecture (building design) practice and
 
 Raw materials live in a shared iCloud folder (`~/Arquimedes-Library`). The repo contains extracted artifacts, wiki, indexes, and tools. Python tooling via `arq` CLI (Click). SQLite FTS5 for search (gitignored, rebuilt locally).
 
+The high-level conceptual inspiration is Karpathy's "LLM wiki" pattern, captured locally in `docs/llm-wiki.md`. Treat that file as the reference for the original idea: an LLM-maintained, compounding wiki that sits between raw sources and query-time retrieval. Treat the Arquimedes spec and plan as the implementation-specific adaptation for architecture, collaboration, provenance, and server-agent operation.
+
 ## User
 
 - Architect and architecture professor
@@ -31,5 +33,6 @@ When implementation changes affect the spec or plan, update those documents imme
 |------|---------|
 | `docs/PLAN.md` | Implementation plan with phase checkboxes |
 | `docs/superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md` | Full design spec |
+| `docs/llm-wiki.md` | Original conceptual reference for the Karpathy-style LLM-maintained wiki pattern |
 | `config/config.yaml` | Default configuration |
 | `src/arquimedes/cli.py` | `arq` CLI entrypoint |

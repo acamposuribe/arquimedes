@@ -461,10 +461,11 @@ def enrich(
                     if chunk_result["status"] == "failed":
                         succeeded = False
 
-        for stage_name in requested_stages:
-            if stage_name in combined_handled:
-                continue
-            if dry_run:
+        # Determine remaining stages after combined handling
+        remaining = [s for s in requested_stages if s not in combined_handled]
+
+        if dry_run:
+            for stage_name in remaining:
                 if stage_name == "document":
                     stale = _is_document_stale(output_dir, config)
                 elif stage_name == "chunk":
@@ -475,30 +476,80 @@ def enrich(
                     "status": "stale" if stale else "up_to_date",
                     "detail": "dry-run",
                 }
-                continue
+        else:
+            # Pre-check staleness per stage
+            stale_stages: set[str] = set()
+            for s in remaining:
+                if force:
+                    stale_stages.add(s)
+                elif s == "document" and _is_document_stale(output_dir, config):
+                    stale_stages.add(s)
+                elif s == "chunk" and _is_chunk_stale(output_dir, config):
+                    stale_stages.add(s)
+                elif s == "figure" and _is_figure_stale(output_dir, config):
+                    stale_stages.add(s)
 
-            # Skip early if not stale (avoids constructing LLM fn)
-            if not force:
-                if stage_name == "document":
-                    stale = _is_document_stale(output_dir, config)
-                elif stage_name == "chunk":
-                    stale = _is_chunk_stale(output_dir, config)
-                else:
-                    stale = _is_figure_stale(output_dir, config)
-                if not stale:
-                    material_results[stage_name] = {"status": "skipped", "detail": "up to date"}
-                    continue
+            for s in remaining:
+                if s not in stale_stages:
+                    material_results[s] = {"status": "skipped", "detail": "up to date"}
 
-            if stage_name == "document":
-                result = enrich_document_stage(output_dir, config, _get_llm_fn(), force=force)
-            elif stage_name == "chunk":
-                result = enrich_chunks_stage(output_dir, config, _get_llm_fn(), force=force)
+            # Parallel path: document + figure are independent; chunk waits for document
+            parallel_doc_fig = "document" in stale_stages and "figure" in stale_stages
+
+            if parallel_doc_fig:
+                from arquimedes.enrich_llm import make_cli_llm_fn as _make_fn
+
+                # Separate llm_fn per thread to avoid last_model race
+                doc_fn = _get_llm_fn()
+                fig_fn = _make_fn(config)
+
+                with ThreadPoolExecutor(max_workers=2) as stage_pool:
+                    fig_future = stage_pool.submit(
+                        enrich_figures_stage, output_dir, config, fig_fn, force=force
+                    )
+
+                    # Document in main thread so chunk can follow immediately
+                    doc_result = enrich_document_stage(
+                        output_dir, config, doc_fn, force=force
+                    )
+                    material_results["document"] = doc_result
+                    if doc_result["status"] == "failed":
+                        succeeded = False
+
+                    # Chunk after document (uses doc summary in prompt context)
+                    if "chunk" in stale_stages:
+                        chunk_result = enrich_chunks_stage(
+                            output_dir, config, doc_fn, force=force
+                        )
+                        material_results["chunk"] = chunk_result
+                        if chunk_result["status"] == "failed":
+                            succeeded = False
+
+                    # Collect figure result
+                    fig_result = fig_future.result()
+                    material_results["figure"] = fig_result
+                    if fig_result["status"] == "failed":
+                        succeeded = False
             else:
-                result = enrich_figures_stage(output_dir, config, _get_llm_fn(), force=force)
-
-            material_results[stage_name] = result
-            if result["status"] == "failed":
-                succeeded = False
+                # Sequential: doc → chunk → figure (preserves dependency order)
+                for s in ("document", "chunk", "figure"):
+                    if s not in stale_stages:
+                        continue
+                    if s == "document":
+                        result = enrich_document_stage(
+                            output_dir, config, _get_llm_fn(), force=force
+                        )
+                    elif s == "chunk":
+                        result = enrich_chunks_stage(
+                            output_dir, config, _get_llm_fn(), force=force
+                        )
+                    else:
+                        result = enrich_figures_stage(
+                            output_dir, config, _get_llm_fn(), force=force
+                        )
+                    material_results[s] = result
+                    if result["status"] == "failed":
+                        succeeded = False
 
         return mid, material_results, succeeded
 

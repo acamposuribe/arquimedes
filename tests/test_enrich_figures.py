@@ -40,6 +40,7 @@ def _make_figure_response(figure_ids: list[str]) -> str:
                     "evidence_spans": ["Figure 1"],
                     "confidence": 0.8,
                 },
+                "relevance": "substantive",
             }
             for fid in figure_ids
         ]
@@ -218,6 +219,27 @@ class TestEnrichFiguresStage:
         assert "Floor plan" in sidecar["description"]["value"]
         assert "caption" in sidecar
         assert "Figure 1" in sidecar["caption"]["value"]
+        assert sidecar.get("relevance") == "substantive"
+
+    def test_relevance_stored_on_sidecar(self, tmp_path):
+        """relevance from LLM response should be stored as a plain string on the sidecar."""
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
+        # Return a decorative-classified figure
+        resp = json.dumps({"figures": [{
+            "figure_id": "fig_0001",
+            "visual_type": {"value": "logo", "source_pages": [1], "evidence_spans": ["logo"], "confidence": 0.9},
+            "description": {"value": "Publisher logo", "source_pages": [1], "evidence_spans": ["logo"], "confidence": 0.8},
+            "caption": {"value": "", "source_pages": [1], "evidence_spans": [], "confidence": 0.5},
+            "relevance": "decorative",
+        }]})
+        llm_fn = _make_llm_fn([resp])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "enriched"
+
+        sidecar = json.loads((output_dir / "figures" / "fig_0001.json").read_text())
+        assert sidecar["relevance"] == "decorative"
 
     def test_skipped_when_no_figures_dir(self, tmp_path):
         """If there is no figures directory, the stage is skipped."""

@@ -342,7 +342,8 @@ _COMBINED_SCHEMA = """\
     {
       "chunk_id": "...",
       "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "keywords": {"value": ["..."], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
+      "keywords": {"value": ["..."], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+      "content_class": "one of: argument|methodology|case_study|bibliography|front_matter|caption|appendix"
     }
   ]
 }\
@@ -417,7 +418,8 @@ _CHUNK_BATCH_SCHEMA = """\
     {
       "chunk_id": "...",
       "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "keywords": {"value": ["..."], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
+      "keywords": {"value": ["..."], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+      "content_class": "one of: argument|methodology|case_study|bibliography|front_matter|caption|appendix"
     }
   ]
 }\
@@ -434,7 +436,16 @@ _CHUNK_BATCH_USER_TEMPLATE = """\
 
 ## Instructions
 
-For each chunk above, provide a concise one-line summary and a list of architecture-relevant keywords. \
+For each chunk above, provide a concise one-line summary, a list of architecture-relevant keywords, \
+and a content_class that categorizes the chunk's role in the document:
+- "argument": substantive analysis, theory, design discussion
+- "methodology": research methods, analytical frameworks
+- "case_study": specific projects, buildings, precedent descriptions
+- "bibliography": references, citations, endnotes, works cited
+- "front_matter": title pages, abstracts, acknowledgments, author bios
+- "caption": figure captions, table captions, image descriptions
+- "appendix": supplementary data, appendix material
+
 Return ONLY valid JSON matching the schema below. No markdown fences, no explanations.
 
 {schema}\
@@ -482,7 +493,8 @@ _FIGURE_BATCH_SCHEMA = """\
       "figure_id": "...",
       "visual_type": {"value": "one of: plan|section|elevation|detail|photo|diagram|chart|render|sketch", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
       "description": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "caption": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
+      "caption": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+      "relevance": {"value": "one of: substantive|decorative|front_matter", "confidence": 0.0-1.0}
     }
   ]
 }\
@@ -496,7 +508,11 @@ _FIGURE_BATCH_USER_INTRO = """\
 ## Figures
 
 For each figure below, identify its visual_type (plan, section, elevation, detail, photo, \
-diagram, chart, render, or sketch), write a concise description, and extract or infer a caption.
+diagram, chart, render, or sketch), write a concise description, extract or infer a caption, \
+and classify its relevance:
+- "substantive": architectural drawings, photos, diagrams, or other visual knowledge
+- "decorative": logos, publisher marks, decorative borders, page ornaments
+- "front_matter": journal covers, title page images, platform/database artifacts
 
 """
 

@@ -34,6 +34,7 @@ def _make_chunk_response(chunk_ids: list[str]) -> str:
                     "evidence_spans": ["Some text..."],
                     "confidence": 0.85,
                 },
+                "content_class": "argument",
             }
             for cid in chunk_ids
         ]
@@ -144,6 +145,26 @@ class TestEnrichChunksStage:
         assert c["summary"]["value"] == "Summary for c001"
         assert "keywords" in c
         assert "term1" in c["keywords"]["value"]
+        assert c.get("content_class") == "argument"
+
+    def test_content_class_stored_on_chunk(self, tmp_path):
+        """content_class from LLM response should be stored as a plain string on the chunk."""
+        output_dir = _make_extracted_dir(tmp_path, n_chunks=1)
+        # Return a bibliography-classified chunk
+        resp = json.dumps({"chunks": [{
+            "chunk_id": "c001",
+            "summary": {"value": "Refs", "source_pages": [1], "evidence_spans": ["..."], "confidence": 0.9},
+            "keywords": {"value": ["refs"], "source_pages": [1], "evidence_spans": ["..."], "confidence": 0.8},
+            "content_class": "bibliography",
+        }]})
+        llm_fn = _make_llm_fn([resp])
+        config = _make_config()
+
+        result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "enriched"
+
+        chunks = [json.loads(l) for l in (output_dir / "chunks.jsonl").read_text().splitlines() if l.strip()]
+        assert chunks[0]["content_class"] == "bibliography"
 
     def test_chunk_enrichment_stamps_written(self, tmp_path):
         """chunk_enrichment_stamps.json should contain per-chunk stamp map."""

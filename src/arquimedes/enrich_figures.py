@@ -71,7 +71,8 @@ _FIGURE_BATCH_SCHEMA_DESC = """\
       "figure_id": "...",
       "visual_type": {"value": "plan|section|elevation|detail|photo|diagram|chart|render|sketch", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
       "description": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "caption": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
+      "caption": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+      "relevance": {"value": "substantive|decorative|front_matter", "confidence": 0.0-1.0}
     }
   ]
 }"""
@@ -324,6 +325,15 @@ def enrich_figures_stage(
 
                 ef = _make_enriched_field(fig_response["caption"], actual_model, prompt_version)
                 enriched["caption"] = ef.to_dict()
+
+                # Relevance classification (optional — graceful fallback)
+                rel = fig_response.get("relevance")
+                if isinstance(rel, dict) and "value" in rel:
+                    enriched["relevance"] = rel["value"]
+                elif isinstance(rel, str) and rel:
+                    enriched["relevance"] = rel
+                else:
+                    enriched["relevance"] = "substantive"  # default
             except Exception as exc:
                 return {
                     "status": "failed",
@@ -331,6 +341,7 @@ def enrich_figures_stage(
                 }
 
             enriched["_enrichment_stamp"] = fig["stamp"]
+            enriched["_enrichment_stamp"]["model"] = actual_model  # actual responding model
             enriched_by_path[fig["path"]] = enriched
 
     # 9. Atomic write: stage all sidecar files, then commit with rollback

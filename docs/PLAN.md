@@ -3,6 +3,7 @@
 > **Status:** Phase 3 — Complete
 > **Last updated:** 2026-04-04
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
+> **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 
 ## Context
 
@@ -10,12 +11,22 @@ Building a collaborative LLM knowledge base for architecture practice and resear
 
 Raw materials live in a shared iCloud folder. The repo contains extracted artifacts, wiki, indexes, and tools. A server agent (Mac Mini) auto-ingests new materials. Collaborators search via web UI or their own agents.
 
+The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer: it will ingest new sources, enrich them, compile/update wiki pages, run health checks, and keep indexes current. This role is assembled across multiple phases:
+- **Phases 5-6** define what the maintainer actually does (compile and lint the wiki)
+- **Phase 7** exposes those capabilities to other agents
+- **Phase 9** turns the maintainer into an always-on daemon with automation, batching, sync, and recovery behavior
+
+Current docs like `CLAUDE.md` describe how to build Arquimedes itself. A dedicated maintainer instruction file for the server agent belongs with the Phase 9 rollout, once compile/lint behavior is implemented and stable.
+
+Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use this plan and the global spec to understand how Arquimedes adapts that pattern for architecture, provenance, collaboration, and an always-on server maintainer.
+
 ## How to use this plan
 
 - Each phase has checkboxes. Mark items `[x]` when complete.
 - Update the **Status** line at the top when moving to a new phase.
 - Update **Last updated** date on any change.
 - Any LLM agent picking up work should read this file first to understand current state.
+- Then read `docs/llm-wiki.md` if conceptual grounding is needed, especially when working on wiki compile/lint/maintainer behavior.
 - The search index (SQLite) is gitignored and rebuilt locally — never committed.
 
 ---
@@ -64,6 +75,7 @@ Raw materials live in a shared iCloud folder. The repo contains extracted artifa
 - [ ] Incremental compilation (only affected pages)
 - [ ] Cross-referencing with standard markdown links
 - [ ] Wiki tree: practice/, research/, shared/concepts/
+- [ ] Define the wiki structures the future server maintainer will own and keep current
 
 ## Phase 6: Wiki Linting & Health Checks
 
@@ -71,6 +83,7 @@ Raw materials live in a shared iCloud folder. The repo contains extracted artifa
 - [ ] LLM-driven checks: inconsistent data, missing connections, concept candidates, impute missing facets, research questions, coverage gaps
 - [ ] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --report`, `arq lint --fix`
 - [ ] Provenance on every LLM suggestion
+- [ ] Define the health-check and maintenance behaviors the future server maintainer will run automatically
 
 ## Phase 7: Agent Tools
 
@@ -85,12 +98,14 @@ Raw materials live in a shared iCloud folder. The repo contains extracted artifa
 
 ## Phase 9: Server Agent + Sync
 
+- [ ] Introduce a dedicated maintainer instruction file for the server agent (operational schema, not build-system docs)
 - [ ] `arq watch` — file watcher with configurable backend (fsevents | poll)
 - [ ] Debouncing + batching (10s window, single commit per batch)
 - [ ] `arq sync` — auto-pull daemon for collaborators with `arq index ensure` after pull
 - [ ] `arq lint --quick` after each compile, `arq lint --full` on weekly schedule
 - [ ] launchd integration for both watch and sync
 - [ ] Auto-commit + push pipeline
+- [ ] Always-on maintainer flow: ingest → extract-raw → enrich → compile → lint/index → commit/push
 
 ---
 

@@ -11,6 +11,15 @@ An architect and architecture professor needs a collaborative knowledge base tha
 
 The system is inspired by Karpathy's LLM knowledge base pattern: raw data collected, compiled by LLM into a wiki, operated on by CLI tools and agents, viewable in a browser. The key difference is this is collaborative, domain-specific (architecture), and agent-first.
 
+For the original conceptual pattern, see `docs/llm-wiki.md`. That file is the local reference for the source idea. This spec defines how Arquimedes instantiates and extends that pattern for architecture practice and research, with explicit provenance, deterministic extraction, multimodal materials, collaboration, and a future server-maintainer daemon.
+
+The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer. It is responsible for ingesting new sources, enriching them, compiling and updating wiki pages, running health checks, and keeping indexes current. This maintainer role is assembled progressively:
+- **Wiki compilation** defines what the maintainer writes and updates
+- **Wiki linting** defines what the maintainer checks and improves
+- **The server daemon** makes that maintenance loop always-on and automatic
+
+Current project docs such as `CLAUDE.md` describe how to build Arquimedes itself. A separate operational instruction file for the server maintainer belongs with the daemon rollout, once compile/lint behavior is implemented and stable.
+
 ## Architecture Overview
 
 **Three deployment contexts:**
@@ -430,6 +439,8 @@ FastAPI + Jinja2 templates + vanilla JS (no heavy frontend framework):
 No auth initially (local network). Basic auth can be added later.
 
 ## Server Agent (Mac Mini)
+
+This is the phase where the Karpathy-style "wiki maintainer" becomes operational. The compile and lint systems defined earlier in this spec provide the maintainer's responsibilities; the server agent automates them continuously. It is not a generic coding agent and it is not governed by the current build-system `CLAUDE.md`. It should eventually have its own dedicated maintainer instruction file describing ingest, compile, lint, indexing, logging, filing, and recovery behavior.
 
 ### `arq watch` daemon:
 

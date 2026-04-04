@@ -215,6 +215,8 @@ def enrich_document_stage(
 
     # 7. Atomic write: stage all files first, then commit all renames
     try:
+        # Update stamp with actual responding model (not the config fallback list)
+        stamp["model"] = actual_model
         meta_out["_enrichment_stamp"] = stamp
 
         meta_path = output_dir / "meta.json"

@@ -195,10 +195,16 @@ class TestStampAndStaleness:
         current = make_stamp("v1", "claude-4", "1.0", "abcd1234")
         assert is_stale(None, current) is True
         assert is_stale(current, current) is False
-        # Any single field change → stale
-        for field in ("prompt_version", "model", "enrichment_schema_version", "input_fingerprint"):
+        # Staleness-driving fields
+        for field in ("prompt_version", "enrichment_schema_version", "input_fingerprint"):
             modified = {**current, field: "different"}
             assert is_stale(modified, current) is True
+
+    def test_model_change_does_not_trigger_stale(self):
+        """Model is audit-only; changing it should NOT cause staleness."""
+        current = make_stamp("v1", "claude-4", "1.0", "abcd1234")
+        different_model = {**current, "model": "codex"}
+        assert is_stale(different_model, current) is False
 
 
 # ---------------------------------------------------------------------------

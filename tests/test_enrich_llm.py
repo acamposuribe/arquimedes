@@ -9,6 +9,7 @@ import pytest
 
 from arquimedes.enrich_llm import (
     EnrichmentError,
+    _build_agent_cmd,
     _build_prompt_text,
     get_model_id,
     make_cli_llm_fn,
@@ -57,9 +58,9 @@ class TestParseJsonOrRepair:
 
 class TestBuildPromptText:
     def test_simple_text_messages(self):
-        result = _build_prompt_text("Be helpful.", [{"role": "user", "content": "Hello"}])
-        assert "[SYSTEM]\nBe helpful." in result
-        assert "[USER]\nHello" in result
+        system, user = _build_prompt_text("Be helpful.", [{"role": "user", "content": "Hello"}])
+        assert system == "Be helpful."
+        assert "[USER]\nHello" in user
 
     def test_multimodal_includes_image_paths(self):
         messages = [
@@ -73,12 +74,13 @@ class TestBuildPromptText:
                 ],
             }
         ]
-        result = _build_prompt_text("system", messages)
-        assert "Describe this figure." in result
-        assert "floor plan" in result
-        assert "abc123" not in result  # base64 data not leaked
-        assert "/path/to/fig_0001.png" in result
-        assert "[IMAGE:" in result
+        system, user = _build_prompt_text("system", messages)
+        assert system == "system"
+        assert "Describe this figure." in user
+        assert "floor plan" in user
+        assert "abc123" not in user  # base64 data not leaked
+        assert "/path/to/fig_0001.png" in user
+        assert "[IMAGE:" in user
 
 
 # ---------------------------------------------------------------------------
@@ -95,6 +97,30 @@ class TestGetModelId:
 
     def test_default(self):
         assert get_model_id({}) == "claude"
+
+
+# ---------------------------------------------------------------------------
+# _build_agent_cmd
+# ---------------------------------------------------------------------------
+
+
+class TestBuildAgentCmd:
+    def test_claude_gets_bare_and_system_prompt(self):
+        cmd = _build_agent_cmd(["claude", "--print"], "Be helpful.")
+        assert "--bare" in cmd
+        assert "--no-session-persistence" in cmd
+        assert "--system-prompt" in cmd
+        idx = cmd.index("--system-prompt")
+        assert cmd[idx + 1] == "Be helpful."
+
+    def test_claude_no_duplicate_bare(self):
+        cmd = _build_agent_cmd(["claude", "--print", "--bare"], "sys")
+        assert cmd.count("--bare") == 1
+
+    def test_non_claude_unchanged(self):
+        cmd = _build_agent_cmd(["codex", "exec"], "sys")
+        assert cmd == ["codex", "exec"]
+        assert "--bare" not in cmd
 
 
 # ---------------------------------------------------------------------------

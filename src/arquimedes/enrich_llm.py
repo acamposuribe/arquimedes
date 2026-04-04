@@ -129,13 +129,15 @@ def get_model_id(config: dict) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _build_prompt_text(system: str, messages: list[dict]) -> str:
-    """Flatten system + messages into a single text prompt for the CLI agent.
+def _build_prompt_text(system: str, messages: list[dict]) -> tuple[str, str]:
+    """Flatten system + messages into a system prompt and user prompt for the CLI agent.
+
+    Returns (system_prompt, user_prompt).
 
     For multimodal messages (image blocks in figure enrichment), image files
     are referenced by their original file path so the agent can read them.
     """
-    parts = [f"[SYSTEM]\n{system}\n"]
+    parts = []
     for msg in messages:
         role = msg.get("role", "user").upper()
         content = msg.get("content", "")
@@ -159,7 +161,31 @@ def _build_prompt_text(system: str, messages: list[dict]) -> str:
                     text_parts.append(block)
             if text_parts:
                 parts.append(f"[{role}]\n{''.join(text_parts)}\n")
-    return "\n".join(parts)
+    return system, "\n".join(parts)
+
+
+def _build_agent_cmd(base_parts: list[str], system: str) -> list[str]:
+    """Build the full command for an agent CLI, adding speed optimizations.
+
+    For ``claude``: adds ``--bare``, ``--no-session-persistence``, and
+    ``--system-prompt`` so startup overhead is minimized and the system
+    prompt is passed natively rather than mixed into stdin.
+
+    Other agents get the base command as-is (system prompt stays in stdin).
+    """
+    exe = base_parts[0]
+    if exe == "claude":
+        cmd = list(base_parts)
+        # --bare: skip hooks, LSP, plugin sync, CLAUDE.md discovery
+        if "--bare" not in cmd:
+            cmd.append("--bare")
+        # --no-session-persistence: don't save one-shot enrichment calls
+        if "--no-session-persistence" not in cmd:
+            cmd.append("--no-session-persistence")
+        # Pass system prompt natively
+        cmd.extend(["--system-prompt", system])
+        return cmd
+    return list(base_parts)
 
 
 def make_cli_llm_fn(config: dict) -> LlmFn:
@@ -205,17 +231,20 @@ def make_cli_llm_fn(config: dict) -> LlmFn:
     max_retries: int = config.get("enrichment", {}).get("max_retries", 3)
 
     def llm_fn(system: str, messages: list[dict]) -> str:
-        prompt_text = _build_prompt_text(system, messages)
+        system_prompt, user_prompt = _build_prompt_text(system, messages)
 
-        for cmd_parts in resolved:
-            cmd_name = cmd_parts[0]
+        for base_parts in resolved:
+            cmd_name = base_parts[0]
+            cmd = _build_agent_cmd(base_parts, system_prompt)
+            # For non-claude agents, prepend system to stdin
+            stdin_text = user_prompt if cmd_name == "claude" else f"[SYSTEM]\n{system_prompt}\n\n{user_prompt}"
             last_exc: Exception | None = None
 
             for attempt in range(max_retries):
                 try:
                     result = subprocess.run(
-                        cmd_parts,
-                        input=prompt_text,
+                        cmd,
+                        input=stdin_text,
                         capture_output=True,
                         text=True,
                         timeout=300,  # 5-minute timeout per call

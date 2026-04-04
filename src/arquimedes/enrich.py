@@ -6,6 +6,7 @@ Runs document, chunk, and figure enrichment stages for one or all materials.
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from arquimedes import enrich_stamps
@@ -373,13 +374,16 @@ def enrich(
             raise ValueError(f"Unknown stage: {s!r}. Valid stages: {_ALL_STAGES}")
 
     # Defer llm_fn construction until we know something is stale (agent CLIs are slow)
-    _llm_fn_ref = [llm_fn]  # mutable ref for lazy init
+    import threading
+    _llm_fn_ref = [llm_fn]
+    _llm_fn_lock = threading.Lock()
 
     def _get_llm_fn():
-        if _llm_fn_ref[0] is None:
-            from arquimedes.enrich_llm import make_cli_llm_fn
-            _llm_fn_ref[0] = make_cli_llm_fn(config)
-        return _llm_fn_ref[0]
+        with _llm_fn_lock:
+            if _llm_fn_ref[0] is None:
+                from arquimedes.enrich_llm import make_cli_llm_fn
+                _llm_fn_ref[0] = make_cli_llm_fn(config)
+            return _llm_fn_ref[0]
 
     # Determine which materials to process
     if material_id:
@@ -412,8 +416,10 @@ def enrich(
     results: dict[str, dict] = {}
     all_succeeded = True
 
-    for mid, entry in to_process.items():
+    def _enrich_one_material(mid: str) -> tuple[str, dict, bool]:
+        """Process a single material. Returns (mid, results_dict, succeeded)."""
         output_dir = extracted_dir / mid
+        succeeded = True
 
         # Load title for display
         try:
@@ -437,7 +443,6 @@ def enrich(
         combined_handled: set[str] = set()
 
         if use_combined:
-            # Check if at least one of doc/chunk is stale (or force)
             doc_stale = force or _is_document_stale(output_dir, config)
             chunk_stale = force or _is_chunk_stale(output_dir, config)
 
@@ -449,23 +454,22 @@ def enrich(
                     material_results["document"] = doc_result
                     combined_handled.add("document")
                     if doc_result["status"] == "failed":
-                        all_succeeded = False
+                        succeeded = False
                 if chunk_result is not None:
                     material_results["chunk"] = chunk_result
                     combined_handled.add("chunk")
                     if chunk_result["status"] == "failed":
-                        all_succeeded = False
+                        succeeded = False
 
         for stage_name in requested_stages:
             if stage_name in combined_handled:
                 continue
             if dry_run:
-                # Report staleness only
                 if stage_name == "document":
                     stale = _is_document_stale(output_dir, config)
                 elif stage_name == "chunk":
                     stale = _is_chunk_stale(output_dir, config)
-                else:  # figure
+                else:
                     stale = _is_figure_stale(output_dir, config)
                 material_results[stage_name] = {
                     "status": "stale" if stale else "up_to_date",
@@ -473,7 +477,7 @@ def enrich(
                 }
                 continue
 
-            # Run the stage — skip early if not stale (avoids constructing LLM fn)
+            # Skip early if not stale (avoids constructing LLM fn)
             if not force:
                 if stage_name == "document":
                     stale = _is_document_stale(output_dir, config)
@@ -489,13 +493,39 @@ def enrich(
                 result = enrich_document_stage(output_dir, config, _get_llm_fn(), force=force)
             elif stage_name == "chunk":
                 result = enrich_chunks_stage(output_dir, config, _get_llm_fn(), force=force)
-            else:  # figure
+            else:
                 result = enrich_figures_stage(output_dir, config, _get_llm_fn(), force=force)
 
             material_results[stage_name] = result
             if result["status"] == "failed":
-                all_succeeded = False
+                succeeded = False
 
-        results[mid] = material_results
+        return mid, material_results, succeeded
+
+    # -----------------------------------------------------------------------
+    # Execute — parallel when multiple materials, sequential for single
+    # -----------------------------------------------------------------------
+
+    results: dict[str, dict] = {}
+    all_succeeded = True
+    material_ids = list(to_process.keys())
+    parallel = config.get("enrichment", {}).get("parallel", 4)
+
+    if len(material_ids) <= 1 or dry_run or parallel <= 1:
+        # Sequential
+        for mid in material_ids:
+            mid, mat_result, ok = _enrich_one_material(mid)
+            results[mid] = mat_result
+            if not ok:
+                all_succeeded = False
+    else:
+        # Parallel — each thread gets its own llm_fn via _get_llm_fn()
+        with ThreadPoolExecutor(max_workers=parallel) as pool:
+            futures = {pool.submit(_enrich_one_material, mid): mid for mid in material_ids}
+            for future in as_completed(futures):
+                mid, mat_result, ok = future.result()
+                results[mid] = mat_result
+                if not ok:
+                    all_succeeded = False
 
     return results, all_succeeded

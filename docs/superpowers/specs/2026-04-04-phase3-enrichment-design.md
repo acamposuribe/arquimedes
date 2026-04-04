@@ -221,7 +221,15 @@ enrichment:
   chunk_batch_target: 50        # target chunks per batch (adjusted by token budget)
   figure_batch_size: 6          # figures per multimodal call
   max_retries: 3                # agent CLI call retries
+  parallel: 4                   # concurrent material enrichments (1 = sequential)
 ```
+
+### Performance
+
+- **Lazy LLM init:** agent CLI is never constructed if nothing is stale
+- **`--bare` mode:** claude is called with `--bare --no-session-persistence --system-prompt` to skip workspace discovery, hooks, LSP, and session saving
+- **Parallel materials:** when multiple materials need enrichment, they are processed concurrently via `ThreadPoolExecutor(max_workers=parallel)`
+- **Early skip:** orchestrator checks staleness before dispatching to stage functions, avoiding unnecessary LLM construction
 
 ## Scope Boundaries
 

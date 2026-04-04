@@ -19,9 +19,12 @@ Also provides:
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
+import threading
 from typing import Callable
 
 # ---------------------------------------------------------------------------
@@ -127,6 +130,104 @@ def get_model_id(config: dict) -> str:
 # ---------------------------------------------------------------------------
 # Agent CLI adapter (default — shells out to configurable agent command)
 # ---------------------------------------------------------------------------
+
+
+# Patterns that indicate an agent will never succeed — kill immediately.
+_FAST_FAIL_RE = re.compile(
+    r"not logged in|/login|rate.?limit|unauthorized|quota.?exceeded"
+    r"|authentication.?failed|exceeded your|too many requests",
+    re.IGNORECASE,
+)
+
+
+def _run_agent_subprocess(
+    cmd: list[str],
+    stdin_text: str,
+    timeout: int,
+) -> subprocess.CompletedProcess[str]:
+    """Run an agent CLI with fast-fail stderr monitoring.
+
+    Monitors stderr in a background thread.  If a fast-fail pattern is
+    detected (auth error, rate-limit, etc.) the process is killed
+    immediately instead of waiting for it to hang or time out.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,  # own process group so we can kill children
+    )
+
+    # Write stdin — the agent reads the prompt from here
+    try:
+        proc.stdin.write(stdin_text)  # type: ignore[union-attr]
+        proc.stdin.close()  # type: ignore[union-attr]
+    except BrokenPipeError:
+        pass  # process already exited
+
+    stdout_chunks: list[str] = []
+    stderr_chunks: list[str] = []
+    done = threading.Event()
+
+    def _kill_tree() -> None:
+        """Kill the process and all its children (entire process group)."""
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+
+    def _read_stdout() -> None:
+        try:
+            assert proc.stdout is not None
+            while True:
+                chunk = proc.stdout.read(4096)
+                if not chunk:
+                    break
+                stdout_chunks.append(chunk)
+        except (ValueError, OSError):
+            pass
+        done.set()
+
+    def _read_stderr() -> None:
+        try:
+            assert proc.stderr is not None
+            while True:
+                line = proc.stderr.readline()
+                if not line:
+                    break
+                stderr_chunks.append(line)
+                if _FAST_FAIL_RE.search(line):
+                    _kill_tree()
+                    done.set()
+                    return
+        except (ValueError, OSError):
+            pass
+
+    t_out = threading.Thread(target=_read_stdout, daemon=True)
+    t_err = threading.Thread(target=_read_stderr, daemon=True)
+    t_out.start()
+    t_err.start()
+
+    # Wait for stdout EOF (normal) or fast-fail kill
+    if not done.wait(timeout=timeout):
+        _kill_tree()
+        t_out.join(timeout=5)
+        t_err.join(timeout=5)
+        proc.wait()
+        raise subprocess.TimeoutExpired(cmd, timeout)
+
+    proc.wait(timeout=10)
+    t_out.join(timeout=5)
+    t_err.join(timeout=5)
+
+    return subprocess.CompletedProcess(
+        cmd, proc.returncode or 0, "".join(stdout_chunks), "".join(stderr_chunks)
+    )
 
 
 def _build_prompt_text(system: str, messages: list[dict]) -> tuple[str, str]:
@@ -249,12 +350,8 @@ def make_cli_llm_fn(config: dict) -> LlmFn:
 
             for attempt in range(max_retries):
                 try:
-                    result = subprocess.run(
-                        cmd,
-                        input=stdin_text,
-                        capture_output=True,
-                        text=True,
-                        timeout=300,  # 5-minute timeout per call
+                    result = _run_agent_subprocess(
+                        cmd, stdin_text, timeout=300,
                     )
                     if result.returncode != 0:
                         detail = result.stderr.strip() or result.stdout.strip()

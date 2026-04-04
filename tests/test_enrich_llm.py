@@ -11,6 +11,7 @@ from arquimedes.enrich_llm import (
     EnrichmentError,
     _build_agent_cmd,
     _build_prompt_text,
+    _run_agent_subprocess,
     get_model_id,
     make_cli_llm_fn,
     parse_json_or_repair,
@@ -181,3 +182,55 @@ class TestMakeCliLlmFn:
         fn = make_cli_llm_fn(config)
         with pytest.raises(EnrichmentError, match="failed"):
             fn("system", [{"role": "user", "content": "hi"}])
+
+    def test_fast_fail_kills_hanging_agent(self, tmp_path):
+        """Agent that prints auth error to stderr then hangs is killed fast."""
+        hanging = tmp_path / "hanging-agent"
+        # Prints "Not logged in" to stderr then sleeps forever
+        hanging.write_text(
+            '#!/bin/bash\n'
+            'cat - > /dev/null\n'
+            'echo "Not logged in · Please run /login" >&2\n'
+            'sleep 300\n'
+        )
+        hanging.chmod(0o755)
+
+        working = tmp_path / "working-agent"
+        working.write_text('#!/bin/bash\ncat - > /dev/null\necho "ok"')
+        working.chmod(0o755)
+
+        config = {
+            "llm": {"agent_cmd": [str(hanging), str(working)]},
+            "enrichment": {"max_retries": 1},
+        }
+        fn = make_cli_llm_fn(config)
+        import time
+        t0 = time.monotonic()
+        result = fn("system", [{"role": "user", "content": "hi"}])
+        elapsed = time.monotonic() - t0
+        assert "ok" in result
+        # Should be killed quickly, not wait 300s
+        assert elapsed < 30, f"Fast-fail took too long: {elapsed:.1f}s"
+
+    def test_fast_fail_rate_limit(self, tmp_path):
+        """Agent that prints rate-limit error is killed and fallback used."""
+        limited = tmp_path / "limited-agent"
+        limited.write_text(
+            '#!/bin/bash\n'
+            'cat - > /dev/null\n'
+            'echo "Error: rate limit exceeded" >&2\n'
+            'sleep 300\n'
+        )
+        limited.chmod(0o755)
+
+        working = tmp_path / "working-agent"
+        working.write_text('#!/bin/bash\ncat - > /dev/null\necho "ok"')
+        working.chmod(0o755)
+
+        config = {
+            "llm": {"agent_cmd": [str(limited), str(working)]},
+            "enrichment": {"max_retries": 1},
+        }
+        fn = make_cli_llm_fn(config)
+        result = fn("system", [{"role": "user", "content": "hi"}])
+        assert "ok" in result

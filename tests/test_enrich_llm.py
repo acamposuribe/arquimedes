@@ -110,6 +110,10 @@ class TestBuildAgentCmd:
         cmd = _build_agent_cmd(["claude", "--print"], "Be helpful.")
         assert "--bare" not in cmd  # --bare breaks credential discovery
         assert "--no-session-persistence" in cmd
+        assert "--disable-slash-commands" in cmd
+        assert "--tools" in cmd
+        idx_tools = cmd.index("--tools")
+        assert cmd[idx_tools + 1] == ""  # all tools disabled
         assert "--system-prompt" in cmd
         idx = cmd.index("--system-prompt")
         assert cmd[idx + 1] == "Be helpful."
@@ -117,6 +121,10 @@ class TestBuildAgentCmd:
     def test_claude_no_duplicate_no_session(self):
         cmd = _build_agent_cmd(["claude", "--print", "--no-session-persistence"], "sys")
         assert cmd.count("--no-session-persistence") == 1
+
+    def test_claude_respects_explicit_tools(self):
+        cmd = _build_agent_cmd(["claude", "--print", "--tools", "Bash"], "sys")
+        assert cmd.count("--tools") == 1  # don't override user's explicit tools
 
     def test_non_claude_unchanged(self):
         cmd = _build_agent_cmd(["myagent", "run"], "sys")

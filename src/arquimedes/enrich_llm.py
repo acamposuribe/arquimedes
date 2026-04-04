@@ -268,10 +268,12 @@ def _build_prompt_text(system: str, messages: list[dict]) -> tuple[str, str]:
 def _build_agent_cmd(base_parts: list[str], system: str) -> list[str]:
     """Build the full command for an agent CLI, adding speed optimizations.
 
-    For ``claude``: adds ``--no-session-persistence`` and
-    ``--system-prompt`` so startup overhead is minimized and the system
-    prompt is passed natively rather than mixed into stdin.
-    (``--bare`` is intentionally avoided — it changes credential discovery.)
+    For ``claude``: adds flags to minimize startup overhead without
+    breaking credential discovery (``--bare`` is avoided for that reason):
+    - ``--no-session-persistence``: skip saving session to disk
+    - ``--system-prompt``: pass system prompt natively
+    - ``--tools ""``: disable built-in tools (we only need text output)
+    - ``--disable-slash-commands``: skip skill resolution
 
     For ``codex``: adds ``--ephemeral`` and ``--skip-git-repo-check``
     to reduce startup overhead and avoid repo enforcement.
@@ -283,6 +285,11 @@ def _build_agent_cmd(base_parts: list[str], system: str) -> list[str]:
         cmd = list(base_parts)
         if "--no-session-persistence" not in cmd:
             cmd.append("--no-session-persistence")
+        if "--disable-slash-commands" not in cmd:
+            cmd.append("--disable-slash-commands")
+        # Disable all built-in tools — we only want a text response
+        if "--tools" not in cmd:
+            cmd.extend(["--tools", ""])
         cmd.extend(["--system-prompt", system])
         return cmd
     if exe == "codex":

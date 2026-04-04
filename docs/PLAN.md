@@ -69,10 +69,10 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - [x] `arq search` — card-level lexical search
 - [x] `arq search --deep` — multi-layer retrieval (cards → chunks → full text)
 - [x] Faceted search support
-- [ ] **(connection model C4.1)** `concepts` + `concepts_fts` table in index — read `concepts.jsonl` during rebuild; add to staleness scope; `IndexStats.concepts`
-- [ ] **(connection model C4.2)** `ConceptHit` in search; concepts in content-first pass; concept boost in ranking; `--concept-limit` CLI option
-- [ ] **(connection model C4.3)** `arq related <material_id>` — find related materials through shared concepts, keywords, facets, authors; scored and explained connections
-- [ ] **(connection model C4.4)** `arq concepts` — list all concept candidates across the collection with material counts; Phase 5 uses this to decide which concept pages to compile
+- [x] **(connection model C4.1)** `concepts` + `concepts_fts` table in index — read `concepts.jsonl` during rebuild; add to staleness scope; `IndexStats.concepts`
+- [x] **(connection model C4.2)** `ConceptHit` in search; concepts in content-first pass; concept boost in ranking; `--concept-limit` CLI option
+- [x] **(connection model C4.3)** `arq related <material_id>` — find related materials through shared concepts, keywords, facets, authors; scored and explained connections
+- [x] **(connection model C4.4)** `arq concepts` — list all concept candidates across the collection with material counts; Phase 5 uses this to decide which concept pages to compile
 - See [connection model plan](superpowers/plans/2026-04-05-connection-model.md) for full design
 
 ## Phase 5: Wiki Compiler

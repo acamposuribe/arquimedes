@@ -56,7 +56,7 @@ index.py ─► search.py ─► cli.py
 - [x] Commit
 
 ### Task 3: `search.py` — card search (depth 1)
-- [x] `search(query, config, *, depth=1, facets=None, collection=None, limit=20, chunk_limit=5, annotation_limit=10, figure_limit=5) → SearchResult`
+- [x] `search(query, config, *, depth=1, facets=None, collection=None, limit=20, chunk_limit=5, annotation_limit=3, figure_limit=3) → SearchResult`
 - [x] FTS5 query against `materials_fts`
 - [x] Facet filtering via JOIN + WHERE on `materials` table
 - [x] `--collection` as shorthand for `facet collection=<value>`

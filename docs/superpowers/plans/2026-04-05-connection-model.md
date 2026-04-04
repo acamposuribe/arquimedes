@@ -228,10 +228,10 @@ After these tasks, the connection graph exists in queryable form. Phase 5 materi
 
 ### Phase 4 — Connection layer
 
-- [ ] **C4.1** — `concepts` + `concepts_fts` in `index.py`; staleness scope; `IndexStats.concepts`
-- [ ] **C4.2** — `ConceptHit` in search; concepts in content-first pass; concept boost; `--concept-limit`
-- [ ] **C4.3** — `arq related <material_id>`: shared concepts/keywords/facets/authors, scored, explained
-- [ ] **C4.4** — `arq concepts`: cross-collection concept listing with material counts
+- [x] **C4.1** — `concepts` + `concepts_fts` in `index.py`; staleness scope; `IndexStats.concepts`
+- [x] **C4.2** — `ConceptHit` in search; concepts in content-first pass; concept boost; `--concept-limit`
+- [x] **C4.3** — `arq related <material_id>`: shared concepts/keywords/facets/authors, scored, explained
+- [x] **C4.4** — `arq concepts`: cross-collection concept listing with material counts
 
 ### Phase 2 — Retroactive
 

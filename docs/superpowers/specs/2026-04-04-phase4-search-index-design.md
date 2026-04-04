@@ -205,7 +205,7 @@ Query the `materials_fts` table. Return matching material cards:
 
 ### Depth 2: Content-first cards + chunk hits
 
-At depth 2, the search is **content-first**: after running card-layer FTS, an additional pass queries `chunks_fts` and `annotations_fts` directly. Materials with strong chunk or annotation matches that did not rank in the card-layer results are fetched by their material_id and appended (after card-layer matches). This ensures that a paper with a pivotal annotation — e.g., "what did I highlight about thermal bridges?" — surfaces even if the material's title/summary is generic.
+At depth 2, the search is **content-first**: after running card-layer FTS, an additional pass queries `chunks_fts`, `annotations_fts`, and `figures_fts` directly. Materials with strong chunk, annotation, or figure matches that did not rank in the card-layer results are fetched by their material_id and appended (after card-layer matches). This ensures that a paper with a pivotal annotation — e.g., "what did I highlight about thermal bridges?" — or a visually meaningful figure match can surface even if the material's title/summary is generic.
 
 Run card search, then for each matching material, query `chunks_fts` with the same query. Return cards with their best matching chunk summaries:
 

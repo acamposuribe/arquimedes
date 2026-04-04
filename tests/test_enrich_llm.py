@@ -118,9 +118,19 @@ class TestBuildAgentCmd:
         assert cmd.count("--bare") == 1
 
     def test_non_claude_unchanged(self):
-        cmd = _build_agent_cmd(["codex", "exec"], "sys")
-        assert cmd == ["codex", "exec"]
+        cmd = _build_agent_cmd(["myagent", "run"], "sys")
+        assert cmd == ["myagent", "run"]
         assert "--bare" not in cmd
+
+    def test_codex_gets_ephemeral_and_skip_git(self):
+        cmd = _build_agent_cmd(["codex", "exec"], "sys")
+        assert "--ephemeral" in cmd
+        assert "--skip-git-repo-check" in cmd
+        assert "--bare" not in cmd  # claude-only flag
+
+    def test_codex_no_duplicate_ephemeral(self):
+        cmd = _build_agent_cmd(["codex", "exec", "--ephemeral"], "sys")
+        assert cmd.count("--ephemeral") == 1
 
 
 # ---------------------------------------------------------------------------

@@ -171,19 +171,26 @@ def _build_agent_cmd(base_parts: list[str], system: str) -> list[str]:
     ``--system-prompt`` so startup overhead is minimized and the system
     prompt is passed natively rather than mixed into stdin.
 
+    For ``codex``: adds ``--ephemeral`` and ``--skip-git-repo-check``
+    to reduce startup overhead and avoid repo enforcement.
+
     Other agents get the base command as-is (system prompt stays in stdin).
     """
     exe = base_parts[0]
     if exe == "claude":
         cmd = list(base_parts)
-        # --bare: skip hooks, LSP, plugin sync, CLAUDE.md discovery
         if "--bare" not in cmd:
             cmd.append("--bare")
-        # --no-session-persistence: don't save one-shot enrichment calls
         if "--no-session-persistence" not in cmd:
             cmd.append("--no-session-persistence")
-        # Pass system prompt natively
         cmd.extend(["--system-prompt", system])
+        return cmd
+    if exe == "codex":
+        cmd = list(base_parts)
+        if "--ephemeral" not in cmd:
+            cmd.append("--ephemeral")
+        if "--skip-git-repo-check" not in cmd:
+            cmd.append("--skip-git-repo-check")
         return cmd
     return list(base_parts)
 

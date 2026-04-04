@@ -228,6 +228,7 @@ enrichment:
 
 - **Lazy LLM init:** agent CLI is never constructed if nothing is stale
 - **`--bare` mode:** claude is called with `--bare --no-session-persistence --system-prompt` to skip workspace discovery, hooks, LSP, and session saving
+- **Codex optimizations:** codex is called with `--ephemeral --skip-git-repo-check` to reduce startup overhead
 - **Parallel materials:** when multiple materials need enrichment, they are processed concurrently via `ThreadPoolExecutor(max_workers=parallel)`
 - **Early skip:** orchestrator checks staleness before dispatching to stage functions, avoiding unnecessary LLM construction
 

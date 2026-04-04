@@ -164,6 +164,8 @@ def enrich_chunks_stage(
     # 5. Get chunk enrichment results — either from pre-parsed response or batched LLM calls
     # Key: chunk_id → {"summary": EnrichedField, "keywords": EnrichedField}
     chunk_enrichments: dict[str, dict] = {}
+    # Track actual responding model for provenance (updated after LLM calls)
+    actual_model: str = getattr(llm_fn, "last_model", model)
 
     if _pre_parsed_response is not None:
         # Pre-parsed: all chunk results already available (from combined call)
@@ -179,14 +181,14 @@ def enrich_chunks_stage(
             if "summary" in chunk_data and isinstance(chunk_data["summary"], dict):
                 try:
                     enrichment["summary"] = _make_enriched_field(
-                        chunk_data["summary"], model, prompt_version
+                        chunk_data["summary"], actual_model, prompt_version
                     ).to_dict()
                 except Exception:
                     pass
             if "keywords" in chunk_data and isinstance(chunk_data["keywords"], dict):
                 try:
                     enrichment["keywords"] = _make_enriched_field(
-                        chunk_data["keywords"], model, prompt_version
+                        chunk_data["keywords"], actual_model, prompt_version
                     ).to_dict()
                 except Exception:
                     pass
@@ -225,6 +227,7 @@ def enrich_chunks_stage(
                     batch, doc_context_str, annotations
                 )
                 raw_text = llm_fn(system, messages)
+                actual_model = getattr(llm_fn, "last_model", model)
                 parsed = enrich_llm.parse_json_or_repair(
                     llm_fn, raw_text, _CHUNK_BATCH_SCHEMA_DESC
                 )
@@ -249,14 +252,14 @@ def enrich_chunks_stage(
                 if "summary" in chunk_data and isinstance(chunk_data["summary"], dict):
                     try:
                         enrichment["summary"] = _make_enriched_field(
-                            chunk_data["summary"], model, prompt_version
+                            chunk_data["summary"], actual_model, prompt_version
                         ).to_dict()
                     except Exception:
                         pass
                 if "keywords" in chunk_data and isinstance(chunk_data["keywords"], dict):
                     try:
                         enrichment["keywords"] = _make_enriched_field(
-                            chunk_data["keywords"], model, prompt_version
+                            chunk_data["keywords"], actual_model, prompt_version
                         ).to_dict()
                     except Exception:
                         pass

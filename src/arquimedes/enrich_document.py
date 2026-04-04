@@ -176,24 +176,26 @@ def enrich_document_stage(
             return {"status": "failed", "detail": f"LLM output field '{req_field}' missing 'value'"}
 
     # 6. Map parsed JSON to model objects and merge into meta dict
+    #    Use actual responding model for provenance (not the config fallback list)
+    actual_model: str = getattr(llm_fn, "last_model", model)
     try:
         meta_out = dict(meta)
 
         enriched_count = {"keywords": 0, "facets": 0, "concepts": 0}
 
-        ef = _make_enriched_field(parsed["summary"], model, prompt_version)
+        ef = _make_enriched_field(parsed["summary"], actual_model, prompt_version)
         meta_out["summary"] = ef.to_dict()
 
-        ef = _make_enriched_field(parsed["document_type"], model, prompt_version)
+        ef = _make_enriched_field(parsed["document_type"], actual_model, prompt_version)
         meta_out["document_type"] = ef.to_dict()
 
-        ef = _make_enriched_field(parsed["keywords"], model, prompt_version)
+        ef = _make_enriched_field(parsed["keywords"], actual_model, prompt_version)
         meta_out["keywords"] = ef.to_dict()
         enriched_count["keywords"] = len(ef.value) if isinstance(ef.value, list) else 1
 
         facets_data = parsed.get("facets", {})
         if facets_data and isinstance(facets_data, dict):
-            facets = _make_facets(facets_data, model, prompt_version)
+            facets = _make_facets(facets_data, actual_model, prompt_version)
             meta_out["facets"] = facets.to_dict()
             enriched_count["facets"] = sum(1 for v in facets.to_dict().values() if v)
 
@@ -202,7 +204,7 @@ def enrich_document_stage(
             concepts_data = []
 
         concepts: list[ConceptCandidate] = [
-            _make_concept(c, model, prompt_version)
+            _make_concept(c, actual_model, prompt_version)
             for c in concepts_data
             if isinstance(c, dict) and c.get("concept_name")
         ]

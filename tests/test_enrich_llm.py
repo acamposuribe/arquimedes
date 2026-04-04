@@ -12,6 +12,7 @@ from arquimedes.enrich_llm import (
     _build_agent_cmd,
     _build_prompt_text,
     _run_agent_subprocess,
+    get_agent_model_name,
     get_model_id,
     make_cli_llm_fn,
     parse_json_or_repair,
@@ -91,13 +92,27 @@ class TestBuildPromptText:
 
 class TestGetModelId:
     def test_single_string(self):
-        assert get_model_id({"llm": {"agent_cmd": "claude --print"}}) == "claude"
+        assert get_model_id({"llm": {"agent_cmd": "claude --print"}}) == "claude --print"
 
     def test_list(self):
-        assert get_model_id({"llm": {"agent_cmd": ["claude --print", "codex exec"]}}) == "claude|codex"
+        assert get_model_id({"llm": {"agent_cmd": ["claude --print", "codex exec"]}}) == "claude --print|codex exec"
 
     def test_default(self):
-        assert get_model_id({}) == "claude"
+        assert get_model_id({}) == "claude --print"
+
+
+class TestGetAgentModelName:
+    def test_claude_with_model(self):
+        assert get_agent_model_name(["claude", "--print", "--model", "sonnet"]) == "claude:sonnet"
+
+    def test_claude_without_model(self):
+        assert get_agent_model_name(["claude", "--print"]) == "claude"
+
+    def test_codex(self):
+        assert get_agent_model_name(["codex", "exec"]) == "codex"
+
+    def test_other_agent(self):
+        assert get_agent_model_name(["myagent", "run"]) == "myagent"
 
 
 # ---------------------------------------------------------------------------
@@ -114,9 +129,18 @@ class TestBuildAgentCmd:
         assert "--tools" in cmd
         idx_tools = cmd.index("--tools")
         assert cmd[idx_tools + 1] == ""  # all tools disabled
+        assert "--model" in cmd
+        idx_model = cmd.index("--model")
+        assert cmd[idx_model + 1] == "sonnet"  # default model
         assert "--system-prompt" in cmd
         idx = cmd.index("--system-prompt")
         assert cmd[idx + 1] == "Be helpful."
+
+    def test_claude_respects_explicit_model(self):
+        cmd = _build_agent_cmd(["claude", "--print", "--model", "opus"], "sys")
+        assert cmd.count("--model") == 1
+        idx = cmd.index("--model")
+        assert cmd[idx + 1] == "opus"  # user's choice preserved
 
     def test_claude_no_duplicate_no_session(self):
         cmd = _build_agent_cmd(["claude", "--print", "--no-session-persistence"], "sys")
@@ -163,6 +187,8 @@ class TestMakeCliLlmFn:
         assert callable(fn)
         result = fn("system prompt", [{"role": "user", "content": "hello"}])
         assert '{"result": "ok"}' in result
+        # last_model should be set to the script name
+        assert fn.last_model == script.name
 
     def test_fallback_to_second_agent(self, tmp_path):
         failing = tmp_path / "failing-agent"

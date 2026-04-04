@@ -260,6 +260,7 @@ def enrich_figures_stage(
                 figures_with_context, doc_context_str
             )
             raw_text = llm_fn(system, messages)
+            actual_model = getattr(llm_fn, "last_model", model)
             parsed = enrich_llm.parse_json_or_repair(
                 llm_fn, raw_text, _FIGURE_BATCH_SCHEMA_DESC
             )
@@ -315,13 +316,13 @@ def enrich_figures_stage(
             enriched["analysis_mode"] = analysis_mode
 
             try:
-                ef = _make_enriched_field(fig_response["visual_type"], model, prompt_version)
+                ef = _make_enriched_field(fig_response["visual_type"], actual_model, prompt_version)
                 enriched["visual_type"] = ef.to_dict()
 
-                ef = _make_enriched_field(fig_response["description"], model, prompt_version)
+                ef = _make_enriched_field(fig_response["description"], actual_model, prompt_version)
                 enriched["description"] = ef.to_dict()
 
-                ef = _make_enriched_field(fig_response["caption"], model, prompt_version)
+                ef = _make_enriched_field(fig_response["caption"], actual_model, prompt_version)
                 enriched["caption"] = ef.to_dict()
             except Exception as exc:
                 return {

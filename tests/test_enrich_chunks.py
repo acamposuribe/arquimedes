@@ -98,7 +98,9 @@ def _make_extracted_dir(tmp_path: Path, n_chunks: int = 1) -> Path:
 
 def _make_llm_fn(response_texts: list[str]) -> MagicMock:
     """Create a mock llm_fn returning each response_text in sequence."""
-    return MagicMock(side_effect=response_texts)
+    fn = MagicMock(side_effect=response_texts)
+    fn.last_model = "test-agent"
+    return fn
 
 
 def _make_config(batch_target: int = 50) -> dict:

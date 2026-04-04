@@ -111,20 +111,35 @@ def parse_json_or_repair(
 def get_model_id(config: dict) -> str:
     """Derive a stable model identifier from the agent_cmd config.
 
-    Uses the agent command names (e.g. ``"claude|codex"``).  This is stored
-    in stamps for staleness detection — if the config changes, artifacts
-    re-enrich.
+    Uses the full agent commands (e.g. ``"claude --print|codex exec"``).  This
+    is stored in stamps for staleness detection — if the config changes,
+    artifacts re-enrich.
     """
     raw_cmd = config.get("llm", {}).get("agent_cmd", "claude --print")
     if isinstance(raw_cmd, str):
         cmds = [raw_cmd]
     elif isinstance(raw_cmd, list):
-        cmds = [c for c in raw_cmd if isinstance(c, str) and c.strip()]
+        cmds = [c.strip() for c in raw_cmd if isinstance(c, str) and c.strip()]
     else:
         cmds = ["claude --print"]
-    # Use just the executable name from each command
-    names = [c.split()[0] for c in cmds if c.split()]
-    return "|".join(names) if names else "unknown"
+    return "|".join(cmds) if cmds else "unknown"
+
+
+def get_agent_model_name(base_parts: list[str]) -> str:
+    """Derive a human-readable model name from an agent command.
+
+    For ``claude``: reads the ``--model`` arg if present, else ``"claude"``.
+    For ``codex``: returns ``"codex"``.
+    Otherwise: returns the executable basename.
+    """
+    exe = os.path.basename(base_parts[0])
+    if exe == "claude":
+        try:
+            idx = base_parts.index("--model")
+            return f"claude:{base_parts[idx + 1]}"
+        except (ValueError, IndexError):
+            return "claude"
+    return exe
 
 
 # ---------------------------------------------------------------------------
@@ -290,6 +305,9 @@ def _build_agent_cmd(base_parts: list[str], system: str) -> list[str]:
         # Disable all built-in tools — we only want a text response
         if "--tools" not in cmd:
             cmd.extend(["--tools", ""])
+        # Default to sonnet for cost/speed balance
+        if "--model" not in cmd:
+            cmd.extend(["--model", "sonnet"])
         cmd.extend(["--system-prompt", system])
         return cmd
     if exe == "codex":
@@ -366,6 +384,8 @@ def make_cli_llm_fn(config: dict) -> LlmFn:
                             f"{detail[:500]}"
                         )
                         break  # don't retry non-timeout failures, try next agent
+                    # Record which agent+model actually responded
+                    llm_fn.last_model = get_agent_model_name(cmd)
                     return result.stdout
                 except subprocess.TimeoutExpired:
                     last_exc = EnrichmentError(
@@ -385,4 +405,5 @@ def make_cli_llm_fn(config: dict) -> LlmFn:
         # All agents exhausted
         raise last_exc  # type: ignore[arg-type]
 
-    return llm_fn
+    llm_fn.last_model = "unknown"  # type: ignore[attr-defined]
+    return llm_fn  # type: ignore[return-value]

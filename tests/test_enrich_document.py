@@ -110,7 +110,9 @@ def _make_extracted_dir(tmp_path: Path) -> Path:
 
 def _make_llm_fn(response_text: str) -> MagicMock:
     """Create a mock llm_fn that returns response_text."""
-    return MagicMock(return_value=response_text)
+    fn = MagicMock(return_value=response_text)
+    fn.last_model = "test-agent"
+    return fn
 
 
 def _make_config() -> dict:

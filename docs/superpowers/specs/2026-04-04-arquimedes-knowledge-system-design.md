@@ -357,7 +357,7 @@ Standard markdown links: `[Thermal Mass](../shared/concepts/thermal-mass.md)`. N
 - **Broken links**: wiki pages referencing materials, concepts, or files that don't exist
 - **Orphaned materials**: extracted materials with no wiki page
 - **Missing metadata**: materials lacking required facets (domain, document_type, etc.)
-- **Stale enrichment**: materials enriched with an older prompt_version than current
+- **Stale enrichment**: materials where any enrichment stage stamp differs from current config (prompt_version, model, enrichment_schema_version) or where input_fingerprint has changed since last enrichment (see [Phase 3 enrichment spec](2026-04-04-phase3-enrichment-design.md))
 - **Index drift**: search index out of sync with extracted data
 - **Duplicate materials**: different manifest entries pointing to the same content hash
 

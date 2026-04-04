@@ -26,8 +26,10 @@
 - Each entry: `{concept_name, relevance, provenance}`
 
 **LLM call strategy:**
-- For small/moderate materials (all chunk text fits within ~80k tokens alongside the document prompt): combined with chunk enrichment in one call
+- For small/moderate materials (all chunk text fits within ~80k tokens alongside the document prompt): combined with chunk enrichment in one call. The LLM response contains both document-level and chunk-level output in a single structured response.
 - For large materials: separate document call with curated context (see below), chunk enrichment runs in its own batched calls
+
+**Combined call failure semantics:** When document and chunk enrichment share one LLM call, the response is parsed into document output and chunk output independently. If the document portion is valid but the chunk portion is malformed (or vice versa), the valid portion commits and the invalid portion triggers a schema-repair retry for just that portion. If the retry also fails, only the failed stage is marked as failed. The stages remain independent even when they share a transport call.
 
 **Context sent to LLM:**
 - Document header: title, authors, year, raw_keywords, raw_document_type, domain, collection
@@ -96,11 +98,11 @@ Each stage writes a stamp alongside its output:
 
 ### Input Fingerprint
 
-A hash of all inputs that can change the enrichment result:
+A hash of **all inputs that can change the enrichment result**, including context from other artifacts and stages:
 
-- **Document stage:** canonical raw-only projection of `meta.json` (material_id, title, authors, year, raw_keywords, raw_document_type, domain, collection, page_count) + full content of `pages.jsonl` + full content of `annotations.jsonl`
-- **Chunk stage:** full chunk records from `chunks.jsonl` (text, source_pages, emphasized, chunk_id) — not just text, since emphasis context affects the result
-- **Figure stage:** per-figure fingerprint — image file hash + source_page text + figure sidecar metadata (source_page, bbox, extraction_method)
+- **Document stage:** canonical raw-only projection of `meta.json` (material_id, title, authors, year, raw_keywords, raw_document_type, domain, collection, page_count) + full content of `pages.jsonl` + full content of `annotations.jsonl` + full content of `toc.json` + full content of `chunks.jsonl` (chunk texts are the canonical text representation sent to the LLM)
+- **Chunk stage:** full chunk records from `chunks.jsonl` (text, source_pages, emphasized, chunk_id) + full content of `annotations.jsonl` + document context digest (title, raw_document_type, top-level headings, and — if present — the current document-stage summary value and its stamp). This means re-enriching the document stage can make the chunk stage stale if the summary changed.
+- **Figure stage:** per-figure fingerprint — image file hash + source_page text + nearby caption candidates + figure sidecar metadata (source_page, bbox, extraction_method) + document context digest (title, document_type value if enriched, domain). Re-enriching document_type can make figure stage stale.
 
 ### Staleness Rules
 

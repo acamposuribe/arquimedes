@@ -86,12 +86,12 @@ class TestBuildPromptText:
 
 
 class TestMakeCliLlmFn:
-    def test_raises_when_command_not_found(self):
-        config = {"llm": {"agent_cmd": "nonexistent-agent-cmd-xyz --print"}}
-        with pytest.raises(EnrichmentError, match="Agent CLI not found"):
+    def test_raises_when_no_command_found(self):
+        config = {"llm": {"agent_cmd": ["nonexistent-cmd-xyz", "also-missing-abc"]}}
+        with pytest.raises(EnrichmentError, match="No agent CLI found"):
             make_cli_llm_fn(config)
 
-    def test_returns_callable_that_shells_out(self, tmp_path):
+    def test_single_string_works(self, tmp_path):
         script = tmp_path / "fake-agent"
         script.write_text('#!/bin/bash\ncat - > /dev/null\necho \'{"result": "ok"}\'')
         script.chmod(0o755)
@@ -102,12 +102,29 @@ class TestMakeCliLlmFn:
         result = fn("system prompt", [{"role": "user", "content": "hello"}])
         assert '{"result": "ok"}' in result
 
-    def test_raises_on_nonzero_exit(self, tmp_path):
-        script = tmp_path / "failing-agent"
-        script.write_text('#!/bin/bash\necho "error message" >&2\nexit 1')
-        script.chmod(0o755)
+    def test_fallback_to_second_agent(self, tmp_path):
+        failing = tmp_path / "failing-agent"
+        failing.write_text('#!/bin/bash\necho "rate limited" >&2\nexit 1')
+        failing.chmod(0o755)
 
-        config = {"llm": {"agent_cmd": str(script)}, "enrichment": {"max_retries": 1}}
+        working = tmp_path / "working-agent"
+        working.write_text('#!/bin/bash\ncat - > /dev/null\necho \'{"ok": true}\'')
+        working.chmod(0o755)
+
+        config = {
+            "llm": {"agent_cmd": [str(failing), str(working)]},
+            "enrichment": {"max_retries": 1},
+        }
         fn = make_cli_llm_fn(config)
-        with pytest.raises(EnrichmentError, match="Agent CLI failed"):
+        result = fn("system", [{"role": "user", "content": "hi"}])
+        assert '{"ok": true}' in result
+
+    def test_raises_on_all_agents_failing(self, tmp_path):
+        failing = tmp_path / "failing-agent"
+        failing.write_text('#!/bin/bash\necho "error" >&2\nexit 1')
+        failing.chmod(0o755)
+
+        config = {"llm": {"agent_cmd": [str(failing)]}, "enrichment": {"max_retries": 1}}
+        fn = make_cli_llm_fn(config)
+        with pytest.raises(EnrichmentError, match="failed"):
             fn("system", [{"role": "user", "content": "hi"}])

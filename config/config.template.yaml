@@ -9,10 +9,13 @@
 # Adjust if your iCloud folder or OS is different.
 library_root: "~/Arquimedes-Library"
 
-# LLM agent CLI override (default: "claude --print")
+# LLM agent CLI override.
+# Accepts a single string or a list (tried in order, first success wins).
 # The agent authenticates with its own credentials — no API keys needed here.
 # llm:
-#   agent_cmd: "claude --print"   # or openai-cli, gemini-cli, etc.
+#   agent_cmd:
+#     - "claude --print"      # primary
+#     - "codex exec"          # fallback
 
 # Extraction settings
 # extraction:

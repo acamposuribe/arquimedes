@@ -135,8 +135,9 @@ Collections let collaborators scope work to a subset of materials — useful for
 # config.yaml (committed defaults)
 library_root: "~/Arquimedes-Library"
 llm:
-  agent_cmd: "claude --print"   # agent CLI (claude, openai-cli, gemini-cli, etc.)
-                                 # agent authenticates with its own credentials
+  agent_cmd:                      # agent CLIs, tried in order
+    - "claude --print"
+    - "codex exec"
 extraction:
   chunk_size: 500            # tokens per chunk
   generate_thumbnails: true

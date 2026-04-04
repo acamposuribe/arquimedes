@@ -72,7 +72,7 @@ enrich_prompts ──────────────────┘
 - [ ] Commit
 
 ### Task 3: `enrich_llm.py` + tests
-- [ ] `make_cli_llm_fn(config) → LlmFn` — shells out to configurable agent CLI (`config["llm"]["agent_cmd"]`), retries on timeout
+- [ ] `make_cli_llm_fn(config) → LlmFn` — shells out to agent CLI(s) from `config["llm"]["agent_cmd"]` (list: tried in order, first success wins), retries on timeout
 - [ ] `parse_json_or_repair(client, model, text, schema_description) → dict` — JSON parse, one schema-repair retry on failure, raise `EnrichmentError` if still invalid
 - [ ] Custom `EnrichmentError` exception
 - [ ] Tests: mock client — success, retry on rate limit, schema-repair path, final failure

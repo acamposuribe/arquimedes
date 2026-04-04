@@ -141,54 +141,85 @@ def _build_prompt_text(system: str, messages: list[dict]) -> str:
 def make_cli_llm_fn(config: dict) -> LlmFn:
     """Build an LlmFn that shells out to an agent CLI.
 
-    Reads the command from ``config["llm"]["agent_cmd"]`` (default:
-    ``"claude --print"``).  The agent authenticates with its own
-    credentials — no API keys needed in this codebase.
+    Reads the command(s) from ``config["llm"]["agent_cmd"]``.  Accepts a
+    single string or a **list of strings** (tried in order — first success
+    wins, next command tried on failure).  The agent authenticates with its
+    own credentials — no API keys needed in this codebase.
 
-    The prompt is passed via stdin. The agent's stdout is the response.
+    The prompt is passed via stdin.  The agent's stdout is the response.
 
-    Raises EnrichmentError if the agent command is not found on PATH.
+    Raises EnrichmentError if none of the configured commands are found.
     """
-    agent_cmd: str = config.get("llm", {}).get("agent_cmd", "claude --print")
-    cmd_parts = agent_cmd.split()
+    raw_cmd = config.get("llm", {}).get("agent_cmd", "claude --print")
+    if isinstance(raw_cmd, str):
+        cmd_list = [raw_cmd]
+    elif isinstance(raw_cmd, list):
+        cmd_list = [c for c in raw_cmd if isinstance(c, str) and c.strip()]
+    else:
+        cmd_list = ["claude --print"]
 
-    # Verify the command exists on PATH
-    if not shutil.which(cmd_parts[0]):
+    if not cmd_list:
         raise EnrichmentError(
-            f"Agent CLI not found: {cmd_parts[0]!r}. "
-            f"Install it or set llm.agent_cmd in config.yaml to your agent "
-            f"(e.g. 'claude --print', 'openai-cli', 'gemini-cli')."
+            "No agent CLI configured. Set llm.agent_cmd in config.yaml "
+            "(e.g. 'claude --print', 'codex exec')."
+        )
+
+    # Resolve each command to its parts and verify at least one exists
+    resolved: list[list[str]] = []
+    for cmd_str in cmd_list:
+        parts = cmd_str.split()
+        if shutil.which(parts[0]):
+            resolved.append(parts)
+
+    if not resolved:
+        names = ", ".join(repr(c.split()[0]) for c in cmd_list)
+        raise EnrichmentError(
+            f"No agent CLI found on PATH (tried {names}). "
+            f"Install one or set llm.agent_cmd in config.yaml."
         )
 
     max_retries: int = config.get("enrichment", {}).get("max_retries", 3)
 
     def llm_fn(system: str, messages: list[dict]) -> str:
         prompt_text = _build_prompt_text(system, messages)
-        last_exc: Exception | None = None
 
-        for attempt in range(max_retries):
-            try:
-                result = subprocess.run(
-                    cmd_parts,
-                    input=prompt_text,
-                    capture_output=True,
-                    text=True,
-                    timeout=300,  # 5-minute timeout per call
-                )
-                if result.returncode != 0:
-                    detail = result.stderr.strip() or result.stdout.strip()
-                    raise EnrichmentError(
-                        f"Agent CLI failed (exit {result.returncode}): "
-                        f"{detail[:500]}"
+        for cmd_parts in resolved:
+            cmd_name = cmd_parts[0]
+            last_exc: Exception | None = None
+
+            for attempt in range(max_retries):
+                try:
+                    result = subprocess.run(
+                        cmd_parts,
+                        input=prompt_text,
+                        capture_output=True,
+                        text=True,
+                        timeout=300,  # 5-minute timeout per call
                     )
-                return result.stdout
-            except subprocess.TimeoutExpired:
-                last_exc = EnrichmentError(
-                    f"Agent CLI timed out after 300s (attempt {attempt + 1}/{max_retries})"
-                )
-            except FileNotFoundError:
-                raise EnrichmentError(f"Agent CLI not found: {cmd_parts[0]!r}")
+                    if result.returncode != 0:
+                        detail = result.stderr.strip() or result.stdout.strip()
+                        last_exc = EnrichmentError(
+                            f"{cmd_name} failed (exit {result.returncode}): "
+                            f"{detail[:500]}"
+                        )
+                        break  # don't retry non-timeout failures, try next agent
+                    return result.stdout
+                except subprocess.TimeoutExpired:
+                    last_exc = EnrichmentError(
+                        f"{cmd_name} timed out after 300s "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+                except FileNotFoundError:
+                    last_exc = EnrichmentError(f"Agent CLI not found: {cmd_name!r}")
+                    break
 
-        raise last_exc
+            # If we get here, this agent failed — log and try next
+            if len(resolved) > 1:
+                import sys
+                print(f"  [{cmd_name}] {last_exc} — trying next agent", file=sys.stderr)
+                continue
+
+        # All agents exhausted
+        raise last_exc  # type: ignore[arg-type]
 
     return llm_fn

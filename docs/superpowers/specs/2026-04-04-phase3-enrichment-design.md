@@ -188,7 +188,7 @@ Passes through `--force` and `--stage` flags to the enrich step.
 - **Invalid LLM output** (malformed JSON, missing fields): one schema-repair retry ("return valid JSON matching the schema"), then fail the stage if still invalid
 - **Partial failure:** if one stage fails, save what succeeded in other stages. Stamps track independence.
 - **Stage atomicity:** either a stage completes fully or it doesn't write. No partial enrichment within a stage.
-- **Missing agent CLI:** fail fast with message: "Agent CLI not found: '<cmd>'. Install it or set llm.agent_cmd in config.yaml"
+- **Missing agent CLI:** fail fast with message listing all tried commands. Falls back to next configured agent on failure.
 - **Missing material:** clear error message with material_id
 
 ## File Layout After Enrichment
@@ -210,7 +210,9 @@ From `config.yaml`:
 
 ```yaml
 llm:
-  agent_cmd: "claude --print"   # agent CLI (claude, openai-cli, gemini-cli, etc.)
+  agent_cmd:                      # agent CLIs, tried in order (first success wins)
+    - "claude --print"            # primary
+    - "codex exec"                # fallback
                                  # agent authenticates with its own credentials
 
 enrichment:

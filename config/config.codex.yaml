@@ -1,0 +1,8 @@
+# Arquimedes preset: use Codex as the LLM agent CLI.
+# This file is a reusable preset and is not auto-loaded by the app.
+# To use it, copy the llm block into config.local.yaml or merge it there.
+
+llm:
+  # Codex non-interactive mode. With stdin piped, `codex exec` reads the prompt
+  # from stdin and returns the agent's final response on stdout.
+  agent_cmd: "codex exec"

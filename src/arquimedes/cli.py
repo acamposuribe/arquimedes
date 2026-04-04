@@ -159,12 +159,53 @@ def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
 
 @cli.command()
 @click.argument("query")
-@click.option("--deep", is_flag=True, help="Multi-layer auto-drill retrieval")
-@click.option("--facet", multiple=True, help="Facet filter (e.g., domain=practice)")
-@click.option("--collection", help="Search within a specific collection")
-def search(query: str, deep: bool, facet: tuple[str, ...], collection: str | None):
-    """Search the knowledge base."""
-    click.echo("arq search: not yet implemented")
+@click.option("--deep", is_flag=True, help="Multi-layer retrieval (depth 2 by default).")
+@click.option("--depth", type=click.IntRange(1, 3), default=None, help="Retrieval depth 1-3 (overrides --deep default of 2).")
+@click.option("--facet", multiple=True, help="Facet filter: key=value or key==value (exact). Repeatable.")
+@click.option("--collection", help="Search within a specific collection.")
+@click.option("--limit", default=20, show_default=True, help="Max number of material cards.")
+@click.option("--chunk-limit", default=5, show_default=True, help="Max chunks per material at depth 2+.")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def search(
+    query: str,
+    deep: bool,
+    depth: int | None,
+    facet: tuple[str, ...],
+    collection: str | None,
+    limit: int,
+    chunk_limit: int,
+    human: bool,
+):
+    """Search the knowledge base (JSON output by default)."""
+    from arquimedes.search import search as do_search, format_human
+
+    # Resolve effective depth
+    if depth is not None:
+        effective_depth = depth
+    elif deep:
+        effective_depth = 2
+    else:
+        effective_depth = 1
+
+    try:
+        result = do_search(
+            query,
+            depth=effective_depth,
+            facets=list(facet),
+            collection=collection,
+            limit=limit,
+            chunk_limit=chunk_limit,
+        )
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if human:
+        click.echo(format_human(result))
+    else:
+        click.echo(result.to_json())
+
+    if result.total == 0:
+        raise SystemExit(0)
 
 
 @cli.command()
@@ -207,13 +248,40 @@ def index():
 @index.command("rebuild")
 def index_rebuild():
     """Rebuild the search index from scratch."""
-    click.echo("arq index rebuild: not yet implemented")
+    from arquimedes.index import rebuild_index
+
+    click.echo("Building search index...")
+    try:
+        stats = rebuild_index()
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"  materials:   {stats.materials}")
+    click.echo(f"  chunks:      {stats.chunks}")
+    click.echo(f"  figures:     {stats.figures}")
+    click.echo(f"  annotations: {stats.annotations}")
+    click.echo(f"Index built in {stats.elapsed:.1f}s → indexes/search.sqlite")
 
 
 @index.command("ensure")
 def index_ensure():
     """Rebuild search index only if stale."""
-    click.echo("arq index ensure: not yet implemented")
+    from arquimedes.index import ensure_index
+
+    try:
+        rebuilt, stats = ensure_index()
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    if rebuilt and stats is not None:
+        click.echo("Index is stale — rebuilding...")
+        click.echo(f"  materials:   {stats.materials}")
+        click.echo(f"  chunks:      {stats.chunks}")
+        click.echo(f"  figures:     {stats.figures}")
+        click.echo(f"  annotations: {stats.annotations}")
+        click.echo(f"Index rebuilt in {stats.elapsed:.1f}s → indexes/search.sqlite")
+    else:
+        click.echo("Index is current.")
 
 
 @cli.command()

@@ -165,6 +165,8 @@ def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
 @click.option("--collection", help="Search within a specific collection.")
 @click.option("--limit", default=20, show_default=True, help="Max number of material cards.")
 @click.option("--chunk-limit", default=5, show_default=True, help="Max chunks per material at depth 2+.")
+@click.option("--annotation-limit", default=10, show_default=True, help="Max annotations per material at depth 2+.")
+@click.option("--figure-limit", default=5, show_default=True, help="Max figures per material at depth 2+.")
 @click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
 def search(
     query: str,
@@ -174,6 +176,8 @@ def search(
     collection: str | None,
     limit: int,
     chunk_limit: int,
+    annotation_limit: int,
+    figure_limit: int,
     human: bool,
 ):
     """Search the knowledge base (JSON output by default)."""
@@ -195,6 +199,8 @@ def search(
             collection=collection,
             limit=limit,
             chunk_limit=chunk_limit,
+            annotation_limit=annotation_limit,
+            figure_limit=figure_limit,
         )
     except FileNotFoundError as e:
         raise click.ClickException(str(e))

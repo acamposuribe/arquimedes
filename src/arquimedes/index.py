@@ -415,7 +415,7 @@ def ensure_index(config: dict | None = None) -> tuple[bool, IndexStats | None]:
         stats = rebuild_index(config)
         return True, stats
 
-    newest_mtime = _newest_meta_mtime(extracted_dir)
+    newest_mtime = _newest_input_mtime(extracted_dir)
     if newest_mtime is not None and newest_mtime > built_at.timestamp():
         # Ambiguous — fall through to hash comparison
         material_ids = _read_manifest_ids(manifest_path)
@@ -438,39 +438,25 @@ def _compute_manifest_hash(manifest_path: Path) -> str:
 
 
 def _compute_extracted_snapshot(extracted_dir: Path, material_ids: list[str]) -> str:
-    """Hash of enrichment stamps across all materials, sorted for determinism."""
+    """Hash of all index-input file contents across all materials, sorted for determinism."""
     parts: list[str] = []
     for mid in sorted(material_ids):
         mat_dir = extracted_dir / mid
-        # Document stamp
-        meta_path = mat_dir / "meta.json"
-        if meta_path.exists():
-            try:
-                meta = json.loads(meta_path.read_text())
-                stamp = meta.get("_enrichment_stamp")
-                if stamp:
-                    parts.append(f"{mid}:doc:{json.dumps(stamp, sort_keys=True)}")
-            except (json.JSONDecodeError, OSError):
-                pass
-        # Chunk stamps
-        chunk_stamps_path = mat_dir / "chunk_enrichment_stamps.json"
-        if chunk_stamps_path.exists():
-            try:
-                content = chunk_stamps_path.read_text()
-                parts.append(f"{mid}:chunks:{hashlib.sha256(content.encode()).hexdigest()[:8]}")
-            except OSError:
-                pass
-        # Figure stamps (representative sample: first figure)
+        for fname in ("meta.json", "chunks.jsonl", "annotations.jsonl"):
+            p = mat_dir / fname
+            if p.exists():
+                try:
+                    h = hashlib.sha256(p.read_bytes()).hexdigest()[:8]
+                    parts.append(f"{mid}:{fname}:{h}")
+                except OSError:
+                    pass
         figures_dir = mat_dir / "figures"
         if figures_dir.is_dir():
-            fig_files = sorted(figures_dir.glob("fig_*.json"))
-            for fig_path in fig_files[:1]:
+            for fig_path in sorted(figures_dir.glob("fig_*.json")):
                 try:
-                    fig = json.loads(fig_path.read_text())
-                    stamp = fig.get("_enrichment_stamp")
-                    if stamp:
-                        parts.append(f"{mid}:fig:{json.dumps(stamp, sort_keys=True)}")
-                except (json.JSONDecodeError, OSError):
+                    h = hashlib.sha256(fig_path.read_bytes()).hexdigest()[:8]
+                    parts.append(f"{mid}:fig:{fig_path.name}:{h}")
+                except OSError:
                     pass
 
     combined = "\n".join(parts)
@@ -503,18 +489,19 @@ def _read_manifest_ids(manifest_path: Path) -> list[str]:
     return ids
 
 
-def _newest_meta_mtime(extracted_dir: Path) -> float | None:
-    """Return the newest mtime among all extracted/*/meta.json files."""
+def _newest_input_mtime(extracted_dir: Path) -> float | None:
+    """Return the newest mtime among all files that feed the index."""
     if not extracted_dir.is_dir():
         return None
     newest: float | None = None
-    for meta_path in extracted_dir.glob("*/meta.json"):
-        try:
-            mtime = meta_path.stat().st_mtime
-            if newest is None or mtime > newest:
-                newest = mtime
-        except OSError:
-            pass
+    for pattern in ("*/meta.json", "*/chunks.jsonl", "*/annotations.jsonl", "*/figures/fig_*.json"):
+        for p in extracted_dir.glob(pattern):
+            try:
+                mtime = p.stat().st_mtime
+                if newest is None or mtime > newest:
+                    newest = mtime
+            except OSError:
+                pass
     return newest
 
 

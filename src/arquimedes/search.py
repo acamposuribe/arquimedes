@@ -196,12 +196,18 @@ def search(
     collection: str | None = None,
     limit: int = 20,
     chunk_limit: int = 5,
+    annotation_limit: int = 10,
+    figure_limit: int = 5,
 ) -> SearchResult:
     """Search the index. Returns a SearchResult.
 
     depth=1: cards only
-    depth=2: cards + chunk summaries + annotation/figure hits
-    depth=3: cards + chunks with full text + annotation/figure hits
+    depth=2: cards + chunk summaries + annotation/figure hits (content-first)
+    depth=3: cards + chunks with full text + annotation/figure hits (content-first)
+
+    At depth >= 2 the search is content-first: materials that match in chunks or
+    annotations but not at the card layer are still surfaced (appended after
+    card-layer matches).
     """
     if config is None:
         config = load_config()
@@ -222,9 +228,75 @@ def search(
             collection=collection,
             limit=limit,
             chunk_limit=chunk_limit,
+            annotation_limit=annotation_limit,
+            figure_limit=figure_limit,
         )
     finally:
         con.close()
+
+
+def _row_to_card(row: sqlite3.Row, rank: int) -> MaterialCard:
+    try:
+        keywords = json.loads(row["keywords"] or "[]")
+        if not isinstance(keywords, list):
+            keywords = []
+    except (json.JSONDecodeError, TypeError):
+        keywords = []
+    try:
+        authors_list = json.loads(row["authors"] or "[]")
+        authors = ", ".join(str(a) for a in authors_list) if isinstance(authors_list, list) else row["authors"]
+    except (json.JSONDecodeError, TypeError):
+        authors = row["authors"]
+    return MaterialCard(
+        material_id=row["material_id"],
+        title=row["title"],
+        summary=row["summary"],
+        domain=row["domain"],
+        collection=row["collection"],
+        document_type=row["document_type"],
+        year=row["year"],
+        authors=authors,
+        keywords=keywords,
+        rank=rank,
+    )
+
+
+def _fetch_material_row(
+    con: sqlite3.Connection,
+    material_id: str,
+    facet_where: str,
+    facet_params: list[str],
+) -> sqlite3.Row | None:
+    """Fetch card columns for a single material, respecting any facet filters."""
+    base = """
+        SELECT m.material_id, m.title, m.summary, m.domain, m.collection,
+               m.document_type, m.year, m.authors, m.keywords
+        FROM materials m
+        WHERE m.material_id = ?
+    """
+    if facet_where:
+        return con.execute(base + f" AND {facet_where}", [material_id] + facet_params).fetchone()
+    return con.execute(base, [material_id]).fetchone()
+
+
+def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int) -> list[str]:
+    """Return ordered distinct material_ids with chunk or annotation FTS matches."""
+    seen: set[str] = set()
+    result: list[str] = []
+    for sql in (
+        """SELECT DISTINCT c.material_id FROM chunks_fts
+           JOIN chunks c ON chunks_fts.rowid = c.rowid
+           WHERE chunks_fts MATCH ? LIMIT ?""",
+        """SELECT DISTINCT a.material_id FROM annotations_fts
+           JOIN annotations a ON annotations_fts.rowid = a.rowid
+           WHERE annotations_fts MATCH ? LIMIT ?""",
+    ):
+        for row in con.execute(sql, [query, limit]).fetchall():
+            mid = row[0]
+            if mid not in seen:
+                seen.add(mid)
+                result.append(mid)
+    return result
 
 
 def _do_search(
@@ -236,15 +308,16 @@ def _do_search(
     collection: str | None,
     limit: int,
     chunk_limit: int,
+    annotation_limit: int,
+    figure_limit: int,
 ) -> SearchResult:
     facet_where, facet_params = _build_facet_where(facets, collection)
 
-    # --- Card search via FTS5 ---
+    # --- Card-layer FTS ---
     if facet_where:
         sql = f"""
             SELECT m.material_id, m.title, m.summary, m.domain, m.collection,
-                   m.document_type, m.year, m.authors, m.keywords,
-                   materials_fts.rank
+                   m.document_type, m.year, m.authors, m.keywords
             FROM materials_fts
             JOIN materials m ON materials_fts.rowid = m.rowid
             WHERE materials_fts MATCH ? AND {facet_where}
@@ -255,8 +328,7 @@ def _do_search(
     else:
         sql = """
             SELECT m.material_id, m.title, m.summary, m.domain, m.collection,
-                   m.document_type, m.year, m.authors, m.keywords,
-                   materials_fts.rank
+                   m.document_type, m.year, m.authors, m.keywords
             FROM materials_fts
             JOIN materials m ON materials_fts.rowid = m.rowid
             WHERE materials_fts MATCH ?
@@ -265,38 +337,35 @@ def _do_search(
         """
         rows = con.execute(sql, [query, limit]).fetchall()
 
-    cards: list[MaterialCard] = []
+    cards_by_id: dict[str, MaterialCard] = {}
     for i, row in enumerate(rows, 1):
-        try:
-            keywords = json.loads(row["keywords"] or "[]")
-            if not isinstance(keywords, list):
-                keywords = []
-        except (json.JSONDecodeError, TypeError):
-            keywords = []
-        try:
-            authors_list = json.loads(row["authors"] or "[]")
-            authors = ", ".join(str(a) for a in authors_list) if isinstance(authors_list, list) else row["authors"]
-        except (json.JSONDecodeError, TypeError):
-            authors = row["authors"]
-        card = MaterialCard(
-            material_id=row["material_id"],
-            title=row["title"],
-            summary=row["summary"],
-            domain=row["domain"],
-            collection=row["collection"],
-            document_type=row["document_type"],
-            year=row["year"],
-            authors=authors,
-            keywords=keywords,
-            rank=i,
-        )
+        card = _row_to_card(row, i)
+        cards_by_id[card.material_id] = card
 
-        if depth >= 2:
-            card.chunks = _search_chunks(con, query, row["material_id"], chunk_limit, include_text=(depth >= 3))
-            card.annotations = _search_annotations(con, query, row["material_id"])
-            card.figures = _search_figures(con, query, row["material_id"])
+    # --- Content-first: surface materials with chunk/annotation matches at depth >= 2 ---
+    if depth >= 2:
+        content_mids = _find_content_material_ids(con, query, limit)
+        for mid in content_mids:
+            if mid not in cards_by_id:
+                row = _fetch_material_row(con, mid, facet_where, facet_params)
+                if row:
+                    rank = len(cards_by_id) + 1
+                    cards_by_id[mid] = _row_to_card(row, rank)
 
-        cards.append(card)
+    cards = list(cards_by_id.values())
+
+    # --- Populate content for depth >= 2 ---
+    if depth >= 2:
+        for card in cards:
+            card.chunks = _search_chunks(
+                con, query, card.material_id, chunk_limit, include_text=(depth >= 3)
+            )
+            card.annotations = _search_annotations(
+                con, query, card.material_id, annotation_limit
+            )
+            card.figures = _search_figures(
+                con, query, card.material_id, figure_limit
+            )
 
     return SearchResult(query=query, depth=depth, total=len(cards), results=cards)
 
@@ -340,6 +409,7 @@ def _search_annotations(
     con: sqlite3.Connection,
     query: str,
     material_id: str,
+    limit: int,
 ) -> list[AnnotationHit]:
     sql = """
         SELECT a.annotation_id, a.type, a.quoted_text, a.comment, a.page
@@ -347,9 +417,9 @@ def _search_annotations(
         JOIN annotations a ON annotations_fts.rowid = a.rowid
         WHERE annotations_fts MATCH ? AND a.material_id = ?
         ORDER BY annotations_fts.rank
-        LIMIT 10
+        LIMIT ?
     """
-    rows = con.execute(sql, [query, material_id]).fetchall()
+    rows = con.execute(sql, [query, material_id, limit]).fetchall()
     return [
         AnnotationHit(
             annotation_id=row["annotation_id"],
@@ -366,6 +436,7 @@ def _search_figures(
     con: sqlite3.Connection,
     query: str,
     material_id: str,
+    limit: int,
 ) -> list[FigureHit]:
     sql = """
         SELECT f.figure_id, f.description, f.visual_type, f.source_page, f.image_path
@@ -373,9 +444,9 @@ def _search_figures(
         JOIN figures f ON figures_fts.rowid = f.rowid
         WHERE figures_fts MATCH ? AND f.material_id = ?
         ORDER BY figures_fts.rank
-        LIMIT 5
+        LIMIT ?
     """
-    rows = con.execute(sql, [query, material_id]).fetchall()
+    rows = con.execute(sql, [query, material_id, limit]).fetchall()
     return [
         FigureHit(
             figure_id=row["figure_id"],

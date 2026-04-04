@@ -286,3 +286,90 @@ class TestSnapshotHelpers:
         s2 = _compute_extracted_snapshot(extracted_dir, ["aabbcc112233"])
         assert s1 == s2
         assert len(s1) == 16
+
+
+class TestSnapshotCoversAllInputs:
+    """Snapshot must change when any index-input file changes, not just meta.json stamps."""
+
+    def _snapshot(self, repo: Path, mid: str = "aabbcc112233") -> str:
+        return _compute_extracted_snapshot(repo / "extracted", [mid])
+
+    def test_changes_on_chunks_edit(self, repo):
+        _add_material(repo)
+        s1 = self._snapshot(repo)
+        extra = {
+            "chunk_id": "chk_extra", "text": "new chunk content xyz", "source_pages": [99],
+            "emphasized": False, "summary": {"value": "extra", "provenance": {}},
+            "keywords": {"value": [], "provenance": {}}, "content_class": "argument",
+        }
+        with open(repo / "extracted" / "aabbcc112233" / "chunks.jsonl", "a") as f:
+            f.write("\n" + json.dumps(extra))
+        assert self._snapshot(repo) != s1
+
+    def test_changes_on_annotations_edit(self, repo):
+        _add_material(repo)
+        s1 = self._snapshot(repo)
+        ann_path = repo / "extracted" / "aabbcc112233" / "annotations.jsonl"
+        ann_path.write_text(ann_path.read_text() + "\n" + json.dumps({
+            "annotation_id": "ann_extra", "type": "note", "page": 5,
+            "quoted_text": "extra annotation text", "comment": "note", "color": "", "rect": [],
+        }))
+        assert self._snapshot(repo) != s1
+
+    def test_changes_on_figure_edit(self, repo):
+        _add_material(repo)
+        s1 = self._snapshot(repo)
+        fig_path = repo / "extracted" / "aabbcc112233" / "figures" / "fig_0001.json"
+        fig = json.loads(fig_path.read_text())
+        fig["description"] = {"value": "Updated description xyz", "provenance": {}}
+        fig_path.write_text(json.dumps(fig))
+        assert self._snapshot(repo) != s1
+
+
+class TestEnsureIndexDetectsContentChanges:
+    """ensure_index must rebuild when chunks/annotations/figures change."""
+
+    def _backdate_index(self, repo: Path) -> None:
+        import sqlite3 as _sqlite3
+        con = _sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        con.execute("UPDATE index_state SET built_at = '2020-01-01T00:00:00+00:00' WHERE id = 1")
+        con.commit()
+        con.close()
+
+    def test_rebuilds_when_chunks_changed(self, repo):
+        _add_material(repo)
+        ensure_index()
+        self._backdate_index(repo)
+        extra = {
+            "chunk_id": "chk_extra", "text": "new extra chunk", "source_pages": [99],
+            "emphasized": False, "summary": {"value": "extra", "provenance": {}},
+            "keywords": {"value": [], "provenance": {}}, "content_class": "argument",
+        }
+        with open(repo / "extracted" / "aabbcc112233" / "chunks.jsonl", "a") as f:
+            f.write("\n" + json.dumps(extra))
+        rebuilt, _ = ensure_index()
+        assert rebuilt is True
+
+    def test_rebuilds_when_annotations_changed(self, repo):
+        _add_material(repo)
+        ensure_index()
+        self._backdate_index(repo)
+        ann_path = repo / "extracted" / "aabbcc112233" / "annotations.jsonl"
+        ann_path.write_text(ann_path.read_text() + "\n" + json.dumps({
+            "annotation_id": "ann_extra", "type": "note", "page": 5,
+            "quoted_text": "extra annotation", "comment": "", "color": "", "rect": [],
+        }))
+        rebuilt, _ = ensure_index()
+        assert rebuilt is True
+
+    def test_rebuilds_when_figure_changed(self, repo):
+        _add_material(repo)
+        ensure_index()
+        self._backdate_index(repo)
+        fig_path = repo / "extracted" / "aabbcc112233" / "figures" / "fig_0001.json"
+        fig = json.loads(fig_path.read_text())
+        fig["description"] = {"value": "Completely new description", "provenance": {}}
+        fig_path.write_text(json.dumps(fig))
+        rebuilt, _ = ensure_index()
+        assert rebuilt is True
+

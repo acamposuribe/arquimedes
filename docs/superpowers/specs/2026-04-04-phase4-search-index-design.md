@@ -15,7 +15,7 @@ Phase 4 makes the knowledge base queryable. It builds a local SQLite FTS5 index 
 1. **JSON by default.** `arq search` outputs machine-parseable JSON. `--human` flag for pretty-printed tables. Agents get stable contracts; humans opt in to nice formatting.
 2. **Configurable depth.** `arq search` returns cards (depth 1). `--deep` returns cards + chunk hits (depth 2). `--deep --depth 3` adds full chunk text. Callers control token spend.
 3. **Deterministic, no LLM.** Index build and search are pure code — no LLM calls. FTS5 ranking handles relevance.
-4. **Cheap staleness.** `arq index ensure` uses a fast mtime/count gate, falling back to stamp hash comparison only when ambiguous.
+4. **Cheap staleness.** `arq index ensure` uses a fast mtime/count gate, falling back to full content hash only when ambiguous.
 
 ## Index Schema (SQLite FTS5)
 
@@ -117,7 +117,7 @@ Single-row metadata table for staleness tracking.
 | `built_at` | TEXT | ISO 8601 timestamp of last rebuild |
 | `manifest_hash` | TEXT | sha256 of materials.jsonl content |
 | `material_count` | INTEGER | Number of materials indexed |
-| `extracted_snapshot` | TEXT | sha256 of concatenated enrichment stamps |
+| `extracted_snapshot` | TEXT | sha256 of all index-input file contents (meta.json, chunks.jsonl, annotations.jsonl, all figure sidecars) |
 
 ## Index Build (`arq index rebuild`)
 
@@ -149,15 +149,15 @@ Two-tier check:
 1. If `indexes/search.sqlite` doesn't exist → stale
 2. Read `index_state` row from the SQLite DB
 3. Compare `material_count` against line count of `manifests/materials.jsonl`
-4. Compare max mtime of `extracted/*/meta.json` files against `built_at`
-5. If count matches AND no meta.json is newer → **not stale, skip rebuild**
+4. Compare max mtime of all index-input files (`extracted/*/meta.json`, `*/chunks.jsonl`, `*/annotations.jsonl`, `*/figures/fig_*.json`) against `built_at`
+5. If count matches AND no input file is newer → **not stale, skip rebuild**
 
 ### Hash verification (runs only if fast gate is inconclusive)
 
-The fast gate can miss in-place re-enrichment where mtime advances but material count stays the same. If the fast gate says "maybe stale" (count matches but mtimes differ, or we want to be sure):
+The fast gate can miss in-place re-enrichment where mtime advances but material count stays the same. If the fast gate says "maybe stale" (count matches but any input file mtime is newer):
 
 1. Compute `manifest_hash` = sha256 of `materials.jsonl` content
-2. Compute `extracted_snapshot` = sha256 of sorted concatenation of all enrichment stamps across all materials (document stamp from meta.json, chunk stamps from chunk_enrichment_stamps.json, figure stamps from fig_NNN.json)
+2. Compute `extracted_snapshot` = sha256 of sorted concatenation of file-content hashes for every `meta.json`, `chunks.jsonl`, `annotations.jsonl`, and `fig_*.json` across all materials
 3. Compare both against stored `index_state` values
 4. If either differs → stale, rebuild
 
@@ -203,7 +203,9 @@ Query the `materials_fts` table. Return matching material cards:
 }
 ```
 
-### Depth 2: Cards + chunk hits
+### Depth 2: Content-first cards + chunk hits
+
+At depth 2, the search is **content-first**: after running card-layer FTS, an additional pass queries `chunks_fts` and `annotations_fts` directly. Materials with strong chunk or annotation matches that did not rank in the card-layer results are fetched by their material_id and appended (after card-layer matches). This ensures that a paper with a pivotal annotation — e.g., "what did I highlight about thermal bridges?" — surfaces even if the material's title/summary is generic.
 
 Run card search, then for each matching material, query `chunks_fts` with the same query. Return cards with their best matching chunk summaries:
 
@@ -281,8 +283,10 @@ arq search --collection thermal-mass "Mediterranean climate"
 
 ### Result limits
 
-- `--limit N` — max results per depth level (default: 20 for cards, 5 chunks per material)
-- `--chunk-limit N` — override chunks per material at depth 2/3 (default: 5)
+- `--limit N` — max material cards returned (default: 20)
+- `--chunk-limit N` — max chunks per material at depth 2/3 (default: 5)
+- `--annotation-limit N` — max annotations per material at depth 2/3 (default: 10)
+- `--figure-limit N` — max figures per material at depth 2/3 (default: 5)
 
 ### Annotation and figure results
 

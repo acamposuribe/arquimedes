@@ -211,6 +211,117 @@ class TestDeepSearch:
         for card in result.results:
             assert len(card.chunks) <= 1
 
+    def test_annotation_limit_respected(self, index_repo):
+        result = search("thermal mass", depth=2, annotation_limit=0)
+        for card in result.results:
+            assert len(card.annotations) == 0
+
+    def test_figure_limit_respected(self, index_repo):
+        result = search("thermal mass", depth=2, figure_limit=0)
+        for card in result.results:
+            assert len(card.figures) == 0
+
+
+@pytest.fixture
+def content_first_repo(tmp_path, monkeypatch):
+    """Index with two materials: one matched only at chunk level, one only at annotation level.
+
+    'zorblax' appears only in a chunk of chunk_only_mid (not in the card).
+    'qryvex' appears only in an annotation of ann_only_mid (not in the card).
+    Neither term appears in meta.json titles or summaries.
+    """
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    (tmp_path / "manifests").mkdir()
+
+    def _write_material(mid, chunks_text=None, annotation_text=None):
+        mat_dir = tmp_path / "extracted" / mid
+        mat_dir.mkdir(parents=True)
+        (mat_dir / "meta.json").write_text(json.dumps({
+            "material_id": mid, "title": "Generic Architecture Document",
+            "authors": ["A"], "year": "2024", "page_count": 5, "file_type": "pdf",
+            "domain": "research", "collection": "_general",
+            "ingested_at": "2026-01-01T00:00:00+00:00", "raw_keywords": [],
+            "raw_document_type": "paper",
+            "summary": {"value": "A generic document about architecture.", "provenance": {}},
+            "keywords": {"value": [], "provenance": {}},
+            "document_type": {"value": "paper", "provenance": {}},
+            "facets": {},
+            "_enrichment_stamp": {"prompt_version": "v1", "enrichment_schema_version": "1"},
+        }))
+        chunks = []
+        if chunks_text:
+            chunks.append({
+                "chunk_id": "chk_00001", "text": chunks_text, "source_pages": [1],
+                "emphasized": False,
+                "summary": {"value": "irrelevant generic summary", "provenance": {}},
+                "keywords": {"value": [], "provenance": {}}, "content_class": "argument",
+            })
+        (mat_dir / "chunks.jsonl").write_text("\n".join(json.dumps(c) for c in chunks))
+        if annotation_text:
+            (mat_dir / "annotations.jsonl").write_text(json.dumps({
+                "annotation_id": "ann_0001", "type": "highlight", "page": 1,
+                "quoted_text": annotation_text, "comment": "", "color": "", "rect": [],
+            }))
+        else:
+            (mat_dir / "annotations.jsonl").write_text("")
+        (mat_dir / "figures").mkdir()
+
+    _write_material("chunk_only_mid", chunks_text="zorblax is a unique term in chunk text only")
+    _write_material("ann_only_mid", annotation_text="qryvex is a unique term in annotation only")
+
+    (tmp_path / "manifests" / "materials.jsonl").write_text("\n".join([
+        json.dumps({"material_id": "chunk_only_mid", "file_hash": "x", "relative_path": "a.pdf", "file_type": "pdf", "domain": "research", "collection": "_general", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+        json.dumps({"material_id": "ann_only_mid", "file_hash": "y", "relative_path": "b.pdf", "file_type": "pdf", "domain": "research", "collection": "_general", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+    ]))
+    monkeypatch.chdir(tmp_path)
+    from arquimedes.index import rebuild_index
+    rebuild_index()
+    return tmp_path
+
+
+class TestContentFirstDeepSearch:
+    """Materials with content hits but no card hits must surface at depth >= 2."""
+
+    def test_chunk_only_not_surfaced_at_depth_1(self, content_first_repo):
+        result = search("zorblax", depth=1)
+        ids = [r.material_id for r in result.results]
+        assert "chunk_only_mid" not in ids
+
+    def test_chunk_only_surfaced_at_depth_2(self, content_first_repo):
+        result = search("zorblax", depth=2)
+        ids = [r.material_id for r in result.results]
+        assert "chunk_only_mid" in ids
+
+    def test_chunk_only_surfaced_at_depth_3(self, content_first_repo):
+        result = search("zorblax", depth=3)
+        ids = [r.material_id for r in result.results]
+        assert "chunk_only_mid" in ids
+
+    def test_annotation_only_not_surfaced_at_depth_1(self, content_first_repo):
+        result = search("qryvex", depth=1)
+        ids = [r.material_id for r in result.results]
+        assert "ann_only_mid" not in ids
+
+    def test_annotation_only_surfaced_at_depth_2(self, content_first_repo):
+        result = search("qryvex", depth=2)
+        ids = [r.material_id for r in result.results]
+        assert "ann_only_mid" in ids
+
+    def test_content_only_card_has_correct_material_id(self, content_first_repo):
+        result = search("zorblax", depth=2)
+        card = next(r for r in result.results if r.material_id == "chunk_only_mid")
+        assert card.material_id == "chunk_only_mid"
+        assert len(card.chunks) > 0
+
+    def test_facets_still_filter_content_only_materials(self, content_first_repo):
+        # chunk_only_mid is domain=research; filtering for domain=practice should exclude it
+        result = search("zorblax", depth=2, facets=["domain=practice"])
+        ids = [r.material_id for r in result.results]
+        assert "chunk_only_mid" not in ids
+
 
 class TestSearchResult:
     def test_to_dict_structure(self, index_repo):
@@ -251,3 +362,4 @@ class TestHumanFormat:
         result = search("xyzzy_not_in_index_abc123")
         output = format_human(result)
         assert "No results" in output
+

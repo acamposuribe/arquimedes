@@ -1,6 +1,6 @@
 # Phase 3: LLM Enrichment — Design Spec
 
-> **Status:** Approved design
+> **Status:** Complete
 > **Date:** 2026-04-04
 > **Parent spec:** [Full system design](2026-04-04-arquimedes-knowledge-system-design.md)
 
@@ -234,7 +234,10 @@ enrichment:
 - **Claude optimizations:** called with `--no-session-persistence --disable-slash-commands --tools "" --model sonnet --system-prompt` to skip session saving, skill resolution, and built-in tools (`--bare` is intentionally avoided — it breaks credential discovery)
 - **Codex optimizations:** codex is called with `--ephemeral --skip-git-repo-check` to reduce startup overhead
 - **Parallel materials:** when multiple materials need enrichment, they are processed concurrently via `ThreadPoolExecutor(max_workers=parallel)`
+- **Parallel stages:** within a single material, document + figure stages run concurrently (independent inputs), while chunk stage waits for document (uses doc summary in prompt context)
 - **Early skip:** orchestrator checks staleness before dispatching to stage functions, avoiding unnecessary LLM construction
+- **Ordered agent fallback:** agents are tried in order from `agent_cmd` list; first success wins. If an agent fails (exit code, auth error, rate limit), the next is tried automatically
+- **Fast-fail on auth/rate-limit:** subprocess stderr is monitored in real-time; patterns like "not logged in", "rate limit", "quota exceeded" trigger immediate process kill (via `os.killpg`) instead of waiting for timeout
 
 ## Scope Boundaries
 

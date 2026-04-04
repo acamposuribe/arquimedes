@@ -33,6 +33,13 @@ When implementation changes affect the spec or plan, update those documents imme
 |------|---------|
 | `docs/PLAN.md` | Implementation plan with phase checkboxes |
 | `docs/superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md` | Full design spec |
+| `docs/superpowers/specs/2026-04-04-phase3-enrichment-design.md` | Phase 3 enrichment design (complete) |
+| `docs/superpowers/specs/2026-04-04-phase4-search-index-design.md` | Phase 4 search index & retrieval design |
 | `docs/llm-wiki.md` | Original conceptual reference for the Karpathy-style LLM-maintained wiki pattern |
 | `config/config.yaml` | Default configuration |
 | `src/arquimedes/cli.py` | `arq` CLI entrypoint |
+| `src/arquimedes/enrich.py` | Enrichment orchestrator (parallel stages, combined call, staleness) |
+| `src/arquimedes/enrich_llm.py` | LLM abstraction: agent CLI adapter, ordered fallback, fast-fail |
+| `src/arquimedes/enrich_stamps.py` | Fingerprinting, staleness tracking, stamp I/O |
+| `src/arquimedes/enrich_prompts.py` | Prompt builders for document, chunk, figure stages |
+| `src/arquimedes/models.py` | Data models (Material, Chunk, Figure, EnrichedField, Provenance) |

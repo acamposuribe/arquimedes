@@ -1,6 +1,6 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phase 3 — Complete
+> **Status:** Phase 4 — Search Index (next)
 > **Last updated:** 2026-04-04
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)

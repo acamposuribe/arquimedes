@@ -57,84 +57,85 @@ enrich_prompts ──────────────────┘
 ## Tasks
 
 ### Task 1: Config extension
-- [ ] Add `enrichment_schema_version`, `chunk_batch_target`, `figure_batch_size`, `max_retries` to `config/config.yaml` under `enrichment:`
-- [ ] Commit
+- [x] Add `enrichment_schema_version`, `chunk_batch_target`, `figure_batch_size`, `max_retries` to `config/config.yaml` under `enrichment:`
+- [x] Commit
 
 ### Task 2: `enrich_stamps.py` + tests
-- [ ] `canonical_hash(*parts) → str` — sorted-key JSON serialization → sha256[:16]
-- [ ] `document_fingerprint(output_dir) → str` — hash raw meta projection + pages + annotations + toc + chunks
-- [ ] `chunk_fingerprint(output_dir, chunks, doc_context) → str` — hash chunk records + annotations + doc context digest
-- [ ] `figure_fingerprint(figure, page_text, caption_candidates, doc_context) → str` — hash image file + metadata + context
-- [ ] `make_stamp(config) → dict` — build stamp dict from config (prompt_version, model, schema_version, fingerprint placeholder)
-- [ ] `is_stale(existing_stamp, current_stamp) → bool` — exact match on all 4 fields
-- [ ] `read_stamp(path_or_dict) / write_stamp(path, stamp)` — I/O helpers
-- [ ] Tests: determinism (same input → same hash), staleness detection, round-trip I/O
-- [ ] Commit
+- [x] `canonical_hash(*parts) → str` — sorted-key JSON serialization → sha256[:16]
+- [x] `document_fingerprint(output_dir) → str` — hash raw meta projection + pages + annotations + toc + chunks
+- [x] `chunk_fingerprint(output_dir, chunks, doc_context) → str` — hash chunk records + annotations + doc context digest
+- [x] `figure_fingerprint(figure, page_text, caption_candidates, doc_context) → str` — hash image file + metadata + context
+- [x] `make_stamp(config) → dict` — build stamp dict from config (prompt_version, model, schema_version, fingerprint placeholder)
+- [x] `is_stale(existing_stamp, current_stamp) → bool` — compares 3 fields (prompt_version, enrichment_schema_version, input_fingerprint; model is audit-only)
+- [x] `read_stamp(path_or_dict) / write_stamp(path, stamp)` — I/O helpers
+- [x] Tests: determinism (same input → same hash), staleness detection, round-trip I/O
+- [x] Commit
 
 ### Task 3: `enrich_llm.py` + tests
-- [ ] `make_cli_llm_fn(config) → LlmFn` — shells out to agent CLI(s) from `config["llm"]["agent_cmd"]` (list: tried in order, first success wins), retries on timeout
-- [ ] `parse_json_or_repair(client, model, text, schema_description) → dict` — JSON parse, one schema-repair retry on failure, raise `EnrichmentError` if still invalid
-- [ ] Custom `EnrichmentError` exception
-- [ ] Tests: mock client — success, retry on rate limit, schema-repair path, final failure
-- [ ] Commit
+- [x] `make_cli_llm_fn(config) → LlmFn` — shells out to agent CLI(s) from `config["llm"]["agent_cmd"]` (list: tried in order, first success wins), fast-fail on auth/rate-limit via stderr monitoring
+- [x] `parse_json_or_repair(client, model, text, schema_description) → dict` — JSON parse, one schema-repair retry on failure, raise `EnrichmentError` if still invalid
+- [x] Custom `EnrichmentError` exception
+- [x] Tests: mock client — success, retry on rate limit, schema-repair path, final failure
+- [x] Commit
 
 ### Task 4: `enrich_prompts.py` + tests
-- [ ] `build_document_prompt(meta, toc, chunks, annotations) → (system, messages)` — document-level prompt with annotation markers
-- [ ] `build_combined_prompt(meta, toc, chunks, annotations) → (system, messages)` — combined doc+chunk prompt
-- [ ] `build_chunk_batch_prompt(chunk_batch, doc_context, annotations) → (system, messages)` — chunk batch prompt
-- [ ] `build_figure_batch_prompt(figures_with_context, doc_context) → (system, messages)` — figure batch prompt (vision-ready)
-- [ ] `inject_annotations(text, annotations, page_number) → str` — wrap highlighted spans in `[HIGHLIGHTED]...[/HIGHLIGHTED]`
-- [ ] Tests: annotation injection, prompt structure validation (all required sections present)
-- [ ] Commit
+- [x] `build_document_prompt(meta, toc, chunks, annotations) → (system, messages)` — document-level prompt with annotation markers
+- [x] `build_combined_prompt(meta, toc, chunks, annotations) → (system, messages)` — combined doc+chunk prompt
+- [x] `build_chunk_batch_prompt(chunk_batch, doc_context, annotations) → (system, messages)` — chunk batch prompt
+- [x] `build_figure_batch_prompt(figures_with_context, doc_context) → (system, messages)` — figure batch prompt (vision-ready)
+- [x] `inject_annotations(text, annotations, page_number) → str` — wrap highlighted spans in `[HIGHLIGHTED]...[/HIGHLIGHTED]`
+- [x] Tests: annotation injection, prompt structure validation (all required sections present)
+- [x] Commit
 
 ### Task 5: `enrich_document.py` + tests
-- [ ] `enrich_document_stage(output_dir, config, client, *, force=False) → StageResult`
-- [ ] Parse LLM response → `MaterialMeta` enriched fields + `ConceptCandidate` list
-- [ ] Build `EnrichedField` with provenance (LLM returns `source_pages`, `evidence_spans`, `confidence`; we stamp `model`, `prompt_version`, `enriched_at`)
-- [ ] Write updated `meta.json` (merge enriched fields onto existing raw fields)
-- [ ] Write `concepts.jsonl`
-- [ ] Write `_enrichment_stamp` to `meta.json`
-- [ ] Tests: mock LLM response → verify meta.json fields, concepts.jsonl, stamp written
-- [ ] Commit
+- [x] `enrich_document_stage(output_dir, config, client, *, force=False) → StageResult`
+- [x] Parse LLM response → `MaterialMeta` enriched fields + `ConceptCandidate` list
+- [x] Build `EnrichedField` with provenance (LLM returns `source_pages`, `evidence_spans`, `confidence`; we stamp `model`, `prompt_version`, `enriched_at`)
+- [x] Write updated `meta.json` (merge enriched fields onto existing raw fields)
+- [x] Write `concepts.jsonl`
+- [x] Write `_enrichment_stamp` to `meta.json`
+- [x] Tests: mock LLM response → verify meta.json fields, concepts.jsonl, stamp written
+- [x] Commit
 
 ### Task 6: `enrich_chunks.py` + tests
-- [ ] `enrich_chunks_stage(output_dir, config, client, *, force=False) → StageResult`
-- [ ] `_compute_batches(chunks, target_per_batch) → list[list[Chunk]]` — token-budget batching
-- [ ] Accumulate all batch results in memory
-- [ ] Atomic write: `chunks.jsonl` (merge enriched fields onto existing raw chunk data) + `chunk_enrichment_stamps.json`
-- [ ] If any batch fails after retries → stage fails, no writes
-- [ ] Tests: batching logic, atomic write on success, no write on partial failure
-- [ ] Commit
+- [x] `enrich_chunks_stage(output_dir, config, client, *, force=False) → StageResult`
+- [x] `_compute_batches(chunks, target_per_batch) → list[list[Chunk]]` — token-budget batching
+- [x] Accumulate all batch results in memory
+- [x] Atomic write: `chunks.jsonl` (merge enriched fields onto existing raw chunk data) + `chunk_enrichment_stamps.json`
+- [x] If any batch fails after retries → stage fails, no writes
+- [x] Tests: batching logic, atomic write on success, no write on partial failure
+- [x] Commit
 
 ### Task 7: `enrich_figures.py` + tests
-- [ ] `enrich_figures_stage(output_dir, config, client, *, force=False) → StageResult`
-- [ ] Vision path: send image + page text + caption candidates
-- [ ] Text fallback: if image missing/unreadable, send text-only context, set `analysis_mode: "text_fallback"`
-- [ ] Write enriched fields + `analysis_mode` + `_enrichment_stamp` to each figure sidecar JSON
-- [ ] Tests: vision path, text-fallback path, analysis_mode field, stamp per figure
-- [ ] Commit
+- [x] `enrich_figures_stage(output_dir, config, client, *, force=False) → StageResult`
+- [x] Vision path: send image + page text + caption candidates
+- [x] Text fallback: if image missing/unreadable, send text-only context, set `analysis_mode: "text_fallback"`
+- [x] Write enriched fields + `analysis_mode` + `_enrichment_stamp` to each figure sidecar JSON
+- [x] Tests: vision path, text-fallback path, analysis_mode field, stamp per figure
+- [x] Commit
 
 ### Task 8: `enrich.py` orchestrator + tests
-- [ ] `enrich(material_id=None, config=None, *, force=False, stages=None, dry_run=False) → dict`
-- [ ] Load config, iterate materials (all pending or single), dispatch stages
-- [ ] Combined-call logic: if total chunk text < threshold → one LLM call for doc+chunk, parse independently, commit independently (per spec combined-call failure semantics)
-- [ ] `--dry-run`: compute staleness for each stage, print report, return without LLM calls
-- [ ] `--stage` filter: only run requested stages
-- [ ] Return dict of `{material_id: {stage: result}}`
-- [ ] Exit code logic: any stage failure → 1
-- [ ] Tests: mock stage functions — combined vs split dispatch, force flag, stage filter, dry-run
-- [ ] Commit
+- [x] `enrich(material_id=None, config=None, *, force=False, stages=None, dry_run=False) → dict`
+- [x] Load config, iterate materials (all pending or single), dispatch stages
+- [x] Combined-call logic: if total chunk text < threshold → one LLM call for doc+chunk, parse independently, commit independently (per spec combined-call failure semantics)
+- [x] `--dry-run`: compute staleness for each stage, print report, return without LLM calls
+- [x] `--stage` filter: only run requested stages
+- [x] Return dict of `{material_id: {stage: result}}`
+- [x] Exit code logic: any stage failure → 1
+- [x] Parallel stages: document + figure run concurrently, chunk waits for document
+- [x] Tests: mock stage functions — combined vs split dispatch, force flag, stage filter, dry-run
+- [x] Commit
 
 ### Task 9: CLI integration
-- [ ] Replace `arq enrich` stub: add `--force`, `--stage` (multiple), `--dry-run` options, wire to `enrich.enrich()`
-- [ ] Replace `arq extract` stub: run `extract_raw()` then `enrich()` sequentially, pass through `--force` and `--stage`
-- [ ] API key check: fail fast if missing with clear message
-- [ ] Print per-material stage results in spec format
-- [ ] Commit
+- [x] Replace `arq enrich` stub: add `--force`, `--stage` (multiple), `--dry-run` options, wire to `enrich.enrich()`
+- [x] Replace `arq extract` stub: run `extract_raw()` then `enrich()` sequentially, pass through `--force` and `--stage`
+- [x] No API key check needed — agent CLI handles auth, fast-fail on stderr detects auth issues
+- [x] Print per-material stage results in spec format
+- [x] Commit
 
 ### Task 10: Integration smoke test
-- [ ] Run `arq enrich --dry-run` on a real extracted material — verify no API key needed, staleness report printed
-- [ ] Run `arq enrich <material_id>` on a single material — verify all three stages complete, files written correctly
-- [ ] Run `arq enrich <material_id>` again — verify all stages skipped (stamps current)
-- [ ] Run `arq enrich <material_id> --force --stage document` — verify only document re-enriched
-- [ ] Update spec/plan if any behavior diverges
+- [x] Run `arq enrich --dry-run` on a real extracted material — verify no API key needed, staleness report printed
+- [x] Run `arq enrich <material_id>` on a single material — verify all three stages complete, files written correctly
+- [x] Run `arq enrich <material_id>` again — verify all stages skipped (stamps current)
+- [x] Run `arq enrich <material_id> --force --stage document` — verify only document re-enriched
+- [x] Spec/plan updated to match implementation (staleness 3-field contract, parallel stages, fast-fail, content_class/relevance)

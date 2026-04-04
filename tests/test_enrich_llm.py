@@ -106,17 +106,17 @@ class TestGetModelId:
 
 
 class TestBuildAgentCmd:
-    def test_claude_gets_bare_and_system_prompt(self):
+    def test_claude_gets_system_prompt(self):
         cmd = _build_agent_cmd(["claude", "--print"], "Be helpful.")
-        assert "--bare" in cmd
+        assert "--bare" not in cmd  # --bare breaks credential discovery
         assert "--no-session-persistence" in cmd
         assert "--system-prompt" in cmd
         idx = cmd.index("--system-prompt")
         assert cmd[idx + 1] == "Be helpful."
 
-    def test_claude_no_duplicate_bare(self):
-        cmd = _build_agent_cmd(["claude", "--print", "--bare"], "sys")
-        assert cmd.count("--bare") == 1
+    def test_claude_no_duplicate_no_session(self):
+        cmd = _build_agent_cmd(["claude", "--print", "--no-session-persistence"], "sys")
+        assert cmd.count("--no-session-persistence") == 1
 
     def test_non_claude_unchanged(self):
         cmd = _build_agent_cmd(["myagent", "run"], "sys")

@@ -268,9 +268,10 @@ def _build_prompt_text(system: str, messages: list[dict]) -> tuple[str, str]:
 def _build_agent_cmd(base_parts: list[str], system: str) -> list[str]:
     """Build the full command for an agent CLI, adding speed optimizations.
 
-    For ``claude``: adds ``--bare``, ``--no-session-persistence``, and
+    For ``claude``: adds ``--no-session-persistence`` and
     ``--system-prompt`` so startup overhead is minimized and the system
     prompt is passed natively rather than mixed into stdin.
+    (``--bare`` is intentionally avoided — it changes credential discovery.)
 
     For ``codex``: adds ``--ephemeral`` and ``--skip-git-repo-check``
     to reduce startup overhead and avoid repo enforcement.
@@ -280,8 +281,6 @@ def _build_agent_cmd(base_parts: list[str], system: str) -> list[str]:
     exe = base_parts[0]
     if exe == "claude":
         cmd = list(base_parts)
-        if "--bare" not in cmd:
-            cmd.append("--bare")
         if "--no-session-persistence" not in cmd:
             cmd.append("--no-session-persistence")
         cmd.extend(["--system-prompt", system])

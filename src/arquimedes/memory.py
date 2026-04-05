@@ -41,6 +41,20 @@ def _bridge_concept_wiki_path(slug: str) -> str:
     return f"wiki/shared/bridge-concepts/{slug}.md"
 
 
+def _load_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
 # ---------------------------------------------------------------------------
 # Schema helpers
 # ---------------------------------------------------------------------------
@@ -99,6 +113,59 @@ CREATE TABLE IF NOT EXISTS wiki_pages (
     collection TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (page_type, page_id)
 );
+
+CREATE TABLE IF NOT EXISTS cluster_reviews (
+    review_id              TEXT PRIMARY KEY,
+    cluster_id             TEXT NOT NULL DEFAULT '',
+    finding_type           TEXT NOT NULL DEFAULT '',
+    severity               TEXT NOT NULL DEFAULT '',
+    recommendation         TEXT NOT NULL DEFAULT '',
+    affected_material_ids  TEXT NOT NULL DEFAULT '[]',
+    affected_concept_names TEXT NOT NULL DEFAULT '[]',
+    evidence               TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint      TEXT NOT NULL DEFAULT '',
+    wiki_path              TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS concept_reflections (
+    cluster_id               TEXT PRIMARY KEY,
+    slug                     TEXT NOT NULL DEFAULT '',
+    canonical_name           TEXT NOT NULL DEFAULT '',
+    main_takeaways           TEXT NOT NULL DEFAULT '[]',
+    main_tensions            TEXT NOT NULL DEFAULT '[]',
+    open_questions           TEXT NOT NULL DEFAULT '[]',
+    why_this_concept_matters TEXT NOT NULL DEFAULT '',
+    supporting_material_ids  TEXT NOT NULL DEFAULT '[]',
+    supporting_evidence      TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint        TEXT NOT NULL DEFAULT '',
+    wiki_path                TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS collection_reflections (
+    domain                  TEXT NOT NULL,
+    collection              TEXT NOT NULL,
+    main_takeaways          TEXT NOT NULL DEFAULT '[]',
+    main_tensions           TEXT NOT NULL DEFAULT '[]',
+    important_material_ids  TEXT NOT NULL DEFAULT '[]',
+    important_cluster_ids   TEXT NOT NULL DEFAULT '[]',
+    open_questions          TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint       TEXT NOT NULL DEFAULT '',
+    wiki_path               TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (domain, collection)
+);
+
+CREATE TABLE IF NOT EXISTS graph_findings (
+    finding_id              TEXT PRIMARY KEY,
+    finding_type            TEXT NOT NULL DEFAULT '',
+    severity                TEXT NOT NULL DEFAULT '',
+    summary                 TEXT NOT NULL DEFAULT '',
+    details                 TEXT NOT NULL DEFAULT '',
+    affected_material_ids   TEXT NOT NULL DEFAULT '[]',
+    affected_cluster_ids    TEXT NOT NULL DEFAULT '[]',
+    candidate_future_sources TEXT NOT NULL DEFAULT '[]',
+    candidate_bridge_links  TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint       TEXT NOT NULL DEFAULT ''
+);
 """
 
 _BRIDGE_COLUMNS: list[tuple[str, str]] = [
@@ -124,7 +191,7 @@ def _ensure_bridge_schema(con: sqlite3.Connection) -> None:
 # Bridge population
 # ---------------------------------------------------------------------------
 
-def _build_bridge(con: sqlite3.Connection, clusters: list[dict]) -> dict:
+def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> dict:
     """Populate bridge tables from cluster data and materials table.
 
     Does a full replacement of concept_clusters, cluster_materials,
@@ -152,6 +219,10 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict]) -> dict:
     con.execute("DELETE FROM cluster_materials")
     con.execute("DELETE FROM cluster_relations")
     con.execute("DELETE FROM concept_clusters")
+    con.execute("DELETE FROM cluster_reviews")
+    con.execute("DELETE FROM concept_reflections")
+    con.execute("DELETE FROM collection_reflections")
+    con.execute("DELETE FROM graph_findings")
     # Rebuild FTS
     con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('delete-all')")
 
@@ -284,6 +355,125 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict]) -> dict:
         )
         n_material_pages += 1
 
+    # Collection wiki pages
+    collection_groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for info in mat_info.values():
+        domain = (info.get("domain") or "practice").strip() or "practice"
+        collection = (info.get("collection") or "").strip() or "_general"
+        collection_groups[(domain, collection)].append(info)
+    for (domain, collection), infos in collection_groups.items():
+        page_path = f"wiki/{domain}/{collection}/_index.md"
+        title = f"{domain.replace('_', ' ').title()} / {collection.replace('_', ' ').title()}"
+        con.execute(
+            """INSERT OR REPLACE INTO wiki_pages
+               (page_type, page_id, title, path, domain, collection)
+               VALUES (?,?,?,?,?,?)""",
+            ("collection", f"{domain}/{collection}", title, page_path, domain, collection),
+        )
+
+    # Cluster reviews
+    lint_dir = root / "derived" / "lint"
+    for review in _load_jsonl(lint_dir / "cluster_reviews.jsonl"):
+        review_id = review.get("review_id") or review.get("cluster_id") or review.get("finding_id") or ""
+        if not review_id:
+            continue
+        con.execute(
+            """INSERT OR REPLACE INTO cluster_reviews
+               (review_id, cluster_id, finding_type, severity, recommendation,
+                affected_material_ids, affected_concept_names, evidence,
+                input_fingerprint, wiki_path)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                review_id,
+                review.get("cluster_id", ""),
+                review.get("finding_type", ""),
+                review.get("severity", ""),
+                review.get("recommendation", ""),
+                json.dumps(review.get("affected_material_ids") or [], ensure_ascii=False),
+                json.dumps(review.get("affected_concept_names") or [], ensure_ascii=False),
+                json.dumps(review.get("evidence") or [], ensure_ascii=False),
+                review.get("input_fingerprint", ""),
+                review.get("wiki_path", ""),
+            ),
+        )
+
+    # Concept reflections
+    for reflection in _load_jsonl(lint_dir / "concept_reflections.jsonl"):
+        cluster_id = reflection.get("cluster_id", "")
+        if not cluster_id:
+            continue
+        con.execute(
+            """INSERT OR REPLACE INTO concept_reflections
+               (cluster_id, slug, canonical_name, main_takeaways, main_tensions,
+                open_questions, why_this_concept_matters, supporting_material_ids,
+                supporting_evidence, input_fingerprint, wiki_path)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (
+                cluster_id,
+                reflection.get("slug", ""),
+                reflection.get("canonical_name", ""),
+                json.dumps(reflection.get("main_takeaways") or [], ensure_ascii=False),
+                json.dumps(reflection.get("main_tensions") or [], ensure_ascii=False),
+                json.dumps(reflection.get("open_questions") or [], ensure_ascii=False),
+                reflection.get("why_this_concept_matters", ""),
+                json.dumps(reflection.get("supporting_material_ids") or [], ensure_ascii=False),
+                json.dumps(reflection.get("supporting_evidence") or [], ensure_ascii=False),
+                reflection.get("input_fingerprint", ""),
+                reflection.get("wiki_path", ""),
+            ),
+        )
+
+    # Collection reflections
+    for reflection in _load_jsonl(lint_dir / "collection_reflections.jsonl"):
+        domain = reflection.get("domain", "")
+        collection = reflection.get("collection", "")
+        if not domain or not collection:
+            continue
+        con.execute(
+            """INSERT OR REPLACE INTO collection_reflections
+               (domain, collection, main_takeaways, main_tensions,
+                important_material_ids, important_cluster_ids, open_questions,
+                input_fingerprint, wiki_path)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                domain,
+                collection,
+                json.dumps(reflection.get("main_takeaways") or [], ensure_ascii=False),
+                json.dumps(reflection.get("main_tensions") or [], ensure_ascii=False),
+                json.dumps(reflection.get("important_material_ids") or [], ensure_ascii=False),
+                json.dumps(reflection.get("important_cluster_ids") or [], ensure_ascii=False),
+                json.dumps(reflection.get("open_questions") or [], ensure_ascii=False),
+                reflection.get("input_fingerprint", ""),
+                reflection.get("wiki_path", ""),
+            ),
+        )
+
+    # Graph findings
+    for finding in _load_jsonl(lint_dir / "graph_findings.jsonl"):
+        finding_id = finding.get("finding_id", "")
+        if not finding_id:
+            continue
+        con.execute(
+            """INSERT OR REPLACE INTO graph_findings
+               (finding_id, finding_type, severity, summary, details,
+                affected_material_ids, affected_cluster_ids,
+                candidate_future_sources, candidate_bridge_links,
+                input_fingerprint)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                finding_id,
+                finding.get("finding_type", ""),
+                finding.get("severity", ""),
+                finding.get("summary", ""),
+                finding.get("details", ""),
+                json.dumps(finding.get("affected_material_ids") or [], ensure_ascii=False),
+                json.dumps(finding.get("affected_cluster_ids") or [], ensure_ascii=False),
+                json.dumps(finding.get("candidate_future_sources") or [], ensure_ascii=False),
+                json.dumps(finding.get("candidate_bridge_links") or [], ensure_ascii=False),
+                finding.get("input_fingerprint", ""),
+            ),
+        )
+
     return {
         "clusters": len(clusters),
         "aliases": n_aliases,
@@ -308,13 +498,23 @@ def _fingerprint_file(path: Path) -> str:
 def _cluster_fingerprint(root: Path) -> str:
     local_path = root / "derived" / "concept_clusters.jsonl"
     bridge_path = root / "derived" / "bridge_concept_clusters.jsonl"
-    if not local_path.exists() and not bridge_path.exists():
+    lint_dir = root / "derived" / "lint"
+    lint_paths = [
+        lint_dir / "cluster_reviews.jsonl",
+        lint_dir / "concept_reflections.jsonl",
+        lint_dir / "collection_reflections.jsonl",
+        lint_dir / "graph_findings.jsonl",
+    ]
+    if not local_path.exists() and not bridge_path.exists() and not any(path.exists() for path in lint_paths):
         return ""
     hasher = hashlib.sha256()
     if local_path.exists():
         hasher.update(local_path.read_bytes())
     if bridge_path.exists():
         hasher.update(bridge_path.read_bytes())
+    for path in lint_paths:
+        if path.exists():
+            hasher.update(path.read_bytes())
     return hasher.hexdigest()[:16]
 
 
@@ -387,7 +587,7 @@ def memory_rebuild(config: dict | None = None) -> dict:
     con.row_factory = sqlite3.Row
     try:
         _ensure_bridge_schema(con)
-        counts = _build_bridge(con, clusters)
+        counts = _build_bridge(con, clusters, root)
         con.commit()
     finally:
         con.close()

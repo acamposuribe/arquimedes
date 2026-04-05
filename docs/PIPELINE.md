@@ -1,7 +1,7 @@
 # Arquimedes — Operational Pipeline
 
 > **Purpose:** quick reference for what happens when a new file is added, which steps use an LLM, and what the final published outputs are.
-> **Related docs:** [Implementation plan](PLAN.md), [Global spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md), [Phase 5 wiki compiler](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md), [Phase 5.5 memory bridge](superpowers/completed/specs/2026-04-05-phase5-5-memory-bridge-design.md)
+> **Related docs:** [Implementation plan](PLAN.md), [Global spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md), [Phase 5 wiki compiler](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md), [Phase 5.5 memory bridge](superpowers/completed/specs/2026-04-05-phase5-5-memory-bridge-design.md), [Phase 6 lint](superpowers/specs/2026-04-05-phase6-lint-design.md)
 
 ## End Product
 
@@ -104,6 +104,7 @@ When a collaborator adds a file to the shared library root:
   - glossary
   - `_index.md` pages
 - No LLM
+- After compile, Arquimedes automatically runs `arq lint --quick` so deterministic health stays current
 
 7. **Automatic memory rebuild**
 - Runs as part of `arq compile`
@@ -122,6 +123,7 @@ When a collaborator adds a file to the shared library root:
 
 - `arq extract` (enrichment stage)
 - `arq cluster`
+- `arq lint --full` (scheduled reflective maintenance pass)
 
 ### Deterministic steps
 
@@ -129,6 +131,7 @@ When a collaborator adds a file to the shared library root:
 - `arq extract-raw`
 - `arq index rebuild`
 - `arq compile`
+- `arq lint --quick`
 - `arq memory rebuild`
 - `arq index ensure`
 - `arq memory ensure`

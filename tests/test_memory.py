@@ -360,6 +360,91 @@ class TestWikiPages:
         assert "bridge-concepts" in row[0]
 
 
+class TestReflectionTables:
+    def test_reflection_records_are_queryable(self, repo):
+        _setup_two_materials_with_clusters(repo)
+        lint_dir = repo / "derived" / "lint"
+        lint_dir.mkdir(parents=True, exist_ok=True)
+        (lint_dir / "cluster_reviews.jsonl").write_text(
+            json.dumps({
+                "review_id": "concept_0001:0:merge",
+                "cluster_id": "concept_0001",
+                "finding_type": "merge",
+                "severity": "medium",
+                "recommendation": "Consider merging.",
+                "affected_material_ids": [_MID_A, _MID_B],
+                "affected_concept_names": ["archival habitat"],
+                "evidence": ["shared archive frame"],
+                "input_fingerprint": "abc",
+                "wiki_path": "wiki/shared/concepts/archive-as-architectural-space.md",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        (lint_dir / "concept_reflections.jsonl").write_text(
+            json.dumps({
+                "cluster_id": "concept_0001",
+                "slug": "archive-as-architectural-space",
+                "canonical_name": "Archive as Architectural Space",
+                "main_takeaways": ["Shared concern with spatial archives"],
+                "main_tensions": ["Theory vs use"],
+                "open_questions": ["What is the archive doing?"],
+                "why_this_concept_matters": "It shapes the corpus.",
+                "supporting_material_ids": [_MID_A, _MID_B],
+                "supporting_evidence": ["shared archive frame"],
+                "input_fingerprint": "def",
+                "wiki_path": "wiki/shared/concepts/archive-as-architectural-space.md",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        (lint_dir / "collection_reflections.jsonl").write_text(
+            json.dumps({
+                "collection_key": "research/_general",
+                "domain": "research",
+                "collection": "_general",
+                "main_takeaways": ["The collection centers archival space."],
+                "main_tensions": ["Theory vs use"],
+                "important_material_ids": [_MID_A, _MID_B],
+                "important_cluster_ids": ["concept_0001"],
+                "open_questions": ["What else is in the archive?"],
+                "input_fingerprint": "ghi",
+                "wiki_path": "wiki/research/_general/_index.md",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        (lint_dir / "graph_findings.jsonl").write_text(
+            json.dumps({
+                "finding_id": "graph:0",
+                "finding_type": "bridge",
+                "severity": "low",
+                "summary": "Add a missing bridge link.",
+                "details": "The graph could connect these materials more directly.",
+                "affected_material_ids": [_MID_A, _MID_B],
+                "affected_cluster_ids": ["concept_0001"],
+                "candidate_future_sources": ["oral history"],
+                "candidate_bridge_links": ["archive and memory"],
+                "input_fingerprint": "jkl",
+            }) + "\n",
+            encoding="utf-8",
+        )
+        memory_rebuild()
+
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        counts = {
+            "cluster_reviews": con.execute("SELECT COUNT(*) FROM cluster_reviews").fetchone()[0],
+            "concept_reflections": con.execute("SELECT COUNT(*) FROM concept_reflections").fetchone()[0],
+            "collection_reflections": con.execute("SELECT COUNT(*) FROM collection_reflections").fetchone()[0],
+            "graph_findings": con.execute("SELECT COUNT(*) FROM graph_findings").fetchone()[0],
+        }
+        con.close()
+
+        assert counts == {
+            "cluster_reviews": 1,
+            "concept_reflections": 1,
+            "collection_reflections": 1,
+            "graph_findings": 1,
+        }
+
+
 class TestConceptClustersExtraColumns:
     def test_wiki_path_populated(self, repo):
         _setup_two_materials_with_clusters(repo)

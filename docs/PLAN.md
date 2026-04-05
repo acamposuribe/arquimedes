@@ -1,6 +1,6 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phases 1-5.5 complete; Phase 6 next
+> **Status:** Phases 1-6 complete; Phase 7 next
 > **Last updated:** 2026-04-05
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 5 spec:** [Wiki compiler design](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
@@ -108,15 +108,17 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 6: Wiki Linting & Health Checks
 
-- [ ] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment, stale index, stale memory bridge, duplicates, missing compiled pages
-- [ ] **(cluster audit)** LLM review of `derived/concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
-- [ ] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters`
-- [ ] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, and open questions grounded in linked materials
-- [ ] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas
-- [ ] Feed reflective outputs back into searchable memory so agents can query takeaways, tensions, and open questions, not only graph topology
-- [ ] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --report`, `arq lint --fix`
-- [ ] Provenance on every LLM suggestion
-- [ ] Define the health-check and maintenance behaviors the future server maintainer will run automatically
+Deterministic lint, reflective passes, memory projection, and lint scheduling are implemented in code and verified by tests. The remaining work is Phase 7+ tooling and any future daemon wiring around these maintained layers.
+
+- [x] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment, stale index, stale memory bridge, duplicates, missing compiled pages
+- [x] **(cluster audit)** LLM review of `derived/concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
+- [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters`
+- [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, and open questions grounded in linked materials
+- [x] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas
+- [x] Feed reflective outputs back into searchable memory so agents can query takeaways, tensions, and open questions, not only graph topology
+- [x] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --report`, `arq lint --fix`
+- [x] Provenance on every LLM suggestion
+- [x] Define the health-check and maintenance behaviors the future server maintainer will run automatically
 
 ## Phase 7: Agent Tools
 
@@ -138,7 +140,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - [ ] Debouncing + batching (10s window, single commit per batch)
 - [ ] `arq sync` — auto-pull daemon for collaborators with `arq index ensure` after pull, so local search and memory are always current before use
 - [ ] `arq sync` should inherit the memory bridge automatically via `arq index ensure` → `arq memory ensure`
-- [ ] `arq lint --quick` after each compile, `arq lint --full` on weekly schedule
+- [x] `arq lint --quick` after each compile, `arq lint --full` on weekly schedule
 - [ ] launchd integration for both watch and sync
 - [ ] Auto-commit + push pipeline
 - [ ] Always-on maintainer flow: ingest → extract → compile → lint/index → commit/push

@@ -211,13 +211,66 @@ CREATE TABLE IF NOT EXISTS concept_cluster_aliases (
 
 -- Wiki page registry; populated by arq memory rebuild.
 CREATE TABLE IF NOT EXISTS wiki_pages (
-    page_type  TEXT NOT NULL,           -- material | concept
+    page_type  TEXT NOT NULL,           -- material | concept | collection
     page_id    TEXT NOT NULL,           -- material_id or cluster_id
     title      TEXT NOT NULL DEFAULT '',
     path       TEXT NOT NULL UNIQUE,
     domain     TEXT NOT NULL DEFAULT '',
     collection TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (page_type, page_id)
+);
+
+CREATE TABLE IF NOT EXISTS cluster_reviews (
+    review_id              TEXT PRIMARY KEY,
+    cluster_id             TEXT NOT NULL DEFAULT '',
+    finding_type           TEXT NOT NULL DEFAULT '',
+    severity               TEXT NOT NULL DEFAULT '',
+    recommendation         TEXT NOT NULL DEFAULT '',
+    affected_material_ids  TEXT NOT NULL DEFAULT '[]',
+    affected_concept_names TEXT NOT NULL DEFAULT '[]',
+    evidence               TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint      TEXT NOT NULL DEFAULT '',
+    wiki_path              TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS concept_reflections (
+    cluster_id               TEXT PRIMARY KEY,
+    slug                     TEXT NOT NULL DEFAULT '',
+    canonical_name           TEXT NOT NULL DEFAULT '',
+    main_takeaways           TEXT NOT NULL DEFAULT '[]',
+    main_tensions            TEXT NOT NULL DEFAULT '[]',
+    open_questions           TEXT NOT NULL DEFAULT '[]',
+    why_this_concept_matters TEXT NOT NULL DEFAULT '',
+    supporting_material_ids  TEXT NOT NULL DEFAULT '[]',
+    supporting_evidence      TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint        TEXT NOT NULL DEFAULT '',
+    wiki_path                TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS collection_reflections (
+    domain                  TEXT NOT NULL,
+    collection              TEXT NOT NULL,
+    main_takeaways          TEXT NOT NULL DEFAULT '[]',
+    main_tensions           TEXT NOT NULL DEFAULT '[]',
+    important_material_ids  TEXT NOT NULL DEFAULT '[]',
+    important_cluster_ids   TEXT NOT NULL DEFAULT '[]',
+    open_questions          TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint       TEXT NOT NULL DEFAULT '',
+    wiki_path               TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (domain, collection)
+);
+
+CREATE TABLE IF NOT EXISTS graph_findings (
+    finding_id              TEXT PRIMARY KEY,
+    finding_type            TEXT NOT NULL DEFAULT '',
+    severity                TEXT NOT NULL DEFAULT '',
+    summary                 TEXT NOT NULL DEFAULT '',
+    details                 TEXT NOT NULL DEFAULT '',
+    affected_material_ids   TEXT NOT NULL DEFAULT '[]',
+    affected_cluster_ids    TEXT NOT NULL DEFAULT '[]',
+    candidate_future_sources TEXT NOT NULL DEFAULT '[]',
+    candidate_bridge_links  TEXT NOT NULL DEFAULT '[]',
+    input_fingerprint       TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS index_state (
@@ -715,6 +768,55 @@ def index_clusters(config: dict | None = None) -> int:
                 domain     TEXT NOT NULL DEFAULT '',
                 collection TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (page_type, page_id)
+            );
+            CREATE TABLE IF NOT EXISTS cluster_reviews (
+                review_id              TEXT PRIMARY KEY,
+                cluster_id             TEXT NOT NULL DEFAULT '',
+                finding_type           TEXT NOT NULL DEFAULT '',
+                severity               TEXT NOT NULL DEFAULT '',
+                recommendation         TEXT NOT NULL DEFAULT '',
+                affected_material_ids  TEXT NOT NULL DEFAULT '[]',
+                affected_concept_names TEXT NOT NULL DEFAULT '[]',
+                evidence               TEXT NOT NULL DEFAULT '[]',
+                input_fingerprint      TEXT NOT NULL DEFAULT '',
+                wiki_path              TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS concept_reflections (
+                cluster_id               TEXT PRIMARY KEY,
+                slug                     TEXT NOT NULL DEFAULT '',
+                canonical_name           TEXT NOT NULL DEFAULT '',
+                main_takeaways           TEXT NOT NULL DEFAULT '[]',
+                main_tensions            TEXT NOT NULL DEFAULT '[]',
+                open_questions           TEXT NOT NULL DEFAULT '[]',
+                why_this_concept_matters TEXT NOT NULL DEFAULT '',
+                supporting_material_ids  TEXT NOT NULL DEFAULT '[]',
+                supporting_evidence      TEXT NOT NULL DEFAULT '[]',
+                input_fingerprint        TEXT NOT NULL DEFAULT '',
+                wiki_path                TEXT NOT NULL DEFAULT ''
+            );
+            CREATE TABLE IF NOT EXISTS collection_reflections (
+                domain                  TEXT NOT NULL,
+                collection              TEXT NOT NULL,
+                main_takeaways          TEXT NOT NULL DEFAULT '[]',
+                main_tensions           TEXT NOT NULL DEFAULT '[]',
+                important_material_ids  TEXT NOT NULL DEFAULT '[]',
+                important_cluster_ids   TEXT NOT NULL DEFAULT '[]',
+                open_questions          TEXT NOT NULL DEFAULT '[]',
+                input_fingerprint       TEXT NOT NULL DEFAULT '',
+                wiki_path               TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (domain, collection)
+            );
+            CREATE TABLE IF NOT EXISTS graph_findings (
+                finding_id              TEXT PRIMARY KEY,
+                finding_type            TEXT NOT NULL DEFAULT '',
+                severity                TEXT NOT NULL DEFAULT '',
+                summary                 TEXT NOT NULL DEFAULT '',
+                details                 TEXT NOT NULL DEFAULT '',
+                affected_material_ids   TEXT NOT NULL DEFAULT '[]',
+                affected_cluster_ids    TEXT NOT NULL DEFAULT '[]',
+                candidate_future_sources TEXT NOT NULL DEFAULT '[]',
+                candidate_bridge_links  TEXT NOT NULL DEFAULT '[]',
+                input_fingerprint       TEXT NOT NULL DEFAULT ''
             );
         """)
         count = _populate_clusters(con, root)

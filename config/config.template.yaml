@@ -105,3 +105,12 @@ library_root: "~/Arquimedes-Library"
 # serve:
 #   host: "0.0.0.0"
 #   port: 8420
+
+# Lint scheduling
+# lint:
+#   post_compile_quick: true   # run `arq lint --quick` automatically after compile
+#   full_schedule_min_hours: 168
+#   graph_schedule:
+#     min_interval_hours: 168
+#     min_cluster_delta: 3
+#     min_material_delta: 5

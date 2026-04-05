@@ -97,7 +97,13 @@ Required checks:
 
 Output:
 - terminal report
+- optional machine-readable JSON on `--json`
 - structured JSON report in `derived/lint/deterministic_report.json`
+
+CLI exit codes:
+- `0` when no deterministic issues are found
+- `1` when deterministic issues exist but none are high severity
+- `2` when deterministic findings include at least one high-severity issue
 
 `--fix` may auto-apply only deterministic fixes such as:
 - rebuild index
@@ -264,6 +270,49 @@ The default safety model should be:
 - `--full`: generate reflective artifacts, no broad page mutation by default
 - `--fix`: deterministic fixes + explicitly safe or approved reflective page updates
 
+## Cumulative Reflection Context
+
+Phase 6 reflection is cumulative, not stateless.
+
+When a concept or collection is reflected again:
+- keep the previous reflection sections visible in the page
+- feed those prior conclusions back into the next LLM pass
+- combine them with rich evidence packets: new evidence, changed clusters, newly linked materials, and representative excerpts from supporting materials
+- allow the model to revise, extend, or contradict prior conclusions
+
+The system should not clear reflective memory on every rerun.
+It should build on existing conclusions the way human memory does.
+
+## Read-Only Search Tool
+
+Reflection passes may need more context than the default packet provides.
+
+Phase 6 should therefore expose a narrow, read-only search tool backed by the SQL index.
+
+Allowed operations:
+- search materials
+- search concepts
+- search collections
+- open a result record by id
+
+Constraints:
+- query-only
+- no repository traversal
+- no filesystem writes
+- no arbitrary file access
+- no code execution
+
+The tool exists so reflection can ask for targeted extra context without requiring full material pages in every prompt.
+It is a supplement to the default packet, not a replacement for it.
+
+The default packet should already be rich enough to support good conclusions:
+- current page reflection text
+- new or changed evidence
+- representative excerpts from linked materials
+- key chunk summaries / annotations / figure descriptions when relevant
+
+The search tool is for filling gaps, not for making the prompt thin by default.
+
 ## Memory Integration
 
 This is the key architectural move.
@@ -333,6 +382,8 @@ Because graph reflection is the most expensive and least localized pass, it shou
   - write reports/artifacts without applying
 - `arq lint --fix`
   - apply deterministic fixes and accepted reflective wiki updates
+- `arq lint --json`
+  - emit machine-readable CLI output
 
 ## Scheduling
 

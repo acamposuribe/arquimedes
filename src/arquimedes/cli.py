@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import click
 
 from arquimedes import __version__
@@ -357,11 +359,50 @@ def compile(full: bool, force_cluster: bool):
 
 @cli.command()
 @click.option("--quick", is_flag=True, help="Deterministic checks only (no LLM)")
+@click.option("--full", is_flag=True, help="Deterministic checks plus reflective LLM passes")
 @click.option("--report", is_flag=True, help="Write report to wiki/_lint_report.md")
 @click.option("--fix", is_flag=True, help="Auto-fix deterministic issues, queue LLM suggestions")
-def lint(quick: bool, report: bool, fix: bool):
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON")
+def lint(quick: bool, full: bool, report: bool, fix: bool, as_json: bool):
     """Run health checks on the knowledge base."""
-    click.echo("arq lint: not yet implemented")
+    from arquimedes.config import load_config
+    from arquimedes.lint import lint_exit_code, run_lint
+
+    try:
+        result = run_lint(load_config(), quick=quick, full=full, report=report, fix=fix)
+    except (ValueError, FileNotFoundError) as e:
+        raise click.ClickException(str(e))
+    except Exception as e:
+        raise click.ClickException(str(e))
+
+    if as_json:
+        click.echo(json.dumps(result, ensure_ascii=False, indent=2))
+    else:
+        det = result.get("deterministic", {})
+        summary = det.get("summary", {}) if isinstance(det, dict) else {}
+        click.echo(f"Deterministic lint ({result.get('mode', 'quick')}):")
+        click.echo(f"  issues: {summary.get('issues', 0)}")
+        click.echo(f"  high:   {summary.get('high', 0)}")
+        click.echo(f"  medium: {summary.get('medium', 0)}")
+        click.echo(f"  low:    {summary.get('low', 0)}")
+
+        fixes = result.get("fixes")
+        if isinstance(fixes, dict) and fixes.get("details"):
+            click.echo("Fixes:")
+            for item in fixes["details"]:
+                click.echo(f"  - {item}")
+
+        reflection = result.get("reflection")
+        if isinstance(reflection, dict):
+            click.echo("Reflective passes:")
+            click.echo(f"  cluster reviews:      {reflection.get('cluster_reviews', 0)}")
+            click.echo(f"  concept reflections:  {reflection.get('concept_reflections', 0)}")
+            click.echo(f"  collection reflections: {reflection.get('collection_reflections', 0)}")
+            click.echo(f"  graph findings:       {reflection.get('graph_findings', 0)}")
+
+        click.echo(f"Lint report: {result.get('report_path')}")
+
+    raise SystemExit(lint_exit_code(result))
 
 
 @cli.group()

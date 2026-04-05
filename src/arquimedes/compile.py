@@ -429,12 +429,24 @@ def compile_wiki(
     except FileNotFoundError:
         pass  # index or cluster file absent — safe to skip
 
+    quick_lint_summary = None
+    lint_cfg = config.get("lint", {}) if isinstance(config, dict) else {}
+    if lint_cfg.get("post_compile_quick", True):
+        try:
+            from arquimedes.lint import run_lint
+
+            quick_lint_summary = run_lint(config, quick=True, report=True)
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.warning("Post-compile quick lint failed: %s", exc)
+            quick_lint_summary = {"error": str(exc)}
+
     return {
         "material_pages": mat_pages_written,
         "material_pages_skipped": mat_pages_skipped,
         "concept_pages": concept_pages_written,
         "index_pages": index_pages_written,
         "orphans_removed": len(orphans),
+        "quick_lint": quick_lint_summary,
         "clustering": {
             "local": local_cluster_summary,
             "bridge": bridge_cluster_summary,

@@ -1,0 +1,2217 @@
+"""Phase 6 linting, reflection, and memory growth.
+
+This module implements the maintenance pass for Arquimedes:
+- deterministic health checks first
+- reflective LLM passes second
+- optional materialization back into wiki pages
+- projection of reflection artifacts into the SQLite memory bridge
+
+The design follows the Phase 6 spec closely:
+- deterministic checks are always run first
+- expensive passes are dirty-set driven
+- concept reflections and collection reflections can run in parallel
+- graph reflection is the final global pass
+- reflective outputs are durable files under ``derived/lint/``
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import re
+import sqlite3
+import threading
+from datetime import datetime, timezone
+from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+from typing import Any
+
+from arquimedes.cluster import (
+    is_bridge_clustering_stale,
+    is_clustering_stale,
+    load_bridge_clusters,
+    load_clusters,
+)
+from arquimedes.compile import compile_wiki
+from arquimedes.compile_pages import (
+    _concept_wiki_path,
+    _material_wiki_path,
+    _meta_val,
+    render_collection_page,
+)
+from arquimedes.config import get_project_root, load_config
+from arquimedes.enrich import _is_chunk_stale, _is_document_stale, _is_figure_stale
+from arquimedes.enrich_llm import EnrichmentError, LlmFn, make_cli_llm_fn, parse_json_or_repair
+from arquimedes.enrich_stamps import canonical_hash
+from arquimedes.index import (
+    _compute_extracted_snapshot,
+    _compute_manifest_hash,
+    _count_manifest_lines,
+    _newest_input_mtime,
+    _read_manifest_ids,
+    get_index_path,
+)
+from arquimedes.memory import memory_rebuild
+
+
+LINT_DIR = "derived/lint"
+REPORT_PATH = Path("wiki/_lint_report.md")
+FULL_LINT_STAMP_PATH = Path(LINT_DIR) / "full_lint_stamp.json"
+GRAPH_REFLECTION_STAMP_PATH = Path(LINT_DIR) / "graph_reflection_stamp.json"
+DEFAULT_FULL_LINT_INTERVAL_HOURS = 168.0
+DEFAULT_GRAPH_REFLECTION_INTERVAL_HOURS = 168.0
+DEFAULT_GRAPH_REFLECTION_MIN_CLUSTER_DELTA = 3
+DEFAULT_GRAPH_REFLECTION_MIN_MATERIAL_DELTA = 5
+MAX_CONTEXT_REQUESTS_PER_PASS = 4
+_LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+_FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+
+
+# ---------------------------------------------------------------------------
+# Generic file helpers
+# ---------------------------------------------------------------------------
+
+def _load_json(path: Path, default=None):
+    if not path.exists():
+        return default
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return default
+
+
+def _load_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line:
+            try:
+                rows.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+    return rows
+
+
+def _write_jsonl(path: Path, rows: list[dict]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = "\n".join(json.dumps(row, ensure_ascii=False) for row in rows)
+    if rows:
+        text += "\n"
+    path.write_text(text, encoding="utf-8")
+
+
+def _write_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _read_stamp(path: Path) -> dict:
+    return _load_json(path, {}) or {}
+
+
+def _write_stamp(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _parse_iso_datetime(value: Any) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _lint_schedule_config(config: dict | None = None) -> dict:
+    lint_cfg = (config or {}).get("lint", {}) if isinstance(config, dict) else {}
+    return lint_cfg if isinstance(lint_cfg, dict) else {}
+
+
+def _issue(
+    check: str,
+    severity: str,
+    title: str,
+    detail: str,
+    *,
+    path: str = "",
+    material_id: str = "",
+    collection: str = "",
+    domain: str = "",
+    cluster_id: str = "",
+    target: str = "",
+    fixable: bool = False,
+) -> dict:
+    return {
+        "check": check,
+        "severity": severity,
+        "title": title,
+        "detail": detail,
+        "path": path,
+        "material_id": material_id,
+        "collection": collection,
+        "domain": domain,
+        "cluster_id": cluster_id,
+        "target": target,
+        "fixable": fixable,
+    }
+
+
+def _material_page_path(meta: dict) -> Path:
+    return Path(_material_wiki_path(meta))
+
+
+def _concept_page_path(cluster: dict) -> Path:
+    return Path(cluster.get("wiki_path") or _concept_wiki_path(cluster["slug"]))
+
+
+def _collection_page_path(domain: str, collection: str) -> Path:
+    collection = collection or "_general"
+    return Path(f"wiki/{domain}/{collection}/_index.md")
+
+
+def _read_text(path: Path) -> str:
+    try:
+        return path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+
+
+def _strip_fences(text: str) -> str:
+    return _FENCE_RE.sub("", text)
+
+
+def _extract_links(md_text: str) -> list[str]:
+    links = []
+    for match in _LINK_RE.finditer(_strip_fences(md_text)):
+        target = match.group(1).strip()
+        if target:
+            links.append(target)
+    return links
+
+
+def _resolve_wiki_link(page_path: Path, target: str, wiki_root: Path, root: Path) -> Path | None:
+    if not target or target.startswith("#"):
+        return None
+    if target.startswith(("http://", "https://", "mailto:", "file://")):
+        return None
+    target = target.split("#", 1)[0].strip()
+    if not target:
+        return None
+    if target.startswith("wiki/"):
+        resolved = root / target
+    else:
+        resolved = (page_path.parent / target).resolve()
+    try:
+        resolved.relative_to(root)
+    except ValueError:
+        return None
+    return resolved
+
+
+def _safe_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(v) for v in value if str(v).strip()]
+    if isinstance(value, str) and value.strip():
+        return [value.strip()]
+    return []
+
+
+def _truncate(text: str, limit: int = 220) -> str:
+    text = (text or "").strip()
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _parse_json_list(value: str | None) -> list[Any]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    return parsed if isinstance(parsed, list) else []
+
+
+def _extract_marked_section(page_text: str, marker: str) -> str:
+    start = f"<!-- phase6:{marker}:start -->"
+    end = f"<!-- phase6:{marker}:end -->"
+    if start not in page_text or end not in page_text:
+        return ""
+    before, rest = page_text.split(start, 1)
+    section, _after = rest.split(end, 1)
+    return section.strip()
+
+
+class ReflectionIndexTool:
+    """Read-only SQL-backed context tool for Phase 6 reflection passes."""
+
+    def __init__(self, root: Path):
+        self.root = root
+        self.index_path = get_index_path()
+        if not self.index_path.exists():
+            raise FileNotFoundError(
+                f"Search index not found at {self.index_path}. Run `arq index rebuild` first."
+            )
+        self.con = sqlite3.connect(f"file:{self.index_path}?mode=ro", uri=True, check_same_thread=False)
+        self.con.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
+
+    def close(self) -> None:
+        self.con.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+    @staticmethod
+    def _row_to_dict(row: sqlite3.Row) -> dict:
+        return {k: row[k] for k in row.keys()}
+
+    def _material_evidence(self, material_id: str, query_terms: list[str] | None = None) -> dict:
+        query_terms = [str(term).lower() for term in (query_terms or []) if str(term).strip()]
+        with self._lock:
+            chunks = []
+            for row in self.con.execute(
+                """
+                SELECT chunk_id, summary, text, source_pages, emphasized, content_class
+                FROM chunks
+                WHERE material_id = ?
+                ORDER BY emphasized DESC, rowid
+                LIMIT 4
+                """,
+                [material_id],
+            ).fetchall():
+                text = row["text"] or ""
+                summary = row["summary"] or ""
+                haystack = f"{summary} {text}".lower()
+                score = 1 if any(term in haystack for term in query_terms) else 0
+                chunks.append({
+                    "chunk_id": row["chunk_id"],
+                    "source_pages": _parse_json_list(row["source_pages"]),
+                    "content_class": row["content_class"],
+                    "summary": summary,
+                    "excerpt": _truncate(text or summary, 180),
+                    "relevance": score,
+                })
+            chunks.sort(key=lambda item: (-item["relevance"], item["chunk_id"]))
+
+            annotations = []
+            for row in self.con.execute(
+                """
+                SELECT annotation_id, type, page, quoted_text, comment
+                FROM annotations
+                WHERE material_id = ?
+                ORDER BY (CASE WHEN comment = '' THEN 1 ELSE 0 END), rowid
+                LIMIT 2
+                """,
+                [material_id],
+            ).fetchall():
+                annotations.append({
+                    "annotation_id": row["annotation_id"],
+                    "type": row["type"],
+                    "page": row["page"],
+                    "quoted_text": _truncate(row["quoted_text"] or "", 180),
+                    "comment": _truncate(row["comment"] or "", 160),
+                })
+
+            figures = []
+            for row in self.con.execute(
+                """
+                SELECT figure_id, description, visual_type, source_page, relevance
+                FROM figures
+                WHERE material_id = ?
+                ORDER BY (CASE WHEN relevance = 'substantive' THEN 0 ELSE 1 END), rowid
+                LIMIT 2
+                """,
+                [material_id],
+            ).fetchall():
+                figures.append({
+                    "figure_id": row["figure_id"],
+                    "description": _truncate(row["description"] or "", 180),
+                    "visual_type": row["visual_type"],
+                    "source_page": row["source_page"],
+                    "relevance": row["relevance"],
+                })
+
+            concepts = []
+            for row in self.con.execute(
+                """
+                SELECT concept_name, concept_type, relevance, source_pages, evidence_spans, confidence
+                FROM concepts
+                WHERE material_id = ?
+                ORDER BY (CASE WHEN concept_type = 'bridge' THEN 0 ELSE 1 END), rowid
+                LIMIT 4
+                """,
+                [material_id],
+            ).fetchall():
+                concepts.append({
+                    "concept_name": row["concept_name"],
+                    "concept_type": row["concept_type"],
+                    "relevance": row["relevance"],
+                    "source_pages": _parse_json_list(row["source_pages"]),
+                    "evidence_spans": _parse_json_list(row["evidence_spans"]),
+                    "confidence": row["confidence"] or 0.0,
+                })
+
+            return {
+                "chunks": chunks[:2],
+                "annotations": annotations,
+                "figures": figures,
+                "concepts": concepts,
+            }
+
+    def search_materials(self, query: str, limit: int = 5) -> list[dict]:
+        from arquimedes.search import search as do_search
+
+        query = (query or "").strip()
+        if not query:
+            return []
+        result = do_search(query, depth=2, limit=limit, chunk_limit=2, annotation_limit=1, figure_limit=1, concept_limit=2)
+        return [card.to_dict() for card in result.results[:limit]]
+
+    def search_concepts(self, query: str, limit: int = 5) -> list[dict]:
+        query = (query or "").strip()
+        if not query:
+            return []
+        with self._lock:
+            clusters = []
+            try:
+                rows = self.con.execute(
+                    """
+                    SELECT cc.cluster_id, cc.canonical_name, cc.slug, cc.aliases, cc.material_count,
+                           cc.wiki_path
+                    FROM concept_clusters_fts
+                    JOIN concept_clusters cc ON concept_clusters_fts.rowid = cc.rowid
+                    WHERE concept_clusters_fts MATCH ?
+                    ORDER BY concept_clusters_fts.rank
+                    LIMIT ?
+                    """,
+                    [query, limit],
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            for row in rows:
+                clusters.append({
+                    "kind": "cluster",
+                    "cluster_id": row["cluster_id"],
+                    "canonical_name": row["canonical_name"],
+                    "slug": row["slug"],
+                    "aliases": _parse_json_list(row["aliases"]),
+                    "material_count": row["material_count"] or 0,
+                    "wiki_path": row["wiki_path"] or "",
+                })
+            concepts = []
+            for row in self.con.execute(
+                """
+                SELECT co.concept_name, co.material_id, co.concept_type, co.concept_key, co.relevance, co.source_pages, co.evidence_spans, co.confidence
+                FROM concepts_fts
+                JOIN concepts co ON concepts_fts.rowid = co.rowid
+                WHERE concepts_fts MATCH ?
+                ORDER BY concepts_fts.rank
+                LIMIT ?
+                """,
+                [query, limit],
+            ).fetchall():
+                concepts.append({
+                    "kind": "concept",
+                    "concept_name": row["concept_name"],
+                    "material_id": row["material_id"],
+                    "concept_type": row["concept_type"],
+                    "concept_key": row["concept_key"],
+                    "relevance": row["relevance"],
+                    "source_pages": _parse_json_list(row["source_pages"]),
+                    "evidence_spans": _parse_json_list(row["evidence_spans"]),
+                    "confidence": row["confidence"] or 0.0,
+                })
+            return clusters + concepts
+
+    def search_collections(self, query: str, limit: int = 5) -> list[dict]:
+        query = (query or "").strip()
+        if not query:
+            return []
+        with self._lock:
+            try:
+                rows = self.con.execute(
+                    """
+                    SELECT m.domain, m.collection, COUNT(*) AS material_count,
+                           MAX(m.title) AS sample_title
+                    FROM materials m
+                    WHERE m.collection LIKE ? OR m.domain LIKE ? OR m.title LIKE ? OR m.summary LIKE ?
+                          OR m.keywords LIKE ? OR m.raw_keywords LIKE ? OR m.authors LIKE ?
+                    GROUP BY m.domain, m.collection
+                    ORDER BY material_count DESC, m.domain, m.collection
+                    LIMIT ?
+                    """,
+                    [f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", f"%{query}%", limit],
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            results = []
+            for row in rows:
+                domain = row["domain"] or "practice"
+                collection = row["collection"] or "_general"
+                wiki_path = f"wiki/{domain}/{collection}/_index.md"
+                reflection = self.open_record("collection", f"{domain}/{collection}") or {}
+                results.append({
+                    "domain": domain,
+                    "collection": collection,
+                    "collection_key": f"{domain}/{collection}",
+                    "title": f"{domain.replace('_', ' ').title()} / {collection.replace('_', ' ').title()}",
+                    "sample_title": row["sample_title"] or "",
+                    "material_count": row["material_count"] or 0,
+                    "wiki_path": wiki_path,
+                    "reflection": reflection.get("reflection", {}),
+                })
+            return results
+
+    def open_record(self, kind: str, record_id: str) -> dict | None:
+        kind = (kind or "").strip()
+        record_id = (record_id or "").strip()
+        if not kind or not record_id:
+            return None
+        with self._lock:
+            if kind == "material":
+                row = self.con.execute(
+                """
+                SELECT material_id, title, summary, domain, collection, document_type, year,
+                       authors, keywords, raw_keywords
+                FROM materials
+                WHERE material_id = ?
+                """,
+                [record_id],
+                ).fetchone()
+                if row is None:
+                    return None
+                authors = []
+                try:
+                    authors = _parse_json_list(row["authors"])
+                except Exception:
+                    authors = []
+                try:
+                    keywords = _parse_json_list(row["keywords"])
+                except Exception:
+                    keywords = []
+                return {
+                    "kind": "material",
+                    "material_id": row["material_id"],
+                    "title": row["title"],
+                    "summary": row["summary"],
+                    "domain": row["domain"],
+                    "collection": row["collection"],
+                    "document_type": row["document_type"],
+                    "year": row["year"],
+                    "authors": authors,
+                    "keywords": keywords,
+                    "evidence": self._material_evidence(record_id),
+                }
+            if kind == "concept":
+                row = self.con.execute(
+                """
+                SELECT cluster_id, canonical_name, slug, aliases, confidence, wiki_path, material_count
+                FROM concept_clusters
+                WHERE cluster_id = ?
+                """,
+                [record_id],
+                ).fetchone()
+                if row is None:
+                    return None
+                reflection = self.con.execute(
+                """
+                SELECT cluster_id, slug, canonical_name, main_takeaways, main_tensions,
+                       open_questions, why_this_concept_matters, supporting_material_ids,
+                       supporting_evidence, input_fingerprint, wiki_path
+                FROM concept_reflections
+                WHERE cluster_id = ?
+                """,
+                [record_id],
+                ).fetchone()
+                material_rows = self.con.execute(
+                """
+                SELECT material_id, relevance, source_pages, evidence_spans, confidence
+                FROM cluster_materials
+                WHERE cluster_id = ?
+                ORDER BY confidence DESC, material_id
+                """,
+                [record_id],
+                ).fetchall()
+                aliases = _parse_json_list(row["aliases"])
+                return {
+                    "kind": "concept",
+                    "cluster_id": row["cluster_id"],
+                    "canonical_name": row["canonical_name"],
+                    "slug": row["slug"],
+                    "aliases": aliases,
+                    "confidence": row["confidence"],
+                    "wiki_path": row["wiki_path"],
+                    "material_count": row["material_count"],
+                    "cluster_materials": [
+                        {
+                            "material_id": r["material_id"],
+                            "relevance": r["relevance"],
+                            "source_pages": _parse_json_list(r["source_pages"]),
+                            "evidence_spans": _parse_json_list(r["evidence_spans"]),
+                            "confidence": r["confidence"],
+                        }
+                        for r in material_rows
+                    ],
+                    "reflection": self._row_to_dict(reflection) if reflection else {},
+                }
+            if kind == "collection":
+                domain, _, collection = record_id.partition("/")
+                domain = domain or "practice"
+                collection = collection or "_general"
+                wiki_row = self.con.execute(
+                """
+                SELECT page_type, page_id, title, path, domain, collection
+                FROM wiki_pages
+                WHERE page_type = 'collection' AND domain = ? AND collection = ?
+                """,
+                [domain, collection],
+                ).fetchone()
+                reflection = self.con.execute(
+                """
+                SELECT domain, collection, main_takeaways, main_tensions,
+                       important_material_ids, important_cluster_ids,
+                       open_questions, input_fingerprint, wiki_path
+                FROM collection_reflections
+                WHERE domain = ? AND collection = ?
+                """,
+                [domain, collection],
+                ).fetchone()
+                members = self.con.execute(
+                """
+                SELECT material_id, title, summary
+                FROM materials
+                WHERE domain = ? AND collection = ?
+                ORDER BY year DESC, title
+                """,
+                [domain, collection],
+                ).fetchall()
+                return {
+                    "kind": "collection",
+                    "domain": domain,
+                    "collection": collection,
+                    "wiki_page": self._row_to_dict(wiki_row) if wiki_row else {},
+                    "members": [
+                        {
+                            "material_id": row["material_id"],
+                            "title": row["title"],
+                            "summary": _truncate(row["summary"] or "", 160),
+                        }
+                        for row in members
+                    ],
+                    "reflection": self._row_to_dict(reflection) if reflection else {},
+                }
+            return None
+
+    def execute(self, request: dict) -> dict | None:
+        tool = str(request.get("tool", "")).strip()
+        if tool == "search_materials":
+            query = str(request.get("query", "")).strip()
+            limit = max(1, min(int(request.get("limit", 5) or 5), 8))
+            return {"tool": tool, "query": query, "limit": limit, "results": self.search_materials(query, limit)}
+        if tool == "search_concepts":
+            query = str(request.get("query", "")).strip()
+            limit = max(1, min(int(request.get("limit", 5) or 5), 8))
+            return {"tool": tool, "query": query, "limit": limit, "results": self.search_concepts(query, limit)}
+        if tool == "search_collections":
+            query = str(request.get("query", "")).strip()
+            limit = max(1, min(int(request.get("limit", 5) or 5), 8))
+            return {"tool": tool, "query": query, "limit": limit, "results": self.search_collections(query, limit)}
+        if tool == "open_record":
+            kind = str(request.get("kind", "")).strip()
+            record_id = str(request.get("id", "")).strip()
+            return {"tool": tool, "kind": kind, "id": record_id, "record": self.open_record(kind, record_id)}
+        return None
+
+
+def _execute_context_requests(tool: ReflectionIndexTool, requests: list[dict]) -> list[dict]:
+    results: list[dict] = []
+    for request in requests[:MAX_CONTEXT_REQUESTS_PER_PASS]:
+        normalized = _normalize_context_request(request)
+        if not normalized:
+            continue
+        executed = tool.execute(normalized)
+        if executed is not None:
+            results.append(executed)
+    return results
+
+
+def _normalize_context_request(request: Any) -> dict | None:
+    if not isinstance(request, dict):
+        return None
+    tool = str(request.get("tool", "")).strip()
+    if tool not in {"search_materials", "search_concepts", "search_collections", "open_record"}:
+        return None
+    if tool == "open_record":
+        kind = str(request.get("kind", "")).strip()
+        record_id = str(request.get("id", "")).strip()
+        if kind not in {"material", "concept", "collection"} or not record_id:
+            return None
+        return {"tool": tool, "kind": kind, "id": record_id}
+    query = str(request.get("query", "")).strip()
+    if not query:
+        return None
+    limit = request.get("limit", 5)
+    try:
+        limit_i = int(limit)
+    except (TypeError, ValueError):
+        limit_i = 5
+    return {"tool": tool, "query": query, "limit": max(1, min(limit_i, 8))}
+
+
+def _format_context_tool_results(results: list[dict]) -> str:
+    return json.dumps(results, ensure_ascii=False, indent=2)
+
+
+def _extract_context_requests(parsed: Any) -> list[dict]:
+    if isinstance(parsed, dict):
+        requests = parsed.get("context_requests", [])
+        if isinstance(requests, list):
+            normalized = []
+            for request in requests:
+                req = _normalize_context_request(request)
+                if req:
+                    normalized.append(req)
+            return normalized
+    return []
+
+
+def _run_reflection_prompt_with_context(
+    llm_fn,
+    system: str,
+    user: str,
+    schema_description: str,
+    tool: ReflectionIndexTool,
+) -> Any:
+    raw = llm_fn(system, [{"role": "user", "content": user}])
+    parsed = parse_json_or_repair(llm_fn, raw, schema_description)
+    requests = _extract_context_requests(parsed)
+    if not requests:
+        if isinstance(parsed, dict):
+            parsed.pop("context_requests", None)
+        return parsed
+
+    tool_results = _execute_context_requests(tool, requests)
+    followup_user = (
+        f"{user}\n\n"
+        "You requested more context from the read-only SQL-index tool.\n"
+        "Tool results:\n"
+        f"{_format_context_tool_results(tool_results)}\n\n"
+        "Revise your answer using the added context. Return final JSON only."
+    )
+    raw = llm_fn(system, [{"role": "user", "content": followup_user}])
+    parsed = parse_json_or_repair(llm_fn, raw, schema_description)
+    if isinstance(parsed, dict):
+        parsed.pop("context_requests", None)
+    return parsed
+
+
+# ---------------------------------------------------------------------------
+# Project loading
+# ---------------------------------------------------------------------------
+
+def _load_manifest(root: Path) -> list[dict]:
+    return _load_jsonl(root / "manifests" / "materials.jsonl")
+
+
+def _load_material_meta(root: Path, material_id: str) -> dict | None:
+    path = root / "extracted" / material_id / "meta.json"
+    return _load_json(path)
+
+
+def _load_all_metas(root: Path, manifest_records: list[dict]) -> dict[str, dict]:
+    metas: dict[str, dict] = {}
+    for rec in manifest_records:
+        mid = rec.get("material_id", "")
+        if not mid:
+            continue
+        meta = _load_material_meta(root, mid)
+        if meta is not None:
+            metas[mid] = meta
+    return metas
+
+
+def _load_wiki_pages(wiki_root: Path) -> list[Path]:
+    if not wiki_root.exists():
+        return []
+    return sorted(p for p in wiki_root.rglob("*.md") if p.is_file())
+
+
+def _group_materials_by_collection(metas: dict[str, dict]) -> dict[tuple[str, str], list[dict]]:
+    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for meta in metas.values():
+        domain = (meta.get("domain") or "practice").strip() or "practice"
+        collection = (meta.get("collection") or "").strip() or "_general"
+        grouped[(domain, collection)].append(meta)
+    return grouped
+
+
+def _material_titles_from_metas(metas: dict[str, dict]) -> dict[str, str]:
+    return {mid: (meta.get("title") or mid) for mid, meta in metas.items()}
+
+
+def _current_concepts(root: Path) -> list[dict]:
+    return load_clusters(root) + load_bridge_clusters(root)
+
+
+# ---------------------------------------------------------------------------
+# Staleness helpers
+# ---------------------------------------------------------------------------
+
+def _index_state_stale(root: Path) -> tuple[bool, str]:
+    index_path = get_index_path()
+    if not index_path.exists():
+        return True, "search index missing"
+
+    manifest_path = root / "manifests" / "materials.jsonl"
+    extracted_dir = root / "extracted"
+    try:
+        con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+        row = con.execute(
+            "SELECT built_at, manifest_hash, material_count, extracted_snapshot FROM index_state WHERE id=1"
+        ).fetchone()
+        con.close()
+    except sqlite3.Error:
+        return True, "index_state missing or unreadable"
+
+    if row is None:
+        return True, "index_state missing"
+
+    built_at_str, stored_manifest_hash, stored_count, stored_snapshot = row
+    current_count = _count_manifest_lines(manifest_path)
+    if current_count != stored_count:
+        return True, "manifest material count changed"
+
+    current_manifest_hash = _compute_manifest_hash(manifest_path)
+    material_ids = _read_manifest_ids(manifest_path)
+    current_snapshot = _compute_extracted_snapshot(extracted_dir, material_ids, root)
+    if current_manifest_hash != stored_manifest_hash or current_snapshot != stored_snapshot:
+        return True, "manifest or extracted snapshot changed"
+
+    try:
+        from datetime import datetime
+        built_at = datetime.fromisoformat(built_at_str)
+    except ValueError:
+        return True, "invalid built_at timestamp"
+
+    newest_mtime = _newest_input_mtime(extracted_dir)
+    if newest_mtime is not None and newest_mtime > built_at.timestamp():
+        return True, "extracted inputs newer than index_state"
+
+    return False, ""
+
+
+def _memory_state_stale(root: Path) -> tuple[bool, str]:
+    stamp_path = root / "derived" / "memory_bridge_stamp.json"
+    if not stamp_path.exists():
+        return True, "memory stamp missing"
+
+    stamp = _load_json(stamp_path, {}) or {}
+    clusters_fp = canonical_hash(
+        _read_text(root / "derived" / "concept_clusters.jsonl"),
+        _read_text(root / "derived" / "bridge_concept_clusters.jsonl"),
+        _read_text(root / "derived" / "lint" / "cluster_reviews.jsonl"),
+        _read_text(root / "derived" / "lint" / "concept_reflections.jsonl"),
+        _read_text(root / "derived" / "lint" / "collection_reflections.jsonl"),
+        _read_text(root / "derived" / "lint" / "graph_findings.jsonl"),
+    )
+    manifest_fp = canonical_hash(_read_text(root / "manifests" / "materials.jsonl"))
+    if stamp.get("clusters_fingerprint") != clusters_fp:
+        return True, "cluster or reflection artifacts changed"
+    if stamp.get("manifest_fingerprint") != manifest_fp:
+        return True, "manifest changed"
+    return False, ""
+
+
+# ---------------------------------------------------------------------------
+# Deterministic lint
+# ---------------------------------------------------------------------------
+
+def _detect_missing_metadata(root: Path, manifest_records: list[dict]) -> list[dict]:
+    issues: list[dict] = []
+    required_fields = [
+        "material_id",
+        "file_hash",
+        "source_path",
+        "title",
+        "domain",
+        "collection",
+        "page_count",
+        "file_type",
+        "raw_document_type",
+    ]
+    for rec in manifest_records:
+        mid = rec.get("material_id", "")
+        meta = _load_material_meta(root, mid)
+        if meta is None:
+            issues.append(_issue(
+                "missing_extracted_material",
+                "high",
+                "Missing extracted metadata",
+                "Material exists in the manifest but extracted/meta.json is missing.",
+                material_id=mid,
+                path=f"extracted/{mid}/meta.json",
+                fixable=True,
+            ))
+            continue
+        missing = [field for field in required_fields if meta.get(field) in (None, "", [], {})]
+        if missing:
+            issues.append(_issue(
+                "missing_metadata",
+                "high",
+                "Missing required metadata",
+                f"Missing fields: {', '.join(missing)}",
+                material_id=mid,
+                path=f"extracted/{mid}/meta.json",
+                fixable=True,
+            ))
+        if not (root / "extracted" / mid / "pages.jsonl").exists():
+            issues.append(_issue(
+                "missing_extracted_artifact",
+                "high",
+                "Missing pages.jsonl",
+                "Extraction output is incomplete; pages.jsonl is missing.",
+                material_id=mid,
+                path=f"extracted/{mid}/pages.jsonl",
+                fixable=True,
+            ))
+        if not (root / "extracted" / mid / "chunks.jsonl").exists():
+            issues.append(_issue(
+                "missing_extracted_artifact",
+                "high",
+                "Missing chunks.jsonl",
+                "Extraction output is incomplete; chunks.jsonl is missing.",
+                material_id=mid,
+                path=f"extracted/{mid}/chunks.jsonl",
+                fixable=True,
+            ))
+    return issues
+
+
+def _detect_orphaned_extracted_materials(root: Path, manifest_records: list[dict]) -> list[dict]:
+    manifest_ids = {rec.get("material_id", "") for rec in manifest_records if rec.get("material_id")}
+    issues: list[dict] = []
+    extracted_root = root / "extracted"
+    if not extracted_root.exists():
+        return issues
+    for mat_dir in sorted(p for p in extracted_root.iterdir() if p.is_dir()):
+        if mat_dir.name not in manifest_ids:
+            issues.append(_issue(
+                "orphaned_material",
+                "medium",
+                "Orphaned extracted material",
+                "An extracted material exists on disk but is not present in the manifest.",
+                material_id=mat_dir.name,
+                path=str(mat_dir.relative_to(root)),
+                fixable=False,
+            ))
+    return issues
+
+
+def _detect_duplicates(manifest_records: list[dict]) -> list[dict]:
+    issues: list[dict] = []
+    by_hash: dict[str, list[str]] = defaultdict(list)
+    by_path: dict[str, list[str]] = defaultdict(list)
+    for rec in manifest_records:
+        mid = rec.get("material_id", "")
+        if not mid:
+            continue
+        file_hash = str(rec.get("file_hash", "")).strip()
+        rel_path = str(rec.get("relative_path", "")).strip()
+        if file_hash:
+            by_hash[file_hash].append(mid)
+        if rel_path:
+            by_path[rel_path.lower()].append(mid)
+
+    for file_hash, mids in by_hash.items():
+        if len(mids) > 1:
+            issues.append(_issue(
+                "duplicate_material",
+                "medium",
+                "Duplicate material hash",
+                f"Multiple manifest entries share file_hash={file_hash}.",
+                material_id=",".join(sorted(mids)),
+                fixable=False,
+            ))
+    for rel_path, mids in by_path.items():
+        if len(mids) > 1:
+            issues.append(_issue(
+                "duplicate_material",
+                "medium",
+                "Duplicate material path",
+                f"Multiple manifest entries share relative_path={rel_path}.",
+                material_id=",".join(sorted(mids)),
+                fixable=False,
+            ))
+    return issues
+
+
+def _detect_stale_enrichment(root: Path, manifest_records: list[dict], config: dict) -> list[dict]:
+    issues: list[dict] = []
+    for rec in manifest_records:
+        mid = rec.get("material_id", "")
+        if not mid:
+            continue
+        output_dir = root / "extracted" / mid
+        if not output_dir.exists():
+            continue
+        stale_stages: list[str] = []
+        try:
+            if _is_document_stale(output_dir, config):
+                stale_stages.append("document")
+        except Exception:
+            stale_stages.append("document")
+        try:
+            if _is_chunk_stale(output_dir, config):
+                stale_stages.append("chunk")
+        except Exception:
+            stale_stages.append("chunk")
+        try:
+            if _is_figure_stale(output_dir, config):
+                stale_stages.append("figure")
+        except Exception:
+            stale_stages.append("figure")
+        if stale_stages:
+            issues.append(_issue(
+                "stale_enrichment",
+                "medium",
+                "Stale enrichment",
+                f"Stages needing refresh: {', '.join(stale_stages)}",
+                material_id=mid,
+                path=f"extracted/{mid}",
+                fixable=True,
+            ))
+    return issues
+
+
+def _detect_broken_links(root: Path, wiki_pages: list[Path]) -> list[dict]:
+    issues: list[dict] = []
+    for page in wiki_pages:
+        text = _read_text(page)
+        for target in _extract_links(text):
+            resolved = _resolve_wiki_link(page, target, root / "wiki", root)
+            if resolved is None:
+                continue
+            if not resolved.exists():
+                issues.append(_issue(
+                    "broken_link",
+                    "high",
+                    "Broken wiki link",
+                    f"Link target does not exist: {target}",
+                    path=str(page.relative_to(root)),
+                    target=target,
+                    fixable=False,
+                ))
+    return issues
+
+
+def _detect_missing_compiled_pages(
+    root: Path,
+    manifest_records: list[dict],
+    metas: dict[str, dict],
+    clusters: list[dict],
+) -> list[dict]:
+    issues: list[dict] = []
+
+    # Material pages
+    for rec in manifest_records:
+        mid = rec.get("material_id", "")
+        meta = metas.get(mid)
+        if not mid or meta is None:
+            continue
+        page_path = root / _material_wiki_path(meta)
+        if not page_path.exists():
+            issues.append(_issue(
+                "missing_compiled_page",
+                "high",
+                "Missing material page",
+                "Compiled material page is missing.",
+                material_id=mid,
+                path=str(page_path.relative_to(root)),
+                fixable=True,
+            ))
+
+    # Collection pages
+    grouped = _group_materials_by_collection(metas)
+    for (domain, collection), _metas in grouped.items():
+        page_path = root / f"wiki/{domain}/{collection}/_index.md"
+        if not page_path.exists():
+            issues.append(_issue(
+                "missing_compiled_page",
+                "high",
+                "Missing collection page",
+                "Compiled collection _index.md page is missing.",
+                domain=domain,
+                collection=collection,
+                path=str(page_path.relative_to(root)),
+                fixable=True,
+            ))
+    for domain in sorted({meta.get("domain") or "practice" for meta in metas.values()}):
+        page_path = root / f"wiki/{domain}/_index.md"
+        if not page_path.exists():
+            issues.append(_issue(
+                "missing_compiled_page",
+                "high",
+                "Missing domain index",
+                "Domain _index.md page is missing.",
+                domain=domain,
+                path=str(page_path.relative_to(root)),
+                fixable=True,
+            ))
+
+    for page_path in [
+        root / "wiki" / "_index.md",
+        root / "wiki" / "shared" / "concepts" / "_index.md",
+        root / "wiki" / "shared" / "glossary" / "_index.md",
+    ]:
+        if not page_path.exists():
+            issues.append(_issue(
+                "missing_compiled_page",
+                "high",
+                "Missing structural index",
+                "Required wiki index page is missing.",
+                path=str(page_path.relative_to(root)),
+                fixable=True,
+            ))
+
+    # Concept pages
+    for cluster in clusters:
+        page_path = root / _concept_page_path(cluster)
+        if not page_path.exists():
+            issues.append(_issue(
+                "missing_compiled_page",
+                "high",
+                "Missing concept page",
+                "Compiled concept page is missing.",
+                cluster_id=cluster.get("cluster_id", ""),
+                path=str(page_path.relative_to(root)),
+                fixable=True,
+            ))
+
+    return issues
+
+
+def _detect_orphaned_wiki_pages(
+    root: Path,
+    wiki_pages: list[Path],
+    expected_pages: set[Path],
+) -> list[dict]:
+    issues: list[dict] = []
+    for page in wiki_pages:
+        if page.relative_to(root) == REPORT_PATH:
+            continue
+        if page not in expected_pages:
+            issues.append(_issue(
+                "orphaned_wiki_page",
+                "medium",
+                "Orphaned wiki page",
+                "Wiki page does not correspond to any expected material, concept, or index page.",
+                path=str(page.relative_to(root)),
+                fixable=False,
+            ))
+    return issues
+
+
+def _expected_pages(
+    root: Path,
+    manifest_records: list[dict],
+    metas: dict[str, dict],
+    clusters: list[dict],
+) -> set[Path]:
+    expected: set[Path] = set()
+    # Material pages
+    for meta in metas.values():
+        expected.add(root / _material_wiki_path(meta))
+    # Collection and domain indexes
+    grouped = _group_materials_by_collection(metas)
+    for (domain, collection), _metas in grouped.items():
+        expected.add(root / f"wiki/{domain}/{collection}/_index.md")
+    for domain in sorted({meta.get("domain") or "practice" for meta in metas.values()}):
+        expected.add(root / f"wiki/{domain}/_index.md")
+    expected.add(root / "wiki" / "_index.md")
+    expected.add(root / "wiki" / "shared" / "concepts" / "_index.md")
+    expected.add(root / "wiki" / "shared" / "glossary" / "_index.md")
+    # Concept pages
+    for cluster in clusters:
+        expected.add(root / _concept_page_path(cluster))
+    # Phase 6 report itself is expected when written
+    expected.add(root / REPORT_PATH)
+    return expected
+
+
+def run_deterministic_lint(config: dict | None = None) -> dict:
+    """Run deterministic lint checks and write the JSON report."""
+    if config is None:
+        config = load_config()
+    root = get_project_root()
+    wiki_root = root / "wiki"
+    manifest_records = _load_manifest(root)
+    metas = _load_all_metas(root, manifest_records)
+    clusters = _current_concepts(root)
+    wiki_pages = _load_wiki_pages(wiki_root)
+    expected_pages = _expected_pages(root, manifest_records, metas, clusters)
+
+    issues: list[dict] = []
+    issues.extend(_detect_missing_metadata(root, manifest_records))
+    issues.extend(_detect_orphaned_extracted_materials(root, manifest_records))
+    issues.extend(_detect_duplicates(manifest_records))
+    issues.extend(_detect_stale_enrichment(root, manifest_records, config))
+    issues.extend(_detect_broken_links(root, wiki_pages))
+    issues.extend(_detect_missing_compiled_pages(root, manifest_records, metas, clusters))
+    issues.extend(_detect_orphaned_wiki_pages(root, wiki_pages, expected_pages))
+
+    index_stale, index_reason = _index_state_stale(root)
+    if index_stale:
+        issues.append(_issue(
+            "stale_index",
+            "high",
+            "Stale search index",
+            index_reason or "search index needs rebuild",
+            path="indexes/search.sqlite",
+            fixable=True,
+        ))
+
+    memory_stale, memory_reason = _memory_state_stale(root)
+    if memory_stale:
+        issues.append(_issue(
+            "stale_memory_bridge",
+            "medium",
+            "Stale memory bridge",
+            memory_reason or "memory bridge needs rebuild",
+            path="indexes/search.sqlite",
+            fixable=True,
+        ))
+
+    summary = {
+        "materials": len(manifest_records),
+        "extracted_materials": len(metas),
+        "wiki_pages": len(wiki_pages),
+        "clusters": len(clusters),
+        "issues": len(issues),
+        "high": sum(1 for issue in issues if issue["severity"] == "high"),
+        "medium": sum(1 for issue in issues if issue["severity"] == "medium"),
+        "low": sum(1 for issue in issues if issue["severity"] == "low"),
+    }
+
+    report = {
+        "checked_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        "project_root": str(root),
+        "summary": summary,
+        "issues": issues,
+        "checks": {
+            "index_stale": index_stale,
+            "memory_stale": memory_stale,
+        },
+    }
+
+    _write_json(root / LINT_DIR / "deterministic_report.json", report)
+    return report
+
+
+def render_lint_report(report: dict) -> str:
+    """Render a human-readable markdown lint report."""
+    lines: list[str] = []
+    lines.append("# Arquimedes Lint Report\n")
+    lines.append(f"_Checked at {report.get('checked_at', '')}_\n")
+
+    summary = report.get("summary", {})
+    lines.append("## Summary\n")
+    lines.append(f"- Materials: {summary.get('materials', 0)}")
+    lines.append(f"- Extracted materials: {summary.get('extracted_materials', 0)}")
+    lines.append(f"- Wiki pages: {summary.get('wiki_pages', 0)}")
+    lines.append(f"- Clusters: {summary.get('clusters', 0)}")
+    lines.append(f"- Issues: {summary.get('issues', 0)}")
+    lines.append("")
+
+    issues = report.get("issues", [])
+    if not issues:
+        lines.append("## Findings\n")
+        lines.append("- No deterministic issues found.\n")
+        return "\n".join(lines)
+
+    for severity in ("high", "medium", "low"):
+        bucket = [i for i in issues if i.get("severity") == severity]
+        if not bucket:
+            continue
+        lines.append(f"## {severity.title()} Severity\n")
+        for issue in bucket:
+            path = issue.get("path", "")
+            title = issue.get("title", "")
+            detail = issue.get("detail", "")
+            check = issue.get("check", "")
+            if path:
+                lines.append(f"- **{title}** (`{check}`) — `{path}`")
+            else:
+                lines.append(f"- **{title}** (`{check}`)")
+            if detail:
+                lines.append(f"  - {detail}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Deterministic fixes
+# ---------------------------------------------------------------------------
+
+def _compile_is_safe(root: Path) -> bool:
+    return not is_clustering_stale(None) and not is_bridge_clustering_stale(None)
+
+
+def _apply_deterministic_fixes(report: dict, config: dict) -> dict:
+    """Apply safe deterministic fixes only."""
+    root = get_project_root()
+    fixes = {
+        "index_rebuilt": False,
+        "memory_rebuilt": False,
+        "compiled": False,
+        "details": [],
+    }
+
+    issues = report.get("issues", [])
+    if any(issue["check"] in {"stale_index", "stale_memory_bridge"} for issue in issues):
+        from arquimedes.index import ensure_index_and_memory
+        index_rebuilt, _stats, memory_rebuilt, _memory_counts = ensure_index_and_memory(config)
+        fixes["index_rebuilt"] = index_rebuilt
+        fixes["memory_rebuilt"] = memory_rebuilt
+        if index_rebuilt:
+            fixes["details"].append("rebuild index")
+        if memory_rebuilt:
+            fixes["details"].append("rebuild memory")
+
+    missing_pages = [issue for issue in issues if issue["check"] == "missing_compiled_page"]
+    if missing_pages and _compile_is_safe(root):
+        compile_wiki(config)
+        fixes["compiled"] = True
+        fixes["details"].append("recompile wiki")
+
+    return fixes
+
+
+# ---------------------------------------------------------------------------
+# Reflection passes
+# ---------------------------------------------------------------------------
+
+def _existing_by_key(path: Path, key_field: str) -> dict[str, dict]:
+    existing = {}
+    for row in _load_jsonl(path):
+        key = str(row.get(key_field, "")).strip()
+        if key:
+            existing[key] = row
+    return existing
+
+
+def _deterministic_fingerprint(report: dict) -> str:
+    return canonical_hash(
+        report.get("summary", {}),
+        report.get("issues", []),
+    )
+
+
+def _full_lint_due(root: Path, deterministic_report: dict, config: dict) -> tuple[bool, str]:
+    stamp = _read_stamp(root / FULL_LINT_STAMP_PATH)
+    if not stamp:
+        return True, "full lint stamp missing"
+    current_fp = _deterministic_fingerprint(deterministic_report)
+    if stamp.get("deterministic_fingerprint") == current_fp:
+        checked_at = _parse_iso_datetime(stamp.get("checked_at"))
+        if checked_at is None:
+            return True, "full lint stamp invalid"
+        hours = float(_lint_schedule_config(config).get("full_schedule_min_hours", DEFAULT_FULL_LINT_INTERVAL_HOURS) or DEFAULT_FULL_LINT_INTERVAL_HOURS)
+        age_hours = (datetime.now(timezone.utc) - checked_at).total_seconds() / 3600.0
+        if age_hours < hours:
+            return False, "full lint is current"
+    return True, "deterministic graph inputs changed or interval elapsed"
+
+
+def _write_full_lint_stamp(root: Path, deterministic_report: dict) -> None:
+    _write_stamp(
+        root / FULL_LINT_STAMP_PATH,
+        {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "deterministic_fingerprint": _deterministic_fingerprint(deterministic_report),
+            "summary": deterministic_report.get("summary", {}),
+        },
+    )
+
+
+def _graph_reflection_due(
+    root: Path,
+    config: dict,
+    clusters: list[dict],
+    manifest_records: list[dict],
+    cluster_reviews: list[dict],
+    concept_refs: list[dict],
+    collection_refs: list[dict],
+    deterministic_report: dict,
+) -> tuple[bool, str]:
+    stamp = _read_stamp(root / GRAPH_REFLECTION_STAMP_PATH)
+    payload = {
+        "deterministic_report": deterministic_report.get("summary", {}),
+        "cluster_reviews": cluster_reviews[:20],
+        "concept_reflections": concept_refs[:20],
+        "collection_reflections": collection_refs[:20],
+    }
+    current_fp = canonical_hash(payload)
+    if not stamp:
+        return True, "graph reflection stamp missing"
+    if stamp.get("graph_fingerprint") == current_fp:
+        return False, "graph reflection unchanged"
+
+    schedule_cfg = _lint_schedule_config(config).get("graph_schedule", {})
+    min_hours = float(schedule_cfg.get("min_interval_hours", DEFAULT_GRAPH_REFLECTION_INTERVAL_HOURS) or DEFAULT_GRAPH_REFLECTION_INTERVAL_HOURS)
+    min_cluster_delta = int(schedule_cfg.get("min_cluster_delta", DEFAULT_GRAPH_REFLECTION_MIN_CLUSTER_DELTA) or DEFAULT_GRAPH_REFLECTION_MIN_CLUSTER_DELTA)
+    min_material_delta = int(schedule_cfg.get("min_material_delta", DEFAULT_GRAPH_REFLECTION_MIN_MATERIAL_DELTA) or DEFAULT_GRAPH_REFLECTION_MIN_MATERIAL_DELTA)
+
+    checked_at = _parse_iso_datetime(stamp.get("checked_at"))
+    if checked_at is None:
+        return True, "graph reflection stamp invalid"
+    age_hours = (datetime.now(timezone.utc) - checked_at).total_seconds() / 3600.0
+    cluster_delta = abs(len(clusters) - int(stamp.get("cluster_count", 0) or 0))
+    material_delta = abs(len(manifest_records) - int(stamp.get("material_count", 0) or 0))
+
+    if cluster_delta >= min_cluster_delta or material_delta >= min_material_delta:
+        return True, "enough graph change accumulated"
+    if age_hours >= min_hours:
+        return True, "graph reflection periodic interval reached"
+    return False, "graph reflection deferred by schedule"
+
+
+def _cluster_prompt_payload(
+    cluster: dict,
+    material_info: dict[str, dict],
+    concept_page_text: str,
+    tool: ReflectionIndexTool | None = None,
+) -> dict:
+    source_concepts = cluster.get("source_concepts", [])
+    unique_material_ids = []
+    seen: set[str] = set()
+    for sc in sorted(
+        source_concepts,
+        key=lambda x: (
+            x.get("material_id", ""),
+            -float(x.get("confidence", 0.0) or 0.0),
+        ),
+    ):
+        mid = sc.get("material_id", "")
+        if mid and mid not in seen:
+            seen.add(mid)
+            unique_material_ids.append(mid)
+
+    current_reflection = _extract_marked_section(concept_page_text, "concept-reflection")
+    previous_reflection = tool.open_record("concept", cluster.get("cluster_id", "")) if tool else None
+
+    supporting_materials = []
+    query_terms = [
+        cluster.get("canonical_name", ""),
+        *(_safe_list(cluster.get("aliases", []))),
+        *[sc.get("concept_name", "") for sc in source_concepts if sc.get("concept_name")],
+    ]
+    for mid in unique_material_ids:
+        info = material_info.get(mid, {})
+        evidence = tool._material_evidence(mid, query_terms) if tool else {}
+        supporting_materials.append({
+            "material_id": mid,
+            "title": info.get("title", mid),
+            "summary": info.get("summary", ""),
+            "keywords": info.get("keywords", []),
+            "relevance": next((sc.get("relevance", "") for sc in source_concepts if sc.get("material_id") == mid), ""),
+            "concept_names": sorted({sc.get("concept_name", "") for sc in source_concepts if sc.get("material_id") == mid and sc.get("concept_name")}),
+            "evidence_spans": sorted({
+                span
+                for sc in source_concepts
+                if sc.get("material_id") == mid
+                for span in _safe_list(sc.get("evidence_spans", []))
+            }),
+            "source_pages": sorted({
+                int(p)
+                for sc in source_concepts
+                if sc.get("material_id") == mid
+                for p in _safe_list(sc.get("source_pages", []))
+                if str(p).isdigit()
+            }),
+            "evidence": evidence,
+        })
+
+    return {
+        "cluster_id": cluster.get("cluster_id", ""),
+        "canonical_name": cluster.get("canonical_name", ""),
+        "slug": cluster.get("slug", ""),
+        "aliases": cluster.get("aliases", []),
+        "material_count": len(unique_material_ids),
+        "materials": supporting_materials,
+        "current_reflection": current_reflection,
+        "previous_reflection": previous_reflection.get("reflection", {}) if isinstance(previous_reflection, dict) else {},
+        "concept_page": concept_page_text,
+        "query_terms": [term for term in query_terms if term],
+    }
+
+
+def _collection_prompt_payload(
+    domain: str,
+    collection: str,
+    metas: list[dict],
+    page_text: str,
+    clusters: list[dict],
+    tool: ReflectionIndexTool | None = None,
+) -> dict:
+    materials = []
+    mid_set = {meta.get("material_id", "") for meta in metas if meta.get("material_id")}
+    for meta in metas:
+        mid = meta.get("material_id", "")
+        query_terms = [domain, collection, meta.get("title", ""), _meta_val(meta.get("summary"))]
+        material_record = tool._material_evidence(mid, query_terms) if tool else {}
+        materials.append({
+            "material_id": mid,
+            "title": meta.get("title", ""),
+            "summary": _meta_val(meta.get("summary")),
+            "keywords": _safe_list((_meta_val(meta.get("keywords")) or "").split(",")),
+            "evidence": material_record,
+        })
+    concepts = []
+    for cluster in clusters:
+        overlap = mid_set & set(cluster.get("material_ids", []))
+        if overlap:
+            concept_record = tool.open_record("concept", cluster.get("cluster_id", "")) if tool else None
+            concepts.append({
+                "cluster_id": cluster.get("cluster_id", ""),
+                "canonical_name": cluster.get("canonical_name", ""),
+                "slug": cluster.get("slug", ""),
+                "material_count": len(overlap),
+                "reflection": concept_record.get("reflection", {}) if isinstance(concept_record, dict) else {},
+            })
+    current_reflection = _extract_marked_section(page_text, "collection-reflection")
+    previous_reflection = tool.open_record("collection", f"{domain}/{collection}") if tool else None
+    return {
+        "domain": domain,
+        "collection": collection,
+        "materials": materials,
+        "concepts": concepts,
+        "current_reflection": current_reflection,
+        "previous_reflection": previous_reflection.get("reflection", {}) if isinstance(previous_reflection, dict) else {},
+        "collection_page": page_text,
+    }
+
+
+def _cluster_audit_prompt(cluster: dict, payload: dict) -> tuple[str, str]:
+    audit_scope = payload.get("audit_scope", "full")
+    system = (
+        "You are an architecture research librarian auditing a concept cluster. "
+        "Return JSON only. Find over-merges, missed equivalences, weak naming, "
+        "single-material weakness, and missing materials. "
+        "Single-material clusters should be audited more lightly, focusing on "
+        "name quality, narrowness, and whether they should merge later. "
+        f"If you need more context, include a context_requests array with up to "
+        f"{MAX_CONTEXT_REQUESTS_PER_PASS} read-only SQL-index lookups from the allowed toolset. "
+        "You will get only one read-only context round, so request everything you need at once."
+    )
+    user = (
+        f"Audit the following cluster with audit_scope={audit_scope} and return a JSON object.\n"
+        "Return a JSON object with keys: findings, context_requests.\n"
+        "findings must be a JSON array. context_requests is optional and must be a JSON array of "
+        "read-only SQL-index lookups if you need more context.\n"
+        "Each finding must include: finding_type, severity, recommendation, "
+        "affected_material_ids, affected_concept_names, evidence.\n\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+    return system, user
+
+
+def _concept_reflection_prompt(cluster: dict, payload: dict) -> tuple[str, str]:
+    system = (
+        "You are an architecture research librarian writing reflective synthesis "
+        "for a concept page. Return JSON only. Preserve prior conclusions, revise "
+        "them when evidence changes, and request more read-only SQL-index context "
+        "only if the provided packet is insufficient. You will get only one "
+        "read-only context round, so request everything you need at once."
+    )
+    user = (
+        "Write reflective synthesis for this concept cluster.\n"
+        "Return a JSON object with keys: main_takeaways, main_tensions, open_questions, "
+        "why_this_concept_matters, context_requests.\n"
+        "context_requests is optional and must be a JSON array of read-only SQL-index lookups "
+        "if you need more context.\n\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+    return system, user
+
+
+def _collection_reflection_prompt(domain: str, collection: str, payload: dict) -> tuple[str, str]:
+    system = (
+        "You are an architecture research librarian writing reflective synthesis "
+        "for a collection page. Return JSON only. Preserve prior conclusions, revise "
+        "them when evidence changes, and request more read-only SQL-index context "
+        "only if the provided packet is insufficient. You will get only one "
+        "read-only context round, so request everything you need at once."
+    )
+    user = (
+        "Write reflective synthesis for this collection.\n"
+        "Return a JSON object with keys: main_takeaways, main_tensions, important_material_ids, "
+        "important_cluster_ids, open_questions, context_requests.\n"
+        "context_requests is optional and must be a JSON array of read-only SQL-index lookups "
+        "if you need more context.\n\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+    return system, user
+
+
+def _graph_reflection_prompt(report: dict, cluster_findings: list[dict], concept_refs: list[dict], collection_refs: list[dict]) -> tuple[str, str]:
+    system = (
+        "You are an architecture research librarian reviewing the whole graph. "
+        "Return JSON only. If you need more context, include a context_requests array "
+        f"with up to {MAX_CONTEXT_REQUESTS_PER_PASS} read-only SQL-index lookups from the allowed toolset. "
+        "You will get only one read-only context round, so request everything you need at once."
+    )
+    user = (
+        "Review the graph globally for missing cross-references, contradictions, "
+        "under-connected materials, under-connected clusters, unanswered questions, "
+        "and candidate future sources or bridge links.\n"
+        "Return a JSON object with keys: findings, context_requests.\n"
+        "findings must be a JSON array. context_requests is optional and must be a JSON array "
+        "of read-only SQL-index lookups if you need more context.\n\n"
+        f"Deterministic report summary:\n{json.dumps(report.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
+        f"Cluster findings:\n{json.dumps(cluster_findings[:20], ensure_ascii=False, indent=2)}\n\n"
+        f"Concept reflections:\n{json.dumps(concept_refs[:10], ensure_ascii=False, indent=2)}\n\n"
+        f"Collection reflections:\n{json.dumps(collection_refs[:10], ensure_ascii=False, indent=2)}"
+    )
+    return system, user
+
+
+def _run_reflection_prompt_with_context(
+    llm_fn,
+    system: str,
+    user: str,
+    schema_description: str,
+    tool: ReflectionIndexTool | None,
+) -> Any:
+    raw = llm_fn(system, [{"role": "user", "content": user}])
+    parsed = parse_json_or_repair(llm_fn, raw, schema_description)
+    requests = _extract_context_requests(parsed)
+    if requests and tool is not None:
+        tool_results = _execute_context_requests(tool, requests)
+        followup_user = (
+            f"{user}\n\n"
+            "You requested more context from the read-only SQL-index tool.\n"
+            "Tool results:\n"
+            f"{_format_context_tool_results(tool_results)}\n\n"
+            "Revise your answer using the added context. Return final JSON only."
+        )
+        raw = llm_fn(system, [{"role": "user", "content": followup_user}])
+        parsed = parse_json_or_repair(llm_fn, raw, schema_description)
+    if isinstance(parsed, dict):
+        parsed.pop("context_requests", None)
+    return parsed
+
+
+def _reflection_section(title: str, bullets: list[str], prose: str | None = None) -> str:
+    lines = [f"## {title}", ""]
+    if prose:
+        lines.append(prose)
+        lines.append("")
+    for bullet in bullets:
+        bullet = bullet.strip()
+        if bullet:
+            lines.append(f"- {bullet}")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _upsert_marked_section(page_text: str, marker: str, section_text: str) -> str:
+    start = f"<!-- phase6:{marker}:start -->"
+    end = f"<!-- phase6:{marker}:end -->"
+    block = f"{start}\n{section_text.rstrip()}\n{end}"
+    if start in page_text and end in page_text:
+        before, rest = page_text.split(start, 1)
+        _old, after = rest.split(end, 1)
+        return before.rstrip() + "\n\n" + block + after
+    if page_text and not page_text.endswith("\n"):
+        page_text += "\n"
+    return page_text.rstrip() + "\n\n" + block + "\n"
+
+
+def _apply_concept_reflection_to_page(root: Path, record: dict) -> bool:
+    cluster_id = record.get("cluster_id", "")
+    page_path = root / "wiki" / "shared" / "concepts" / f"{record.get('slug', '')}.md"
+    if "/bridge-concepts/" in record.get("wiki_path", ""):
+        page_path = root / Path(record["wiki_path"])
+    if not page_path.exists():
+        return False
+    page = _read_text(page_path)
+    section = _reflection_section(
+        "Phase 6 Reflection",
+        [f"Main takeaways: {', '.join(record.get('main_takeaways', [])) or 'n/a'}",
+         f"Main tensions: {', '.join(record.get('main_tensions', [])) or 'n/a'}",
+         f"Open questions: {', '.join(record.get('open_questions', [])) or 'n/a'}"],
+        prose=record.get("why_this_concept_matters", ""),
+    )
+    updated = _upsert_marked_section(page, "concept-reflection", section)
+    if updated != page:
+        page_path.write_text(updated, encoding="utf-8")
+        return True
+    return False
+
+
+def _apply_collection_reflection_to_page(root: Path, record: dict) -> bool:
+    domain = record.get("domain", "")
+    collection = record.get("collection", "")
+    page_path = root / f"wiki/{domain}/{collection}/_index.md"
+    if not page_path.exists():
+        return False
+    page = _read_text(page_path)
+    section = _reflection_section(
+        "Phase 6 Reflection",
+        [f"Main takeaways: {', '.join(record.get('main_takeaways', [])) or 'n/a'}",
+         f"Main tensions: {', '.join(record.get('main_tensions', [])) or 'n/a'}",
+         f"Important materials: {', '.join(record.get('important_material_ids', [])) or 'n/a'}",
+         f"Open questions: {', '.join(record.get('open_questions', [])) or 'n/a'}"],
+    )
+    updated = _upsert_marked_section(page, "collection-reflection", section)
+    if updated != page:
+        page_path.write_text(updated, encoding="utf-8")
+        return True
+    return False
+
+
+def _build_material_info(root: Path, manifest_records: list[dict]) -> dict[str, dict]:
+    metas = _load_all_metas(root, manifest_records)
+    info: dict[str, dict] = {}
+    for mid, meta in metas.items():
+        keywords_field = meta.get("keywords")
+        if isinstance(keywords_field, dict):
+            keywords = _safe_list(keywords_field.get("value", []))
+        elif isinstance(keywords_field, list):
+            keywords = [str(v) for v in keywords_field if str(v).strip()]
+        else:
+            keywords = []
+        info[mid] = {
+            "title": meta.get("title", mid),
+            "summary": _meta_val(meta.get("summary")),
+            "keywords": keywords,
+            "domain": meta.get("domain", "practice"),
+            "collection": meta.get("collection", "_general"),
+            "meta": meta,
+        }
+    return info
+
+
+def _build_deterministic_collection_page(root: Path, domain: str, collection: str, metas: list[dict], clusters: list[dict]) -> str:
+    title = f"{domain.replace('_', ' ').title()} / {collection.replace('_', ' ').title()}"
+    manifest_index = {rec.get("material_id", ""): rec for rec in _load_manifest(root) if rec.get("material_id")}
+    material_entries = []
+    for meta in metas:
+        material_entries.append({
+            "name": meta.get("title") or meta.get("material_id", ""),
+            "path": _material_wiki_path(meta),
+            "summary": _meta_val(meta.get("summary"))[:120],
+        })
+    coll_mids = {meta.get("material_id", "") for meta in metas if meta.get("material_id")}
+    key_concepts = []
+    for c in clusters:
+        overlap = coll_mids & set(c.get("material_ids", []))
+        if overlap:
+            key_concepts.append({
+                "name": c.get("canonical_name", ""),
+                "path": c.get("wiki_path") or _concept_wiki_path(c.get("slug", "")),
+                "count": len(overlap),
+            })
+    facets = []
+    facet_fields = [
+        "building_type", "scale", "location", "jurisdiction", "climate",
+        "program", "material_system", "structural_system", "historical_period",
+        "course_topic", "studio_project",
+    ]
+    facet_freq: dict[tuple[str, str], int] = Counter()
+    for meta in metas:
+        facets_meta = meta.get("facets") or {}
+        for field in facet_fields:
+            val = _meta_val(facets_meta.get(field) or "").strip()
+            if val:
+                facet_freq[(field, val)] += 1
+    for (field, val), count in sorted(facet_freq.items(), key=lambda x: (-x[1], x[0])):
+        if count >= 2:
+            facets.append({"field": field, "value": val, "count": count})
+    recent = sorted(
+        [{
+            "name": meta.get("title") or meta.get("material_id", ""),
+            "path": _material_wiki_path(meta),
+            "ingested_at": manifest_index.get(meta.get("material_id", ""), {}).get("ingested_at", ""),
+        } for meta in metas],
+        key=lambda x: x.get("ingested_at", ""),
+        reverse=True,
+    )
+    return render_collection_page(title, domain, collection, material_entries, key_concepts, facets, recent)
+
+
+def _run_cluster_audit(
+    root: Path,
+    clusters: list[dict],
+    material_info: dict[str, dict],
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+) -> list[dict]:
+    existing_rows = _load_jsonl(root / LINT_DIR / "cluster_reviews.jsonl")
+    existing_by_cluster: dict[str, list[dict]] = defaultdict(list)
+    for row in existing_rows:
+        cluster_id = str(row.get("cluster_id", "")).strip()
+        if cluster_id:
+            existing_by_cluster[cluster_id].append(row)
+    output: list[dict] = []
+    workers = max(1, min(len(clusters), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
+
+    def _one(cluster: dict) -> list[dict]:
+        source_concepts = cluster.get("source_concepts", [])
+        material_count = len(dict.fromkeys(sc.get("material_id", "") for sc in source_concepts if sc.get("material_id")))
+        if material_count == 0:
+            return []
+        page_path = root / _concept_page_path(cluster)
+        payload = _cluster_prompt_payload(
+            cluster,
+            material_info,
+            _read_text(page_path) or "",
+            tool,
+        )
+        payload["audit_scope"] = "full" if material_count >= 2 else "light"
+        payload["material_count"] = material_count
+        fingerprint = canonical_hash(payload)
+        review_id = cluster.get("cluster_id", "")
+        existing_record = existing_by_cluster.get(review_id, [])
+        if existing_record and all(row.get("input_fingerprint") == fingerprint for row in existing_record):
+            return existing_record
+        llm_fn = llm_factory("cluster")
+        system, user = _cluster_audit_prompt(cluster, payload)
+        parsed = _run_reflection_prompt_with_context(
+            llm_fn,
+            system,
+            user,
+            "JSON object with keys: findings (array of findings) and optional context_requests (array of read-only SQL-index lookups)",
+            tool,
+        )
+        findings = parsed.get("findings", []) if isinstance(parsed, dict) else parsed
+        if not isinstance(findings, list):
+            raise EnrichmentError("Cluster audit returned non-list findings")
+        records = []
+        for idx, finding in enumerate(findings):
+            if not isinstance(finding, dict):
+                continue
+            record = {
+                "review_id": f"{review_id}:{idx}:{finding.get('finding_type','')}",
+                "cluster_id": review_id,
+                "finding_type": finding.get("finding_type", ""),
+                "severity": finding.get("severity", ""),
+                "recommendation": finding.get("recommendation", ""),
+                "affected_material_ids": _safe_list(finding.get("affected_material_ids", [])),
+                "affected_concept_names": _safe_list(finding.get("affected_concept_names", [])),
+                "evidence": _safe_list(finding.get("evidence", [])),
+                "input_fingerprint": fingerprint,
+                "wiki_path": str(page_path.relative_to(root)),
+            }
+            records.append(record)
+        if not records:
+            records.append({
+                "review_id": review_id,
+                "cluster_id": review_id,
+                "finding_type": "none",
+                "severity": "low",
+                "recommendation": "",
+                "affected_material_ids": [],
+                "affected_concept_names": [],
+                "evidence": [],
+                "input_fingerprint": fingerprint,
+                "wiki_path": str(page_path.relative_to(root)),
+            })
+        return records
+
+    if len(clusters) > 1 and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_one, c) for c in clusters]
+            for fut in as_completed(futures):
+                output.extend(fut.result())
+    else:
+        for cluster in clusters:
+            output.extend(_one(cluster))
+
+    _write_jsonl(root / LINT_DIR / "cluster_reviews.jsonl", output)
+    return output
+
+
+def _run_concept_reflections(
+    root: Path,
+    clusters: list[dict],
+    material_info: dict[str, dict],
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+) -> list[dict]:
+    existing = _existing_by_key(root / LINT_DIR / "concept_reflections.jsonl", "cluster_id")
+    output: list[dict] = []
+    eligible = [c for c in clusters if len(dict.fromkeys(sc.get("material_id", "") for sc in c.get("source_concepts", []) if sc.get("material_id"))) >= 2]
+    workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
+
+    def _one(cluster: dict) -> dict | None:
+        page_path = root / _concept_page_path(cluster)
+        payload = _cluster_prompt_payload(cluster, material_info, _read_text(page_path) or "", tool)
+        fingerprint = canonical_hash(payload)
+        existing_record = existing.get(cluster.get("cluster_id", ""))
+        if existing_record and existing_record.get("input_fingerprint") == fingerprint:
+            return existing_record
+        llm_fn = llm_factory("cluster")
+        system, user = _concept_reflection_prompt(cluster, payload)
+        parsed = _run_reflection_prompt_with_context(
+            llm_fn,
+            system,
+            user,
+            "JSON object with keys: main_takeaways, main_tensions, open_questions, why_this_concept_matters, optional context_requests",
+            tool,
+        )
+        if not isinstance(parsed, dict):
+            raise EnrichmentError("Concept reflection returned non-object")
+        record = {
+            "cluster_id": cluster.get("cluster_id", ""),
+            "slug": cluster.get("slug", ""),
+            "canonical_name": cluster.get("canonical_name", ""),
+            "main_takeaways": _safe_list(parsed.get("main_takeaways", [])),
+            "main_tensions": _safe_list(parsed.get("main_tensions", [])),
+            "open_questions": _safe_list(parsed.get("open_questions", [])),
+            "why_this_concept_matters": str(parsed.get("why_this_concept_matters", "")).strip(),
+            "supporting_material_ids": sorted({sc.get("material_id", "") for sc in cluster.get("source_concepts", []) if sc.get("material_id")}),
+            "supporting_evidence": sorted({
+                span
+                for sc in cluster.get("source_concepts", [])
+                for span in _safe_list(sc.get("evidence_spans", []))
+            }),
+            "input_fingerprint": fingerprint,
+            "wiki_path": str(page_path.relative_to(root)),
+        }
+        return record
+
+    if len(eligible) > 1 and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_one, c) for c in eligible]
+            for fut in as_completed(futures):
+                record = fut.result()
+                if record:
+                    output.append(record)
+    else:
+        for cluster in eligible:
+            record = _one(cluster)
+            if record:
+                output.append(record)
+
+    output.sort(key=lambda r: r.get("cluster_id", ""))
+    _write_jsonl(root / LINT_DIR / "concept_reflections.jsonl", output)
+    return output
+
+
+def _run_collection_reflections(
+    root: Path,
+    groups: dict[tuple[str, str], list[dict]],
+    clusters: list[dict],
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+) -> list[dict]:
+    existing = _existing_by_key(root / LINT_DIR / "collection_reflections.jsonl", "collection_key")
+    output: list[dict] = []
+    eligible = [(domain, collection, metas) for (domain, collection), metas in groups.items() if len(metas) >= 2]
+    workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
+
+    def _one(domain: str, collection: str, metas: list[dict]) -> dict | None:
+        page_path = root / f"wiki/{domain}/{collection}/_index.md"
+        deterministic_page = _build_deterministic_collection_page(root, domain, collection, metas, clusters)
+        payload = _collection_prompt_payload(domain, collection, metas, _read_text(page_path) or deterministic_page, clusters, tool)
+        fingerprint = canonical_hash(payload)
+        key = f"{domain}/{collection}"
+        existing_record = existing.get(key)
+        if existing_record and existing_record.get("input_fingerprint") == fingerprint:
+            return existing_record
+        llm_fn = llm_factory("cluster")
+        system, user = _collection_reflection_prompt(domain, collection, payload)
+        parsed = _run_reflection_prompt_with_context(
+            llm_fn,
+            system,
+            user,
+            "JSON object with keys: main_takeaways, main_tensions, important_material_ids, important_cluster_ids, open_questions, optional context_requests",
+            tool,
+        )
+        if not isinstance(parsed, dict):
+            raise EnrichmentError("Collection reflection returned non-object")
+        record = {
+            "collection_key": key,
+            "domain": domain,
+            "collection": collection,
+            "main_takeaways": _safe_list(parsed.get("main_takeaways", [])),
+            "main_tensions": _safe_list(parsed.get("main_tensions", [])),
+            "important_material_ids": _safe_list(parsed.get("important_material_ids", [])),
+            "important_cluster_ids": _safe_list(parsed.get("important_cluster_ids", [])),
+            "open_questions": _safe_list(parsed.get("open_questions", [])),
+            "input_fingerprint": fingerprint,
+            "wiki_path": str(page_path.relative_to(root)),
+        }
+        return record
+
+    if len(eligible) > 1 and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_one, domain, collection, metas) for domain, collection, metas in eligible]
+            for fut in as_completed(futures):
+                record = fut.result()
+                if record:
+                    output.append(record)
+    else:
+        for domain, collection, metas in eligible:
+            record = _one(domain, collection, metas)
+            if record:
+                output.append(record)
+
+    output.sort(key=lambda r: (r.get("domain", ""), r.get("collection", "")))
+    _write_jsonl(root / LINT_DIR / "collection_reflections.jsonl", output)
+    return output
+
+
+def _run_graph_reflection(
+    root: Path,
+    deterministic_report: dict,
+    cluster_reviews: list[dict],
+    concept_refs: list[dict],
+    collection_refs: list[dict],
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+) -> list[dict]:
+    existing_rows = _load_jsonl(root / LINT_DIR / "graph_findings.jsonl")
+    payload = {
+        "deterministic_report": deterministic_report.get("summary", {}),
+        "cluster_reviews": cluster_reviews[:20],
+        "concept_reflections": concept_refs[:20],
+        "collection_reflections": collection_refs[:20],
+    }
+    fingerprint = canonical_hash(payload)
+    if existing_rows and all(row.get("input_fingerprint") == fingerprint for row in existing_rows):
+        return existing_rows
+
+    llm_fn = llm_factory("cluster")
+    system, user = _graph_reflection_prompt(deterministic_report, cluster_reviews, concept_refs, collection_refs)
+    parsed = _run_reflection_prompt_with_context(
+        llm_fn,
+        system,
+        user,
+        "JSON object with keys: findings (array of findings) and optional context_requests (array of read-only SQL-index lookups)",
+        tool,
+    )
+    findings = parsed.get("findings", []) if isinstance(parsed, dict) else parsed
+    if not isinstance(findings, list):
+        raise EnrichmentError("Graph reflection returned non-list findings")
+
+    records: list[dict] = []
+    for idx, finding in enumerate(findings):
+        if not isinstance(finding, dict):
+            continue
+        record = {
+            "finding_id": f"graph:{idx}",
+            "finding_type": finding.get("finding_type", ""),
+            "severity": finding.get("severity", ""),
+            "summary": finding.get("summary", ""),
+            "details": finding.get("details", ""),
+            "affected_material_ids": _safe_list(finding.get("affected_material_ids", [])),
+            "affected_cluster_ids": _safe_list(finding.get("affected_cluster_ids", [])),
+            "candidate_future_sources": _safe_list(finding.get("candidate_future_sources", [])),
+            "candidate_bridge_links": _safe_list(finding.get("candidate_bridge_links", [])),
+            "input_fingerprint": fingerprint,
+        }
+        records.append(record)
+
+    if not records:
+        records.append({
+            "finding_id": "graph:empty",
+            "finding_type": "none",
+            "severity": "low",
+            "summary": "",
+            "details": "",
+            "affected_material_ids": [],
+            "affected_cluster_ids": [],
+            "candidate_future_sources": [],
+            "candidate_bridge_links": [],
+            "input_fingerprint": fingerprint,
+        })
+
+    _write_jsonl(root / LINT_DIR / "graph_findings.jsonl", records)
+    _write_stamp(
+        root / GRAPH_REFLECTION_STAMP_PATH,
+        {
+            "checked_at": datetime.now(timezone.utc).isoformat(),
+            "graph_fingerprint": fingerprint,
+            "cluster_count": len({cluster.get("cluster_id", "") for cluster in cluster_reviews if cluster.get("cluster_id", "")}),
+            "material_count": len({mid for row in cluster_reviews for mid in _safe_list(row.get("affected_material_ids", []))}),
+            "finding_count": len(records),
+        },
+    )
+    return records
+
+
+def run_reflective_lint(
+    config: dict,
+    deterministic_report: dict,
+    *,
+    llm_factory=None,
+    apply: bool = False,
+    scheduled: bool = False,
+) -> dict:
+    """Run the reflective LLM passes and project outputs to disk."""
+    root = get_project_root()
+    manifest_records = _load_manifest(root)
+    metas = _load_all_metas(root, manifest_records)
+    material_info = _build_material_info(root, manifest_records)
+    clusters = _current_concepts(root)
+    groups = _group_materials_by_collection(metas)
+
+    if not get_index_path().exists() or not clusters:
+        lint_root = root / LINT_DIR
+        lint_root.mkdir(parents=True, exist_ok=True)
+        for name in ("cluster_reviews.jsonl", "concept_reflections.jsonl", "collection_reflections.jsonl", "graph_findings.jsonl"):
+            (lint_root / name).write_text("", encoding="utf-8")
+        return {
+            "cluster_reviews": 0,
+            "concept_reflections": 0,
+            "collection_reflections": 0,
+            "graph_findings": 0,
+            "applied": False,
+            "skipped": True,
+            "graph_skipped": True,
+        }
+
+    if llm_factory is None:
+        def llm_factory(stage: str) -> LlmFn:
+            return make_cli_llm_fn(config, "cluster")
+
+    with ReflectionIndexTool(root) as tool:
+        cluster_reviews = _run_cluster_audit(root, clusters, material_info, llm_factory, tool)
+        concept_refs = _run_concept_reflections(root, clusters, material_info, llm_factory, tool)
+        collection_refs = _run_collection_reflections(root, groups, clusters, llm_factory, tool)
+        graph_due, graph_reason = _graph_reflection_due(
+            root,
+            config,
+            clusters,
+            manifest_records,
+            cluster_reviews,
+            concept_refs,
+            collection_refs,
+            deterministic_report,
+        )
+        if graph_due or not scheduled:
+            graph_findings = _run_graph_reflection(
+                root, deterministic_report, cluster_reviews, concept_refs, collection_refs, llm_factory, tool
+            )
+            graph_skipped = False
+            graph_skip_reason = ""
+        else:
+            graph_findings = _load_jsonl(root / LINT_DIR / "graph_findings.jsonl")
+            graph_skipped = True
+            graph_skip_reason = graph_reason
+
+    if apply:
+        for record in concept_refs:
+            _apply_concept_reflection_to_page(root, record)
+        for record in collection_refs:
+            _apply_collection_reflection_to_page(root, record)
+
+    # Always refresh memory so the reflection tables are queryable.
+    memory_rebuild(config)
+
+    return {
+        "cluster_reviews": len(cluster_reviews),
+        "concept_reflections": len(concept_refs),
+        "collection_reflections": len(collection_refs),
+        "graph_findings": len(graph_findings),
+        "applied": apply,
+        "graph_skipped": graph_skipped,
+        "graph_skip_reason": graph_skip_reason,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Public runner
+# ---------------------------------------------------------------------------
+
+def run_lint(
+    config: dict | None = None,
+    *,
+    quick: bool = False,
+    full: bool = False,
+    report: bool = False,
+    fix: bool = False,
+    llm_factory=None,
+    scheduled: bool = False,
+) -> dict:
+    """Run lint in quick or full mode and return a structured summary."""
+    if config is None:
+        config = load_config()
+    if quick and full:
+        raise ValueError("lint cannot be both quick and full")
+    if not quick and not full:
+        quick = True
+
+    deterministic = run_deterministic_lint(config)
+    root = get_project_root()
+    result = {
+        "mode": "full" if full else "quick",
+        "deterministic": deterministic,
+        "reflection": None,
+        "fixes": None,
+        "report_path": str((get_project_root() / REPORT_PATH)),
+    }
+
+    if fix:
+        result["fixes"] = _apply_deterministic_fixes(deterministic, config)
+
+    full_reflection_ran = False
+    if full:
+        graph_due, graph_reason = _full_lint_due(root, deterministic, config)
+        if scheduled and not graph_due:
+            result["reflection"] = {
+                "cluster_reviews": 0,
+                "concept_reflections": 0,
+                "collection_reflections": 0,
+                "graph_findings": 0,
+                "applied": False,
+                "skipped": True,
+                "graph_skipped": True,
+                "graph_skip_reason": graph_reason,
+            }
+        else:
+            result["reflection"] = run_reflective_lint(
+                config,
+                deterministic,
+                llm_factory=llm_factory,
+                apply=fix,
+                scheduled=scheduled,
+            )
+            full_reflection_ran = True
+
+    if full and full_reflection_ran:
+        _write_full_lint_stamp(root, deterministic)
+
+    if report or full or fix:
+        report_text = render_lint_report(deterministic)
+        path = get_project_root() / REPORT_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(report_text, encoding="utf-8")
+
+    return result
+
+
+def lint_exit_code(result: dict) -> int:
+    """Return a deterministic CLI exit code for lint results."""
+    deterministic = result.get("deterministic", {}) or {}
+    summary = deterministic.get("summary", {}) if isinstance(deterministic, dict) else {}
+    if summary.get("high", 0):
+        return 2
+    if summary.get("issues", 0):
+        return 1
+    return 0

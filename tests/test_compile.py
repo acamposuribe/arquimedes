@@ -932,6 +932,85 @@ def test_compile_writes_collection_pages(tmp_path, monkeypatch):
     assert "2026-04-05" in coll_page
 
 
+def test_compile_runs_quick_lint_after_compile(tmp_path, monkeypatch):
+    """compile_wiki() should trigger a quick lint pass after publishing."""
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+    from arquimedes.index import rebuild_index
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    mid = "mat_quick"
+    meta = _make_meta(mid, "Quick Lint Material")
+    mat_dir = tmp_path / "extracted" / mid
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps(meta))
+    (mat_dir / "chunks.jsonl").write_text("")
+    (mat_dir / "annotations.jsonl").write_text("")
+    (manifests / "materials.jsonl").write_text(
+        json.dumps({
+            "material_id": mid, "file_hash": mid,
+            "relative_path": f"Research/{mid}.pdf", "file_type": "pdf",
+            "domain": "research", "collection": "_general",
+            "ingested_at": "2026-01-01T00:00:00+00:00",
+        })
+    )
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+
+    derived = tmp_path / "derived"
+    derived.mkdir(exist_ok=True)
+    cluster = {
+        "cluster_id": "c_quick", "canonical_name": "Quick Concept",
+        "slug": "quick-concept", "aliases": [], "confidence": 0.9,
+        "material_ids": [mid],
+        "source_concepts": [{
+            "material_id": mid, "concept_name": "quick concept",
+            "relevance": "high", "source_pages": [1],
+            "evidence_spans": [], "confidence": 0.9,
+        }],
+    }
+    (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+
+    lint_calls: list[dict] = []
+
+    def fake_run_lint(config, *, quick=False, full=False, report=False, fix=False, scheduled=False, llm_factory=None):
+        lint_calls.append({
+            "quick": quick,
+            "full": full,
+            "report": report,
+            "fix": fix,
+            "scheduled": scheduled,
+        })
+        return {
+            "mode": "quick" if quick else "full",
+            "deterministic": {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}},
+            "reflection": None,
+            "fixes": None,
+            "report_path": str(tmp_path / "wiki" / "_lint_report.md"),
+        }
+
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
+    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: [cluster])
+    monkeypatch.setattr(cluster_mod, "cluster_bridge_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
+    monkeypatch.setattr("arquimedes.lint.run_lint", fake_run_lint)
+
+    result = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    assert lint_calls and lint_calls[0]["quick"] is True
+    assert result["quick_lint"]["mode"] == "quick"
+
+
 def test_collection_page_key_concepts_ranked():
     """Key concepts rendered in the order given (pre-sorted by compile.py)."""
     key_concepts = [

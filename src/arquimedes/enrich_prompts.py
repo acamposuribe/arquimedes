@@ -197,6 +197,17 @@ be weighted as priority context for summaries, keywords, and facets. \
 
 Analyze this architecture document and return a single JSON object matching the schema below. \
 Only include facets where you are confident (omit fields you cannot determine). \
+For "summary": write a dense but readable synthesis of the document's distinctive contribution. \
+Do not merely restate the topic. Name the central argument, method, archive/project/case focus when \
+important, and what the document helps the reader understand that is not obvious from the title alone. \
+Prefer intellectual specificity and nuance over a bland generic abstract. \
+For "keywords": return 6-12 strong terms or short phrases that maximize retrieval value. Prefer a mix of \
+named actors, places, archives, projects, methods, institutional conditions, and core concepts when they \
+are central. Avoid generic filler and avoid repeating the broadest document theme in multiple synonymous \
+forms. \
+For "facets": infer only concrete, useful indexing values grounded in the document. Prefer specific values \
+over vague ones, and do not force every facet field. Use facets to capture real scope and context rather \
+than abstract interpretation. \
 For "bibliography": extract journal name, volume, issue, page range, DOI, publisher, place, \
 book title, and editors as they appear on the title page, header, footer, or references — \
 omit any sub-field you cannot find. \
@@ -431,6 +442,11 @@ Analyze this architecture document and return a single JSON object with two top-
 For "document": provide summary, document_type, keywords, facets (only where confident — omit \
 fields you cannot determine), concepts, and bibliography (journal/book publication details \
 extracted from title page, header, or references — omit sub-fields you cannot find).
+For "document.summary": capture the document's distinctive argument or contribution with some nuance, \
+not just a generic topic sentence. \
+For "document.keywords": maximize retrieval value with a mix of entities, methods, institutions, and \
+core concepts. \
+For "document.facets": provide concrete, grounded indexing values rather than vague themes. \
 For "document.concepts_local": extract 8-15 strong material-level concept candidates that this \
 material genuinely contributes to. A good local concept is a reusable intellectual unit with strong \
 textual evidence. Prefer concept phrases that are specific enough to carry real analytical content \

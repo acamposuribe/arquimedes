@@ -1,6 +1,6 @@
-"""Tests for PDF annotation extraction helpers."""
+"""Tests for PDF extraction sanitization helpers."""
 
-from arquimedes.extract_pdf import _clean_annotation_quote
+from arquimedes.extract_pdf import _clean_annotation_quote, _sanitize_strings
 
 
 def test_clean_annotation_quote_drops_short_artifact_lines():
@@ -22,3 +22,17 @@ def test_clean_annotation_quote_collapses_spacing():
     cleaned = _clean_annotation_quote(raw)
 
     assert cleaned == "I argue for a more expansive understanding"
+
+
+def test_sanitize_strings_removes_null_bytes_recursively():
+    raw = {
+        "text": "Hel\x00lo",
+        "items": ["A\x00", {"nested": "B\x00C"}],
+    }
+
+    cleaned = _sanitize_strings(raw)
+
+    assert cleaned == {
+        "text": "Hello",
+        "items": ["A", {"nested": "BC"}],
+    }

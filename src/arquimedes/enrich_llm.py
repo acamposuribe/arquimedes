@@ -325,6 +325,11 @@ _FAST_FAIL_RE = re.compile(
 )
 
 
+def _strip_nuls(text: str) -> str:
+    """Remove embedded NUL bytes that break subprocess argv/stdin handling."""
+    return text.replace("\x00", "")
+
+
 def _run_agent_subprocess(
     cmd: list[str],
     stdin_text: str,
@@ -345,8 +350,11 @@ def _run_agent_subprocess(
     env = os.environ.copy()
     env["CLAUDE_CODE_DISABLE_1M_CONTEXT"] = "1"
 
+    safe_cmd = [_strip_nuls(part) for part in cmd]
+    safe_stdin = _strip_nuls(stdin_text)
+
     proc = subprocess.Popen(
-        cmd,
+        safe_cmd,
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -357,7 +365,7 @@ def _run_agent_subprocess(
 
     # Write stdin — the agent reads the prompt from here
     try:
-        proc.stdin.write(stdin_text)  # type: ignore[union-attr]
+        proc.stdin.write(safe_stdin)  # type: ignore[union-attr]
         proc.stdin.close()  # type: ignore[union-attr]
     except BrokenPipeError:
         pass  # process already exited
@@ -414,14 +422,14 @@ def _run_agent_subprocess(
         t_out.join(timeout=5)
         t_err.join(timeout=5)
         proc.wait()
-        raise subprocess.TimeoutExpired(cmd, timeout)
+        raise subprocess.TimeoutExpired(safe_cmd, timeout)
 
     proc.wait(timeout=10)
     t_out.join(timeout=5)
     t_err.join(timeout=5)
 
     return subprocess.CompletedProcess(
-        cmd, proc.returncode or 0, "".join(stdout_chunks), "".join(stderr_chunks)
+        safe_cmd, proc.returncode or 0, "".join(stdout_chunks), "".join(stderr_chunks)
     )
 
 
@@ -433,28 +441,29 @@ def _build_prompt_text(system: str, messages: list[dict]) -> tuple[str, str]:
     For multimodal messages (image blocks in figure enrichment), image files
     are referenced by their original file path so the agent can read them.
     """
+    system = _strip_nuls(system)
     parts = []
     for msg in messages:
         role = msg.get("role", "user").upper()
         content = msg.get("content", "")
         if isinstance(content, str):
-            parts.append(f"[{role}]\n{content}\n")
+            parts.append(f"[{role}]\n{_strip_nuls(content)}\n")
         elif isinstance(content, list):
             # Multimodal content blocks (text + image)
             text_parts = []
             for block in content:
                 if isinstance(block, dict) and block.get("type") == "text":
-                    text_parts.append(block["text"])
+                    text_parts.append(_strip_nuls(block["text"]))
                 elif isinstance(block, dict) and block.get("type") == "image":
                     # Include image file reference for the agent CLI
-                    source_path = block.get("_source_path", "")
+                    source_path = _strip_nuls(block.get("_source_path", ""))
                     if source_path:
                         text_parts.append(
                             f"[IMAGE: {source_path}]\n"
                             f"(Read and analyze this image file for figure enrichment)\n"
                         )
                 elif isinstance(block, str):
-                    text_parts.append(block)
+                    text_parts.append(_strip_nuls(block))
             if text_parts:
                 parts.append(f"[{role}]\n{''.join(text_parts)}\n")
     return system, "\n".join(parts)

@@ -73,6 +73,14 @@ class TestBuildPromptText:
         assert system == "Be helpful."
         assert "[USER]\nHello" in user
 
+    def test_strips_embedded_null_bytes(self):
+        system, user = _build_prompt_text(
+            "Be\x00 helpful.",
+            [{"role": "user", "content": "Hel\x00lo"}],
+        )
+        assert "\x00" not in system
+        assert "\x00" not in user
+
     def test_multimodal_includes_image_paths(self):
         messages = [
             {

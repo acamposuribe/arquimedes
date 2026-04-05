@@ -10,7 +10,7 @@ from arquimedes.chunking import chunk_pages
 from arquimedes.config import get_library_root, get_project_root, load_config
 from arquimedes.extract_figures import extract_all_figures
 from arquimedes.extract_image import extract_raw_image
-from arquimedes.extract_pdf import extract_annotations, extract_raw_pdf
+from arquimedes.extract_pdf import _sanitize_strings, extract_annotations, extract_raw_pdf
 from arquimedes.ingest import load_manifest
 from arquimedes.models import Annotation, MaterialMeta, Page
 from arquimedes.thumbnails import generate_thumbnails
@@ -142,7 +142,7 @@ def _extract_pdf_material(
     # Save chunks
     with open(output_dir / "chunks.jsonl", "w", encoding="utf-8") as f:
         for chunk in chunks:
-            f.write(json.dumps(chunk.to_dict(), ensure_ascii=False) + "\n")
+            f.write(json.dumps(_sanitize_strings(chunk.to_dict()), ensure_ascii=False) + "\n")
 
 
 def _extract_image_material(
@@ -165,7 +165,7 @@ def _extract_image_material(
         chunks = chunk_pages(pages, chunk_size=chunk_size)
         with open(output_dir / "chunks.jsonl", "w", encoding="utf-8") as f:
             for chunk in chunks:
-                f.write(json.dumps(chunk.to_dict(), ensure_ascii=False) + "\n")
+                f.write(json.dumps(_sanitize_strings(chunk.to_dict()), ensure_ascii=False) + "\n")
 
 
 def _load_pages(output_dir: Path) -> list[Page]:
@@ -184,7 +184,7 @@ def _save_pages(output_dir: Path, pages: list[Page]) -> None:
     """Save pages to pages.jsonl."""
     with open(output_dir / "pages.jsonl", "w", encoding="utf-8") as f:
         for page in pages:
-            f.write(json.dumps(page.to_dict(), ensure_ascii=False) + "\n")
+            f.write(json.dumps(_sanitize_strings(page.to_dict()), ensure_ascii=False) + "\n")
 
 
 def _load_annotations(output_dir: Path) -> list[Annotation]:

@@ -13,6 +13,22 @@ from arquimedes.classify import classify_document_type, extract_keywords
 from arquimedes.models import Annotation, MaterialMeta, Page, Table
 
 
+def _strip_nuls(text: str) -> str:
+    """Remove embedded null bytes from extracted text."""
+    return text.replace("\x00", "")
+
+
+def _sanitize_strings(value):
+    """Recursively strip embedded null bytes from strings in nested data."""
+    if isinstance(value, str):
+        return _strip_nuls(value)
+    if isinstance(value, list):
+        return [_sanitize_strings(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _sanitize_strings(item) for key, item in value.items()}
+    return value
+
+
 def extract_text_and_pages(pdf_path: Path) -> tuple[str, list[Page], list[dict]]:
     """Extract raw text and page-level data from a PDF.
 
@@ -25,7 +41,7 @@ def extract_text_and_pages(pdf_path: Path) -> tuple[str, list[Page], list[dict]]
 
     for page_num in range(len(doc)):
         page = doc[page_num]
-        text = page.get_text("text")
+        text = _strip_nuls(page.get_text("text"))
         full_text_parts.append(text)
 
         # Extract headings heuristically from text blocks
@@ -40,7 +56,7 @@ def extract_text_and_pages(pdf_path: Path) -> tuple[str, list[Page], list[dict]]
     # Extract TOC from PDF outline
     toc = []
     for level, title, page_num in doc.get_toc():
-        toc.append({"level": level, "title": title, "page": page_num})
+        toc.append({"level": level, "title": _strip_nuls(title), "page": page_num})
 
     # Compute section_boundaries from TOC or headings.
     # A section boundary is the heading that starts on (or spans into) a page.
@@ -87,7 +103,7 @@ def _extract_headings(page: fitz.Page) -> list[str]:
                 text = span.get("text", "").strip()
                 if not text:
                     continue
-                line_text += text + " "
+                line_text += _strip_nuls(text) + " "
                 size = span.get("size", 0)
                 flags = span.get("flags", 0)
                 is_bold = flags & 2 ** 4  # bit 4 = bold
@@ -221,7 +237,7 @@ def extract_annotations(pdf_path: Path) -> list[Annotation]:
             quoted_text = _clean_annotation_quote(quoted_text.strip())
 
             # Get the annotation's comment/note text
-            comment = annot.info.get("content", "") or ""
+            comment = _strip_nuls(annot.info.get("content", "") or "")
 
             # Get color
             color = ""
@@ -323,7 +339,7 @@ def extract_raw_pdf(
     # 4. Build metadata
     doc = fitz.open(str(pdf_path))
     pdf_meta = doc.metadata or {}
-    title = pdf_meta.get("title", "") or ""
+    title = _strip_nuls(pdf_meta.get("title", "") or "")
     if not title:
         # Fallback: use first heading or filename
         for page in pages:
@@ -337,16 +353,16 @@ def extract_raw_pdf(
     author_str = pdf_meta.get("author", "") or ""
     if author_str:
         # Split on common separators
-        authors = [a.strip() for a in re.split(r"[,;&]| and ", author_str) if a.strip()]
+        authors = [_strip_nuls(a.strip()) for a in re.split(r"[,;&]| and ", author_str) if a.strip()]
 
     page_count = len(doc)
     doc.close()
 
     # 5. Deterministic classification
     raw_keywords = extract_keywords(pages)
-    raw_document_type = classify_document_type(
+    raw_document_type = _strip_nuls(classify_document_type(
         pages, title=title, filename=pdf_path.name,
-    ) or ""
+    ) or "")
 
     meta = MaterialMeta(
         material_id=material_id,
@@ -369,7 +385,7 @@ def extract_raw_pdf(
     meta.save(output_dir.parent)  # saves to output_dir/meta.json via material_id
 
     # full text
-    (output_dir / "text.md").write_text(full_text, encoding="utf-8")
+    (output_dir / "text.md").write_text(_strip_nuls(full_text), encoding="utf-8")
 
     # pages
     _write_jsonl(output_dir / "pages.jsonl", [p.to_dict() for p in pages])
@@ -384,7 +400,7 @@ def extract_raw_pdf(
 
     # TOC
     (output_dir / "toc.json").write_text(
-        json.dumps(toc, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(_sanitize_strings(toc), indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
     return meta
@@ -460,4 +476,4 @@ def _write_jsonl(path: Path, items: list[dict]) -> None:
     """Write a list of dicts as JSONL."""
     with open(path, "w", encoding="utf-8") as f:
         for item in items:
-            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+            f.write(json.dumps(_sanitize_strings(item), ensure_ascii=False) + "\n")

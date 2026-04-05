@@ -19,7 +19,6 @@ from arquimedes.config import get_project_root, load_config
 from arquimedes.enrich_llm import (
     EnrichmentError,
     LlmFn,
-    get_model_id,
     make_cli_llm_fn,
     parse_json_or_repair,
     set_codex_params,

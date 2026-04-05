@@ -65,6 +65,25 @@ library_root: "~/Arquimedes-Library"
 #       - provider: copilot
 #         command: "copilot"
 #         model: gpt-5-mini
+#
+#   # Legacy single-agent settings only. Leave these commented if using
+#   # llm_routes above.
+#   effort:
+#     document: medium
+#     chunk: low
+#     figure: low
+#     cluster: medium
+#   model:
+#     document: sonnet
+#     chunk: haiku
+#     figure: haiku
+#     cluster: sonnet
+#   codex_model: gpt-5.4-mini
+#   codex_effort:
+#     document: high
+#     chunk: medium
+#     figure: medium
+#     cluster: high
 
 # Watch daemon settings (server mode)
 # watch:

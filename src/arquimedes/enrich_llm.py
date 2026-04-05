@@ -37,7 +37,12 @@ LlmFn = Callable[[str, list[dict]], str]
 
 
 def set_effort(llm_fn: LlmFn, config: dict, stage: str) -> None:
-    """Set the thinking effort on llm_fn from config for the given stage."""
+    """Set legacy per-stage thinking effort attrs on llm_fn.
+
+    This is used by the legacy single-agent path and by custom injected llm_fn
+    implementations that honor these attributes. Stage-route mode reads model
+    and effort directly from the configured route entries instead.
+    """
     effort = config.get("enrichment", {}).get("effort", {})
     if isinstance(effort, dict):
         level = effort.get(stage)
@@ -48,7 +53,7 @@ def set_effort(llm_fn: LlmFn, config: dict, stage: str) -> None:
 
 
 def set_model(llm_fn: LlmFn, config: dict, stage: str) -> None:
-    """Set the per-stage model override on llm_fn from config."""
+    """Set legacy per-stage model attrs on llm_fn."""
     model_cfg = config.get("enrichment", {}).get("model", {})
     if isinstance(model_cfg, dict):
         model = model_cfg.get(stage)
@@ -59,7 +64,7 @@ def set_model(llm_fn: LlmFn, config: dict, stage: str) -> None:
 
 
 def set_codex_params(llm_fn: LlmFn, config: dict, stage: str) -> None:
-    """Set codex-specific model and effort on llm_fn from config."""
+    """Set legacy codex-specific attrs on llm_fn."""
     enrichment = config.get("enrichment", {})
     codex_model = enrichment.get("codex_model")
     codex_effort_cfg = enrichment.get("codex_effort", {})
@@ -434,8 +439,8 @@ def _build_agent_cmd(base_parts: list[str], system: str, *, effort: str | None =
     - ``--effort``: control thinking budget (low/medium/high)
     - ``--model``: per-stage model override (e.g. haiku for chunks)
 
-    For ``codex``: adds ``--ephemeral`` and ``--skip-git-repo-check``
-    to reduce startup overhead and avoid repo enforcement.
+    For ``codex``: adds ``--ephemeral`` and optional ``-m`` /
+    ``-c model_reasoning_effort=...`` overrides.
 
     Other agents get the base command as-is (system prompt stays in stdin).
     """

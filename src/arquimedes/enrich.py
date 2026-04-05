@@ -310,9 +310,6 @@ def _run_combined_enrichment(
     """
     from arquimedes import enrich_llm, enrich_prompts
 
-    enrichment_config = config.get("enrichment", {})
-    model = get_model_id(config, "document")
-
     # Load artifacts
     meta = _load_json(output_dir / "meta.json", {})
     toc = _load_json(output_dir / "toc.json")

@@ -75,7 +75,6 @@ library_root: "~/Arquimedes-Library"
 #         command: "claude --print"
 #         model: sonnet
 #         effort: medium
-#         bare: true
 #       - provider: codex
 #         command: "codex exec"
 #         model: gpt-5.4-mini

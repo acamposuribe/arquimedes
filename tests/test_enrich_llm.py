@@ -159,10 +159,6 @@ class TestBuildAgentCmd:
         idx = cmd.index("--system-prompt")
         assert cmd[idx + 1] == "Be helpful."
 
-    def test_claude_can_be_bare_when_requested(self):
-        cmd = _build_agent_cmd(["claude", "--print"], "Be helpful.", bare=True)
-        assert "--bare" in cmd
-
     def test_claude_respects_explicit_model(self):
         cmd = _build_agent_cmd(["claude", "--print", "--model", "opus"], "sys")
         assert cmd.count("--model") == 1
@@ -208,18 +204,6 @@ class TestBuildAgentCmd:
         assert "--effort" in cmd
         idx = cmd.index("--effort")
         assert cmd[idx + 1] == "low"
-
-    def test_claude_bare_from_route_can_be_enabled(self):
-        cmd, stdin_text, fast_fail = _build_stage_request(
-            ["claude", "--print"],
-            "claude",
-            "system",
-            "user prompt",
-            route={"bare": True},
-        )
-        assert "--bare" in cmd
-        assert stdin_text == "user prompt"
-        assert fast_fail is True
 
     def test_claude_effort_omitted_when_none(self):
         cmd = _build_agent_cmd(["claude", "--print"], "sys", effort=None)

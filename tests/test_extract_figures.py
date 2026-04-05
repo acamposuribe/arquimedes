@@ -83,3 +83,4 @@ def test_skips_full_page_text_scan_embedded_images(mock_fitz, tmp_path):
     figures = extract_embedded_images(Path("fake.pdf"), tmp_path)
 
     assert figures == []
+    assert not list((tmp_path / "figures").glob("*.png"))

@@ -33,10 +33,27 @@ def _is_near_full_page_text_scan(page: fitz.Page, bbox: list[float]) -> bool:
     if page_area <= 0:
         return False
     coverage = _bbox_area(bbox) / page_area
-    if coverage < FULL_PAGE_BBOX_THRESHOLD:
+    if coverage >= FULL_PAGE_BBOX_THRESHOLD:
+        return True
+    if coverage < 0.8:
         return False
+    # If the image is page-shaped and the page carries a lot of text, it is
+    # usually a page screenshot / scan, not a meaningful figure.
     page_text = page.get_text("text") or ""
-    return len(page_text.strip()) >= TEXT_HEAVY_PAGE_THRESHOLD
+    if len(page_text.strip()) < TEXT_HEAVY_PAGE_THRESHOLD:
+        return False
+    page_ratio = page.rect.width / page.rect.height if page.rect.height else 0
+    image_ratio = 0
+    if page.rect.width > 0 and page.rect.height > 0:
+        # The bbox alone is enough for most scans; keep the aspect-ratio test
+        # only for the borderline cases.
+        bbox_width = max(bbox[2] - bbox[0], 0)
+        bbox_height = max(bbox[3] - bbox[1], 0)
+        image_ratio = bbox_width / bbox_height if bbox_height else 0
+    if page_ratio <= 0 or image_ratio <= 0:
+        return False
+    ratio_delta = abs(image_ratio - page_ratio) / page_ratio
+    return ratio_delta <= 0.15
 
 
 def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
@@ -97,8 +114,6 @@ def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
             image_filename = f"{fig_id}.{ext}"
             image_path = figures_dir / image_filename
 
-            image_path.write_bytes(image_bytes)
-
             # Try to find the image's position on the page
             bbox = _find_image_bbox(page, xref)
 
@@ -106,6 +121,8 @@ def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
             # not meaningful figures, and should not go through figure enrichment.
             if bbox and _is_near_full_page_text_scan(page, bbox):
                 continue
+
+            image_path.write_bytes(image_bytes)
 
             figures.append(Figure(
                 figure_id=fig_id,

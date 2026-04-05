@@ -1,4 +1,4 @@
-"""Tests for figure extraction deduplication."""
+"""Tests for figure extraction heuristics and deduplication."""
 
 from unittest.mock import MagicMock, patch
 from pathlib import Path
@@ -22,6 +22,9 @@ def _make_fake_doc(pages_images):
         img_list = [(xref, 0, 0, 0, 0, 0, 0, 0, 0, 0) for xref, *_ in page_imgs]
         page.get_images.return_value = img_list
         page.get_image_rects.return_value = []
+        page.get_text.return_value = ""
+        page.rect.width = 500
+        page.rect.height = 800
         pages.append(page)
 
     doc.__iter__ = lambda self: iter(range(len(pages)))
@@ -61,3 +64,22 @@ def test_embedded_dedup_by_content_hash(mock_fitz, tmp_path):
     assert len(figures) == 2
     assert figures[0].figure_id == "fig_0001"
     assert figures[1].figure_id == "fig_0002"
+
+
+@patch("arquimedes.extract_figures.fitz")
+def test_skips_full_page_text_scan_embedded_images(mock_fitz, tmp_path):
+    """Near-full-page embedded scans on text-heavy pages should not become figures."""
+    img_bytes = b"\x89PNG" + b"\x00" * 5000
+    doc = _make_fake_doc([
+        [(10, img_bytes, 500, 800, "png")],
+    ])
+    page = doc.__getitem__(0)
+    page.get_image_rects.return_value = [MagicMock(x0=0.0, y0=0.0, x1=500.0, y1=800.0)]
+    page.get_text.return_value = "A" * 1000
+    page.rect.width = 500
+    page.rect.height = 800
+    mock_fitz.open.return_value = doc
+
+    figures = extract_embedded_images(Path("fake.pdf"), tmp_path)
+
+    assert figures == []

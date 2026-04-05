@@ -14,6 +14,29 @@ from arquimedes.models import Figure
 MIN_IMAGE_WIDTH = 100
 MIN_IMAGE_HEIGHT = 100
 MIN_IMAGE_AREA = 15000  # skip tiny decorative images
+FULL_PAGE_BBOX_THRESHOLD = 0.9
+TEXT_HEAVY_PAGE_THRESHOLD = 400
+
+
+def _bbox_area(bbox: list[float]) -> float:
+    if len(bbox) != 4:
+        return 0.0
+    x0, y0, x1, y1 = bbox
+    return max(x1 - x0, 0) * max(y1 - y0, 0)
+
+
+def _is_near_full_page_text_scan(page: fitz.Page, bbox: list[float]) -> bool:
+    """Heuristic: embedded image is effectively a scanned text page, not a figure."""
+    if len(bbox) != 4:
+        return False
+    page_area = page.rect.width * page.rect.height
+    if page_area <= 0:
+        return False
+    coverage = _bbox_area(bbox) / page_area
+    if coverage < FULL_PAGE_BBOX_THRESHOLD:
+        return False
+    page_text = page.get_text("text") or ""
+    return len(page_text.strip()) >= TEXT_HEAVY_PAGE_THRESHOLD
 
 
 def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
@@ -78,6 +101,11 @@ def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
 
             # Try to find the image's position on the page
             bbox = _find_image_bbox(page, xref)
+
+            # Skip full-page text scans from scanned PDFs; these are page screenshots,
+            # not meaningful figures, and should not go through figure enrichment.
+            if bbox and _is_near_full_page_text_scan(page, bbox):
+                continue
 
             figures.append(Figure(
                 figure_id=fig_id,

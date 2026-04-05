@@ -28,6 +28,11 @@ from pathlib import Path
 from typing import Any
 
 from arquimedes.cluster import (
+    _load_concept_rows,
+    _load_material_rows,
+    _cluster_output_path,
+    _stage_bridge_packet_input,
+    _validate_bridge_and_attach_provenance,
     is_bridge_clustering_stale,
     bridge_cluster_fingerprint,
     load_bridge_clusters,
@@ -776,6 +781,20 @@ def _material_titles_from_metas(metas: dict[str, dict]) -> dict[str, str]:
 
 def _current_concepts(root: Path) -> list[dict]:
     return load_bridge_clusters(root)
+
+
+def _load_local_concepts(root: Path) -> tuple[list[tuple], list[tuple]]:
+    """Load local concept rows and material rows for bridge discovery."""
+    db_path = get_index_path()
+    if not db_path.exists():
+        return [], []
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        concept_rows = _load_concept_rows(con, concept_type="local")
+        material_rows = _load_material_rows(con)
+    finally:
+        con.close()
+    return concept_rows, material_rows
 
 
 # ---------------------------------------------------------------------------
@@ -1617,7 +1636,9 @@ def _bridge_maintenance_prompt(
         "Return JSON only. Use the cluster reviews as maintainer feedback. "
         "If the reviews indicate that two bridge concepts are duplicates or should merge, "
         "propose a merge action. If a bridge concept has a better canonical name, propose a rename. "
-        "Only propose safe actions that preserve the underlying evidence. "
+        "If a bridge concept is clearly over-merged or internally inconsistent, propose a split. "
+        "If a bridge concept is indefensible, propose a delete. "
+        "Only propose safe actions that preserve the underlying evidence and prior work whenever possible. "
         "You will get only one read-only context round, so request everything you need at once."
     )
     user = (
@@ -1625,14 +1646,46 @@ def _bridge_maintenance_prompt(
         "with keys: actions, context_requests.\n"
         "actions must be a JSON array. context_requests is optional and must be a JSON array of "
         "read-only SQL-index lookups if you need more context.\n"
-        "Each action must include: action_type (merge|rename|keep), target_cluster_ids, "
+        "Each action must include: action_type (merge|rename|split|delete|keep), target_cluster_ids, "
         "canonical_name, aliases, reason, confidence.\n"
         "Only use action_type=merge when the target clusters are truly the same cross-material concept.\n"
         "Only use action_type=rename when the cluster is correct but badly named.\n"
+        "Use action_type=split when one bridge cluster should become two or more bridge clusters; include split_clusters.\n"
+        "Use action_type=delete only when the cluster is clearly invalid.\n"
         "Do not invent new bridge clusters here.\n\n"
         f"Bridge clusters:\n{json.dumps(bridge_clusters[:50], ensure_ascii=False, indent=2)}\n\n"
         f"Cluster reviews:\n{json.dumps(cluster_reviews[:50], ensure_ascii=False, indent=2)}\n\n"
         f"Material info:\n{json.dumps(material_info, ensure_ascii=False, indent=2)}"
+    )
+    return system, user
+
+
+def _bridge_discovery_prompt(
+    local_packets_path: Path,
+    bridge_clusters_path: Path,
+    output_path: Path,
+) -> tuple[str, str]:
+    system = (
+        "You are an architecture research librarian discovering new bridge concepts from local concepts. "
+        "Return JSON only. Preserve the existing bridge graph and only propose genuinely new bridge concepts "
+        "when the local concepts clearly connect multiple materials. Do not recreate the existing bridge graph "
+        "from scratch; build on the bridge memory file you are given. You will get only one read-only "
+        "context round, so request everything you need at once."
+    )
+    user = (
+        f"Read the local concept packet file from {local_packets_path}.\n"
+        f"Read the current bridge memory file from {bridge_clusters_path}.\n"
+        "Use the local concepts as discovery material and propose only genuinely new bridge concepts.\n"
+        "Do not duplicate bridge concepts already represented in the bridge memory file.\n"
+        "Bridge clusters must connect at least two materials.\n"
+        f"Write only the new bridge clusters to {output_path} using the Write tool.\n"
+        "Do not stream JSON into the response.\n"
+        "Confirm with a single line when done.\n\n"
+        "Return a JSON object with keys: clusters, context_requests.\n"
+        "clusters must be a JSON array of bridge cluster objects.\n"
+        "Each cluster object should include: canonical_name, aliases, source_concepts, confidence.\n"
+        "source_concepts must be a JSON array of {material_id, concept_name} entries.\n"
+        "context_requests is optional and must be a JSON array of read-only SQL-index lookups if you need more context."
     )
     return system, user
 
@@ -1728,6 +1781,106 @@ def _merge_bridge_clusters(
     return merged
 
 
+def _split_bridge_clusters(
+    bridge_clusters: list[dict],
+    action: dict,
+) -> list[dict] | None:
+    target_ids = [cid for cid in _safe_list(action.get("target_cluster_ids", [])) if cid]
+    if len(target_ids) != 1:
+        return None
+    target_id = target_ids[0]
+    existing = {cluster.get("cluster_id", ""): cluster for cluster in bridge_clusters if cluster.get("cluster_id", "")}
+    if target_id not in existing:
+        return None
+    split_clusters = action.get("split_clusters", [])
+    if not isinstance(split_clusters, list) or not split_clusters:
+        return None
+
+    target = existing[target_id]
+    concept_index: dict[tuple[str, str], dict] = {}
+    for source in target.get("source_concepts", []) or []:
+        if not isinstance(source, dict):
+            continue
+        material_id = str(source.get("material_id", "")).strip()
+        concept_name = str(source.get("concept_name", "")).strip()
+        if not material_id or not concept_name:
+            continue
+        concept_key = str(source.get("concept_key", "")).strip() or concept_name.lower().strip()
+        concept_index[(material_id, concept_key)] = {
+            "concept_name": concept_name,
+            "concept_key": concept_key,
+            "material_id": material_id,
+            "relevance": source.get("relevance", ""),
+            "source_pages": source.get("source_pages", []),
+            "evidence_spans": source.get("evidence_spans", []),
+            "confidence": source.get("confidence", 0.0),
+        }
+
+    validated = _validate_bridge_and_attach_provenance(split_clusters, concept_index, {})
+    if not validated:
+        return None
+
+    remaining = [cluster for cluster in bridge_clusters if cluster.get("cluster_id", "") != target_id]
+    start = _next_bridge_cluster_index(remaining)
+    reassigned = []
+    for idx, cluster in enumerate(validated, start=start):
+        reassigned.append({
+            **cluster,
+            "cluster_id": f"bridge_{idx:04d}",
+            "wiki_path": f"wiki/shared/bridge-concepts/{cluster.get('slug', '')}.md" if cluster.get("slug", "") else "",
+        })
+    return remaining + reassigned
+
+
+def _next_bridge_cluster_index(clusters: list[dict]) -> int:
+    max_idx = 0
+    for cluster in clusters:
+        cid = str(cluster.get("cluster_id", "")).strip()
+        match = re.fullmatch(r"bridge_(\d{4})", cid)
+        if match:
+            max_idx = max(max_idx, int(match.group(1)))
+    return max_idx + 1
+
+
+def _assign_new_bridge_ids(clusters: list[dict], existing_clusters: list[dict]) -> list[dict]:
+    """Assign sequential bridge ids to newly added clusters without touching existing ids."""
+    existing_ids = {str(cluster.get("cluster_id", "")).strip() for cluster in existing_clusters if cluster.get("cluster_id", "")}
+    next_idx = _next_bridge_cluster_index(existing_clusters)
+    reassigned: list[dict] = []
+    used_ids = set(existing_ids)
+    for cluster in clusters:
+        cid = str(cluster.get("cluster_id", "")).strip()
+        if cid and cid not in used_ids and re.fullmatch(r"bridge_\d{4}", cid):
+            reassigned.append(cluster)
+            used_ids.add(cid)
+            continue
+        while f"bridge_{next_idx:04d}" in used_ids:
+            next_idx += 1
+        new_id = f"bridge_{next_idx:04d}"
+        used_ids.add(new_id)
+        next_idx += 1
+        reassigned.append({
+            **cluster,
+            "cluster_id": new_id,
+            "wiki_path": f"wiki/shared/bridge-concepts/{cluster.get('slug', '')}.md" if cluster.get("slug", "") else "",
+        })
+    return reassigned
+
+
+def _cover_pairs_from_clusters(clusters: list[dict]) -> set[tuple[str, str]]:
+    covered: set[tuple[str, str]] = set()
+    for cluster in clusters:
+        for source in cluster.get("source_concepts", []) or []:
+            if not isinstance(source, dict):
+                continue
+            material_id = str(source.get("material_id", "")).strip()
+            concept_name = str(source.get("concept_name", "")).strip()
+            concept_key = str(source.get("concept_key", "")).strip() or concept_name.lower().strip()
+            if material_id and concept_key:
+                covered.add((material_id, concept_key))
+    return covered
+
+
 def _apply_bridge_cluster_maintenance(
     root: Path,
     bridge_clusters: list[dict],
@@ -1775,6 +1928,19 @@ def _apply_bridge_cluster_maintenance(
             }
             working[cid] = cluster
             changed += 1
+        elif action_type == "delete":
+            if len(target_ids) != 1:
+                continue
+            working.pop(target_ids[0], None)
+            changed += 1
+        elif action_type == "split":
+            split = _split_bridge_clusters(list(working.values()), action)
+            if split is None:
+                continue
+            working = {cluster.get("cluster_id", ""): cluster for cluster in split if cluster.get("cluster_id", "")}
+            changed += 1
+        elif action_type == "keep":
+            continue
 
     if changed <= 0:
         return bridge_clusters, 0
@@ -2259,6 +2425,129 @@ def _run_bridge_cluster_maintenance(
     return updated_clusters, changed
 
 
+def _run_bridge_cluster_discovery(
+    root: Path,
+    bridge_clusters: list[dict],
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+) -> tuple[list[dict], int]:
+    """Ask the maintainer LLM for genuinely new bridge concepts from local concepts."""
+    local_rows, material_rows = _load_local_concepts(root)
+    if not local_rows or not material_rows:
+        return bridge_clusters, 0
+
+    existing_path = root / LINT_DIR / "bridge_discovery.jsonl"
+    existing = _load_jsonl(existing_path)
+
+    bridge_packets_path = _stage_bridge_packet_input(root, local_rows, material_rows)
+    bridge_clusters_path = root / "derived" / "bridge_concept_clusters.jsonl"
+    output_path = _cluster_output_path(root, "bridge")
+    if output_path.exists():
+        output_path.unlink()
+
+    payload = {
+        "bridge_clusters": bridge_clusters,
+        "local_rows": local_rows,
+        "material_rows": material_rows,
+    }
+    fingerprint = canonical_hash(payload)
+    if existing and all(row.get("input_fingerprint") == fingerprint for row in existing):
+        return bridge_clusters, 0
+
+    llm_fn = llm_factory("lint")
+    system, user = _bridge_discovery_prompt(bridge_packets_path, bridge_clusters_path, output_path)
+    parsed = _run_reflection_prompt_with_context(
+        llm_fn,
+        system,
+        user,
+        "JSON object with keys: clusters (array of bridge clusters) and optional context_requests (array of read-only SQL-index lookups)",
+        tool,
+    )
+    clusters = parsed.get("clusters", []) if isinstance(parsed, dict) else parsed
+    if not isinstance(clusters, list):
+        raise EnrichmentError("Bridge discovery returned non-list clusters")
+
+    concept_index: dict[tuple[str, str], dict] = {}
+    for row in local_rows:
+        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
+        concept_index[(material_id, concept_key)] = {
+            "concept_name": concept_name,
+            "concept_key": concept_key,
+            "material_id": material_id,
+            "concept_type": concept_type,
+            "relevance": relevance,
+            "source_pages": source_pages,
+            "evidence_spans": evidence_spans,
+            "confidence": confidence,
+        }
+
+    validated = _validate_bridge_and_attach_provenance(clusters, concept_index, {})
+    covered_pairs = _cover_pairs_from_clusters(bridge_clusters)
+    new_clusters: list[dict] = []
+    for cluster in validated:
+        filtered_sources = [
+            source for source in cluster.get("source_concepts", [])
+            if (source.get("material_id", ""), source.get("concept_key", "")) not in covered_pairs
+        ]
+        material_ids = list(dict.fromkeys(source.get("material_id", "") for source in filtered_sources if source.get("material_id", "")))
+        if len(material_ids) < 2:
+            continue
+        canonical_name = cluster.get("canonical_name", "").strip()
+        aliases = _dedupe_strings([
+            canonical_name,
+            *(_safe_list(cluster.get("aliases", []))),
+            *[source.get("concept_name", "") for source in filtered_sources if source.get("concept_name", "")],
+        ])
+        new_clusters.append({
+            "canonical_name": canonical_name or filtered_sources[0].get("concept_name", ""),
+            "slug": slugify(canonical_name or filtered_sources[0].get("concept_name", "")),
+            "aliases": aliases,
+            "material_ids": material_ids,
+            "source_concepts": filtered_sources,
+            "confidence": float(cluster.get("confidence", 0.0) or 0.0),
+        })
+
+    if not new_clusters:
+        _write_jsonl(existing_path, [{
+            "input_fingerprint": fingerprint,
+            "new_clusters": 0,
+            "applied": False,
+            "bridge_cluster_count": len(bridge_clusters),
+        }])
+        return bridge_clusters, 0
+
+    assigned = _assign_new_bridge_ids(new_clusters, bridge_clusters)
+    updated = sorted([*bridge_clusters, *assigned], key=lambda c: c.get("cluster_id", ""))
+
+    derived_dir = root / "derived"
+    derived_dir.mkdir(exist_ok=True)
+    bridge_path = derived_dir / "bridge_concept_clusters.jsonl"
+    with bridge_path.open("w", encoding="utf-8") as f:
+        for cluster in updated:
+            f.write(json.dumps(cluster, ensure_ascii=False) + "\n")
+
+    output_path.write_text(json.dumps(updated, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    stamp_path = derived_dir / "bridge_cluster_stamp.json"
+    stamp_path.write_text(
+        json.dumps({
+            "clustered_at": datetime.now(timezone.utc).isoformat(),
+            "fingerprint": bridge_cluster_fingerprint(None),
+            "bridge_concepts": sum(len(c.get("source_concepts", [])) for c in updated),
+            "clusters": len(updated),
+        }, indent=2),
+        encoding="utf-8",
+    )
+
+    _write_jsonl(existing_path, [{
+        "input_fingerprint": fingerprint,
+        "new_clusters": len(assigned),
+        "applied": True,
+        "bridge_cluster_count": len(updated),
+    }])
+    return updated, len(assigned)
+
+
 def run_reflective_lint(
     config: dict,
     deterministic_report: dict,
@@ -2276,13 +2565,15 @@ def run_reflective_lint(
     bridge_clusters = load_bridge_clusters(root)
     groups = _group_materials_by_collection(metas)
 
-    if not get_index_path().exists() or not clusters:
+    if not get_index_path().exists():
         lint_root = root / LINT_DIR
         lint_root.mkdir(parents=True, exist_ok=True)
         for name in ("cluster_reviews.jsonl", "concept_reflections.jsonl", "collection_reflections.jsonl", "graph_findings.jsonl"):
             (lint_root / name).write_text("", encoding="utf-8")
         return {
             "cluster_reviews": 0,
+            "bridge_cluster_changes": 0,
+            "bridge_cluster_discovery": 0,
             "concept_reflections": 0,
             "collection_reflections": 0,
             "graph_findings": 0,
@@ -2308,8 +2599,15 @@ def run_reflective_lint(
                 llm_factory,
                 tool,
             )
+            bridge_clusters, bridge_discovery = _run_bridge_cluster_discovery(
+                root,
+                bridge_clusters,
+                llm_factory,
+                tool,
+            )
         else:
             bridge_changes = 0
+            bridge_discovery = 0
         concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool)
         collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool)
         graph_due, graph_reason = _graph_reflection_due(
@@ -2339,6 +2637,7 @@ def run_reflective_lint(
     return {
         "cluster_reviews": len(cluster_reviews),
         "bridge_cluster_changes": bridge_changes,
+        "bridge_cluster_discovery": bridge_discovery,
         "concept_reflections": len(concept_refs),
         "collection_reflections": len(collection_refs),
         "graph_findings": len(graph_findings),
@@ -2390,6 +2689,8 @@ def run_lint(
         if scheduled and not graph_due:
             result["reflection"] = {
                 "cluster_reviews": 0,
+                "bridge_cluster_changes": 0,
+                "bridge_cluster_discovery": 0,
                 "concept_reflections": 0,
                 "collection_reflections": 0,
                 "graph_findings": 0,

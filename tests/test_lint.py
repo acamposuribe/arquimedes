@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import ReflectionIndexTool, _apply_bridge_cluster_maintenance, _build_material_info, _graph_reflection_due, _load_manifest, _run_bridge_cluster_maintenance, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
+from arquimedes.lint import ReflectionIndexTool, _apply_bridge_cluster_maintenance, _build_material_info, _graph_reflection_due, _load_manifest, _run_bridge_cluster_discovery, _run_bridge_cluster_maintenance, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
 from arquimedes.cli import lint as lint_cmd
 
 
@@ -761,6 +761,77 @@ def test_bridge_cluster_maintenance_merges_reviewed_duplicates(tmp_path, monkeyp
     assert len(calls) == 1
     stamp = json.loads((root / "derived" / "bridge_cluster_stamp.json").read_text(encoding="utf-8"))
     assert stamp["clusters"] == 1
+
+
+def test_bridge_discovery_appends_new_clusters_from_local_concepts(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [
+        {
+            "cluster_id": "bridge_0001",
+            "canonical_name": "Archive and Space",
+            "slug": "archive-and-space",
+            "aliases": ["Archive and Space"],
+            "material_ids": ["mat_001"],
+            "source_concepts": [
+                {
+                    "material_id": "mat_001",
+                    "concept_name": "archive and space",
+                    "concept_key": "archive and space",
+                    "relevance": "high",
+                    "source_pages": [1],
+                    "evidence_spans": ["archive and space"],
+                    "confidence": 0.9,
+                }
+            ],
+            "confidence": 0.9,
+        }
+    ])
+
+    local_rows = [
+        ("archival habitat", "archival habitat", "mat_002", "high", "[1]", '["archival habitat"]', 0.9, "local"),
+        ("counterarchive", "counterarchive", "mat_003", "high", "[1]", '["counterarchive"]', 0.9, "local"),
+    ]
+    material_rows = [
+        ("mat_001", "One", "Summary", '["archive"]'),
+        ("mat_002", "Two", "Summary", '["archive"]'),
+        ("mat_003", "Three", "Summary", '["archive"]'),
+    ]
+    monkeypatch.setattr("arquimedes.lint._load_local_concepts", lambda _root: (local_rows, material_rows))
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(stage)
+            return json.dumps({
+                "clusters": [
+                    {
+                        "canonical_name": "Archival Habitat and Counterarchive",
+                        "aliases": ["archival habitat", "counterarchive"],
+                        "source_concepts": [
+                            {"material_id": "mat_002", "concept_name": "archival habitat"},
+                            {"material_id": "mat_003", "concept_name": "counterarchive"},
+                        ],
+                        "confidence": 0.8,
+                    }
+                ]
+            })
+
+        return fn
+
+    updated, changed = _run_bridge_cluster_discovery(
+        root,
+        [json.loads(line) for line in (root / "derived" / "bridge_concept_clusters.jsonl").read_text(encoding="utf-8").splitlines()],
+        llm_factory,
+        None,
+    )
+
+    assert changed == 1
+    assert len(updated) == 2
+    assert any(cluster["canonical_name"] == "Archival Habitat and Counterarchive" for cluster in updated)
+    assert calls == ["lint"]
+    assert (root / "derived" / "bridge_concept_clusters.jsonl").exists()
 
 
 def test_reflection_index_tool_supports_read_only_search_and_open_record(tmp_path, monkeypatch):

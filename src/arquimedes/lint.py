@@ -1627,13 +1627,12 @@ def _graph_reflection_prompt(
 
 
 def _bridge_maintenance_prompt(
-    bridge_clusters: list[dict],
-    cluster_reviews: list[dict],
-    material_info: dict[str, dict],
+    maintenance_input_path: Path,
+    maintenance_output_path: Path,
 ) -> tuple[str, str]:
     system = (
         "You are an architecture research librarian maintaining the bridge-concept graph. "
-        "Return JSON only. Use the cluster reviews as maintainer feedback. "
+        "Return JSON only. Read the bridge-maintenance packet file and use the cluster reviews as maintainer feedback. "
         "If the reviews indicate that two bridge concepts are duplicates or should merge, "
         "propose a merge action. If a bridge concept has a better canonical name, propose a rename. "
         "If a bridge concept is clearly over-merged or internally inconsistent, propose a split. "
@@ -1642,7 +1641,8 @@ def _bridge_maintenance_prompt(
         "You will get only one read-only context round, so request everything you need at once."
     )
     user = (
-        "Review these bridge clusters and cluster audit findings, then return a JSON object "
+        f"Read the bridge-maintenance packet file from {maintenance_input_path}.\n"
+        "Review the bridge clusters and cluster audit findings in that file, then return a JSON object "
         "with keys: actions, context_requests.\n"
         "actions must be a JSON array. context_requests is optional and must be a JSON array of "
         "read-only SQL-index lookups if you need more context.\n"
@@ -1652,10 +1652,9 @@ def _bridge_maintenance_prompt(
         "Only use action_type=rename when the cluster is correct but badly named.\n"
         "Use action_type=split when one bridge cluster should become two or more bridge clusters; include split_clusters.\n"
         "Use action_type=delete only when the cluster is clearly invalid.\n"
-        "Do not invent new bridge clusters here.\n\n"
-        f"Bridge clusters:\n{json.dumps(bridge_clusters[:50], ensure_ascii=False, indent=2)}\n\n"
-        f"Cluster reviews:\n{json.dumps(cluster_reviews[:50], ensure_ascii=False, indent=2)}\n\n"
-        f"Material info:\n{json.dumps(material_info, ensure_ascii=False, indent=2)}"
+        f"Write the updated bridge-maintenance JSON to {maintenance_output_path} using the Write tool.\n"
+        "Do not stream JSON into the response.\n"
+        "Confirm with a single line when done.\n"
     )
     return system, user
 
@@ -2375,6 +2374,9 @@ def _run_bridge_cluster_maintenance(
         "cluster_reviews": prompt_reviews,
         "material_info": material_info,
     }
+    maintenance_input_path = root / "derived" / "tmp" / "bridge_maintenance_input.json"
+    maintenance_output_path = root / "derived" / "tmp" / "bridge_maintenance_output.json"
+    _write_json(maintenance_input_path, payload)
 
     existing_path = root / LINT_DIR / "bridge_maintenance.jsonl"
     existing = _load_jsonl(existing_path)
@@ -2382,8 +2384,11 @@ def _run_bridge_cluster_maintenance(
     if existing and all(row.get("input_fingerprint") == fingerprint for row in existing):
         return bridge_clusters, 0
 
+    if maintenance_output_path.exists():
+        maintenance_output_path.unlink()
+
     llm_fn = llm_factory("lint")
-    system, user = _bridge_maintenance_prompt(bridge_clusters, prompt_reviews, material_info)
+    system, user = _bridge_maintenance_prompt(maintenance_input_path, maintenance_output_path)
     parsed = _run_reflection_prompt_with_context(
         llm_fn,
         system,
@@ -2391,6 +2396,11 @@ def _run_bridge_cluster_maintenance(
         "JSON object with keys: actions (array) and optional context_requests (array of read-only SQL-index lookups)",
         tool,
     )
+    if maintenance_output_path.exists() and maintenance_output_path.stat().st_size > 0:
+        try:
+            parsed = json.loads(maintenance_output_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            pass
     actions = parsed.get("actions", []) if isinstance(parsed, dict) else parsed
     if not isinstance(actions, list):
         raise EnrichmentError("Bridge maintenance returned non-list actions")

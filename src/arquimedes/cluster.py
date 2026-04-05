@@ -276,8 +276,36 @@ def _load_material_rows(con: sqlite3.Connection) -> list[tuple]:
     return list(rows)
 
 
+def _bridge_material_ids_from_clusters(clusters: list[dict]) -> set[str]:
+    """Return the set of material ids already covered by bridge clusters."""
+    covered: set[str] = set()
+    for cluster in clusters:
+        for mid in cluster.get("material_ids", []) or []:
+            if mid:
+                covered.add(str(mid))
+    return covered
+
+
+def _pending_bridge_material_rows(
+    material_rows: list[tuple],
+    existing_bridge_clusters: list[dict],
+) -> list[tuple]:
+    """Filter materials down to only those not yet covered by bridge clusters."""
+    covered = _bridge_material_ids_from_clusters(existing_bridge_clusters)
+    return [row for row in material_rows if row and row[0] not in covered]
+
+
+def _pending_bridge_concept_rows(
+    concept_rows: list[tuple],
+    existing_bridge_clusters: list[dict],
+) -> list[tuple]:
+    """Filter concept rows down to materials not yet covered by bridge clusters."""
+    covered = _bridge_material_ids_from_clusters(existing_bridge_clusters)
+    return [row for row in concept_rows if row and row[2] not in covered]
+
+
 def bridge_cluster_fingerprint(config: dict | None = None) -> str:
-    """SHA256 over bridge clustering inputs: concept packets + bridge clusters."""
+    """SHA256 over bridge clustering inputs: pending materials + bridge clusters."""
     if config is None:
         config = load_config()
     root = get_project_root()
@@ -287,13 +315,15 @@ def bridge_cluster_fingerprint(config: dict | None = None) -> str:
 
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        concepts = _load_concept_rows(con)
-        materials = _load_material_rows(con)
+        concept_rows = _load_concept_rows(con)
+        material_rows = _load_material_rows(con)
     finally:
         con.close()
 
     root_bridge_clusters = load_bridge_clusters(root)
-    return enrich_stamps.canonical_hash(list(concepts), list(materials), list(root_bridge_clusters))
+    pending_material_rows = _pending_bridge_material_rows(material_rows, root_bridge_clusters)
+    pending_concept_rows = _pending_bridge_concept_rows(concept_rows, root_bridge_clusters)
+    return enrich_stamps.canonical_hash(list(pending_concept_rows), list(pending_material_rows), list(root_bridge_clusters))
 
 
 def is_bridge_clustering_stale(config: dict | None = None, *, force: bool = False) -> bool:
@@ -664,13 +694,12 @@ def cluster_bridge_concepts(
         raise EnrichmentError("No concepts in index. Run `arq enrich` on materials first.")
 
     existing_bridge_clusters = load_bridge_clusters(root)
-    bridge_concept_count = len(concept_rows)
+    pending_material_rows = _pending_bridge_material_rows(material_rows, existing_bridge_clusters)
+    pending_concept_rows = _pending_bridge_concept_rows(concept_rows, existing_bridge_clusters)
+    bridge_concept_count = len(pending_concept_rows)
     if bridge_concept_count == 0:
         derived_dir = root / "derived"
         derived_dir.mkdir(exist_ok=True)
-        bridge_path = derived_dir / "bridge_concept_clusters.jsonl"
-        bridge_path.write_text("", encoding="utf-8")
-
         fingerprint = bridge_cluster_fingerprint(config)
         stamp_path = derived_dir / "bridge_cluster_stamp.json"
         stamp_path.write_text(
@@ -678,16 +707,16 @@ def cluster_bridge_concepts(
                 "clustered_at": datetime.now(timezone.utc).isoformat(),
                 "fingerprint": fingerprint,
                 "bridge_concepts": 0,
-                "clusters": 0,
+                "clusters": len(existing_bridge_clusters),
             }, indent=2),
             encoding="utf-8",
         )
 
-        logger.info("Bridge clustering skipped — no bridge candidates found.")
+        logger.info("Bridge clustering skipped — no new materials to cluster.")
         return {
             "bridge_concepts": 0,
-            "clusters": 0,
-            "multi_material": 0,
+            "clusters": len(existing_bridge_clusters),
+            "multi_material": sum(1 for c in existing_bridge_clusters if len(c.get("material_ids", [])) > 1),
             "skipped": True,
         }
 
@@ -699,7 +728,7 @@ def cluster_bridge_concepts(
     if output_path.exists():
         output_path.unlink()
 
-    bridge_packets_path = _stage_bridge_packet_input(root, concept_rows, material_rows)
+    bridge_packets_path = _stage_bridge_packet_input(root, pending_concept_rows, pending_material_rows)
     bridge_clusters_path = root / "derived" / "bridge_concept_clusters.jsonl"
     user_msg = (
         _build_bridge_prompt(bridge_packets_path, bridge_clusters_path, output_path)
@@ -717,7 +746,7 @@ def cluster_bridge_concepts(
         raise EnrichmentError(f"LLM returned non-list bridge clusters: {type(raw_clusters)}")
 
     concept_index: dict[tuple[str, str], dict] = {}
-    for row in concept_rows:
+    for row in pending_concept_rows:
         concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
         concept_index[(material_id, concept_key)] = {
             "concept_name": concept_name,

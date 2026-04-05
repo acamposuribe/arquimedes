@@ -13,6 +13,8 @@ from arquimedes.cluster import (
     _BRIDGE_SYSTEM_PROMPT,
     _build_bridge_prompt,
     _stage_bridge_packet_input,
+    _pending_bridge_concept_rows,
+    _pending_bridge_material_rows,
 )
 
 
@@ -72,6 +74,33 @@ def test_bridge_packet_file_is_staged(tmp_path):
     assert payload["kind"] == "bridge_packets"
     assert payload["material_packet_count"] == 1
     assert payload["material_packets"][0]["title"] == "Archival Habitat"
+
+
+def test_bridge_clustering_only_stages_uncovered_materials(tmp_path):
+    existing = [
+        {
+            "cluster_id": "bridge_0001",
+            "canonical_name": "archival habitat",
+            "aliases": ["archival habitat"],
+            "material_ids": ["m1"],
+            "source_concepts": [{"material_id": "m1", "concept_name": "archival habitat"}],
+            "confidence": 0.9,
+        }
+    ]
+    material_rows = [
+        ("m1", "Archival Habitat", "Summary", '["archive"]'),
+        ("m2", "Counterarchive", "Summary", '["archive"]'),
+    ]
+    concept_rows = [
+        ("archival habitat", "archival habitat", "m1", "high", "[1]", '["evidence"]', 0.9, "bridge_candidate"),
+        ("counterarchive", "counterarchive", "m2", "high", "[2]", '["evidence"]', 0.9, "bridge_candidate"),
+    ]
+
+    pending_materials = _pending_bridge_material_rows(material_rows, existing)
+    pending_concepts = _pending_bridge_concept_rows(concept_rows, existing)
+
+    assert pending_materials == [("m2", "Counterarchive", "Summary", '["archive"]')]
+    assert pending_concepts == [("counterarchive", "counterarchive", "m2", "high", "[2]", '["evidence"]', 0.9, "bridge_candidate")]
 
 
 def test_bridge_clustering_uses_bridge_packets(tmp_path, monkeypatch):

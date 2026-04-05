@@ -653,6 +653,11 @@ When an image is available, prioritize what is visibly present in the image itse
 candidates and surrounding page text as supporting context, not as a replacement for visual \
 evidence. Only fall back to text-only inference when the image is unavailable or unreadable.
 
+If the figure is blank, partial, scanner-generated, background-only, heavily degraded, or contains \
+no meaningful visual knowledge beyond logos, borders, watermarks, page texture, or platform artifacts, \
+say so plainly in the description and classify it as "decorative" or "front_matter". Do not invent \
+architectural content for non-informative images.
+
 """
 
 _FIGURE_BATCH_USER_OUTRO = """\

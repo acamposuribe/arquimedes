@@ -443,32 +443,37 @@ Standard markdown links: `[Thermal Mass](../shared/concepts/thermal-mass.md)`. N
 
 ## Wiki Linting & Health Checks
 
-`arq lint` is not just a broken-link checker — it's an LLM-driven health system that actively improves the knowledge base over time. It runs a suite of checks and produces actionable reports.
+`arq lint` is not just a broken-link checker — it's the reflective maintenance layer that improves the knowledge base over time. It runs deterministic checks first, then heavier LLM passes that deepen the graph, concept pages, collection pages, and searchable memory.
 
 ### Deterministic checks (no LLM):
 - **Broken links**: wiki pages referencing materials, concepts, or files that don't exist
 - **Orphaned materials**: extracted materials with no wiki page
+- **Orphaned wiki pages**: pages with no live material / cluster / collection backing them
 - **Missing metadata**: materials lacking required facets (domain, document_type, etc.)
 - **Stale enrichment**: materials where any enrichment stage stamp differs from current config (prompt_version, model, enrichment_schema_version) or where input_fingerprint has changed since last enrichment (see [Phase 3 enrichment spec](../completed/specs/2026-04-04-phase3-enrichment-design.md))
 - **Index drift**: search index out of sync with extracted data
+- **Memory drift**: memory bridge out of sync with compiled wiki / cluster graph
 - **Duplicate materials**: different manifest entries pointing to the same content hash
+- **Missing compiled pages**: expected material, concept, or collection pages absent from the wiki
 
 ### LLM-driven checks:
-- **Inconsistent data**: contradictory claims across materials (e.g., conflicting regulation interpretations, different dates for the same event)
-- **Missing connections**: materials that should reference each other but don't (shared authors, overlapping topics, cited works that exist in the library)
-- **Concept candidates**: topics mentioned across multiple materials that don't have a concept page yet
-- **Impute missing data**: suggest values for empty facets using web search + material content (e.g., infer jurisdiction from a regulation's text, identify building_type from a monograph's images)
-- **Research questions**: suggest further questions worth investigating based on gaps and patterns in the knowledge base
-- **Coverage gaps**: identify under-represented areas (e.g., "you have 15 materials on concrete but none on timber construction")
+- **Cluster audit**: over-merged concepts to split, missed equivalences to merge, weak single-material clusters, poor canonical names, missing materials in clusters
+- **Concept reflection**: cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters` for concept pages
+- **Collection reflection**: `main_takeaways`, `main_tensions`, important materials/concepts, and open questions for collection pages
+- **Missing connections**: materials or pages that should reference each other but don't
+- **Inconsistent data**: contradictory claims across materials
+- **Under-connected graph areas**: materials or clusters that are poorly connected relative to their content
+- **Research questions**: unanswered questions emerging from weakly connected areas
+- **Coverage gaps**: under-represented areas worth future collection
 
 ### Output:
 - `arq lint` → prints a report to stdout (JSON or human-readable)
 - `arq lint --report` → writes a detailed report to `wiki/_lint_report.md`
-- `arq lint --fix` → auto-applies deterministic fixes (rebuild index, update broken links) and queues LLM suggestions for review
+- `arq lint --fix` → auto-applies deterministic fixes and accepted reflective page updates, then rebuilds memory
 - Each LLM suggestion includes provenance (which materials, what evidence, confidence)
 
 ### Integration with the server agent:
-The watcher can optionally run `arq lint --quick` (deterministic checks only) after each compile, and `arq lint --full` (including LLM checks) on a scheduled basis (e.g., weekly).
+The watcher should run `arq lint --quick` (deterministic checks only) after each compile, and `arq lint --full` (including reflective LLM passes) on a scheduled basis.
 
 ## Agent Tool Layer
 

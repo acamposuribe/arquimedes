@@ -5,6 +5,7 @@
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 5 spec:** [Wiki compiler design](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 > **Phase 5.5 spec:** [Memory bridge design](superpowers/completed/specs/2026-04-05-phase5-5-memory-bridge-design.md)
+> **Phase 6 spec:** [Lint, reflection, and memory growth](superpowers/specs/2026-04-05-phase6-lint-design.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 > **Pipeline:** [Operational pipeline](PIPELINE.md)
 > **Phase 5 addendum:** [Collection pages spec](superpowers/completed/specs/2026-04-05-phase5-collection-pages-design.md)
@@ -107,9 +108,12 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 6: Wiki Linting & Health Checks
 
-- [ ] **(cluster audit)** LLM review of `derived/concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals
-- [ ] Deterministic checks: broken links, orphaned materials, missing metadata, stale enrichment, index drift, duplicates
-- [ ] LLM-driven checks: missing cross-references, contradictions across materials, under-connected materials, unanswered research questions from weakly connected clusters
+- [ ] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment, stale index, stale memory bridge, duplicates, missing compiled pages
+- [ ] **(cluster audit)** LLM review of `derived/concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
+- [ ] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters`
+- [ ] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, and open questions grounded in linked materials
+- [ ] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas
+- [ ] Feed reflective outputs back into searchable memory so agents can query takeaways, tensions, and open questions, not only graph topology
 - [ ] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --report`, `arq lint --fix`
 - [ ] Provenance on every LLM suggestion
 - [ ] Define the health-check and maintenance behaviors the future server maintainer will run automatically

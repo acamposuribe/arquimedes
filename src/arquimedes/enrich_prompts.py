@@ -540,6 +540,8 @@ For each chunk above, provide:
 - a list of architecture-relevant keywords grounded in this specific chunk
 - a content_class that categorizes the chunk's role in the document
 
+When a chunk is organized around a specific person, archive, project, place, event, or object, keep that concrete focus visible in the summary rather than flattening it into abstract theory.
+
 Choose content_class using these rules:
 - "front_matter": title pages, abstracts, acknowledgments, journal/platform metadata, author bios
 - "bibliography": references, citations, endnotes, works cited, citation-heavy notes
@@ -550,9 +552,11 @@ Choose content_class using these rules:
 - "argument": substantive analysis or theory only when no more specific class above fits
 
 Prefer the most specific valid class. Do not default to "argument" when the chunk is mainly a case, method, bibliography, or front matter.
+If a chunk is interpretive but centered on a specific person, archive, project, or event, still prefer "case_study".
 
 For keywords:
-- prefer concrete entities, mechanisms, and named concepts central to this chunk
+- prefer a mix of concrete entities, mechanisms, and named concepts central to this chunk
+- preserve named actors, places, archives, buildings, projects, or objects when they are central to the chunk
 - avoid generic repeats from the overall document context unless they are truly central here
 
 Examples:

@@ -10,12 +10,15 @@ Phase 4 makes the knowledge base queryable. It builds a local SQLite FTS5 index 
 
 **Primary consumers:** agents (via CLI or future MCP), collaborators (via future web UI). Agents are first-class — output format, token budgets, and depth control are designed for machine consumption.
 
+The raw `arq search` command is a deterministic local query primitive. In later phases, collaborator-facing tools should call it through a freshness wrapper rather than assuming the local repo/index state is already current.
+
 ## Design Principles
 
 1. **JSON by default.** `arq search` outputs machine-parseable JSON. `--human` flag for pretty-printed tables. Agents get stable contracts; humans opt in to nice formatting.
 2. **Configurable depth.** `arq search` returns cards (depth 1). `--deep` returns cards + chunk hits (depth 2). `--deep --depth 3` adds full chunk text. Callers control token spend.
 3. **Deterministic, no LLM.** Index build and search are pure code — no LLM calls. FTS5 ranking handles relevance.
 4. **Cheap staleness.** `arq index ensure` uses a fast mtime/count gate, falling back to full content hash only when ambiguous.
+5. **Freshness before collaborator queries.** Collaborator-facing search surfaces should not assume humans manually pulled and ensured first. In later phases, agent tools and the web UI should wrap search with a lightweight freshness step (sync latest repo state when applicable, then `arq index ensure`).
 
 ## Index Schema (SQLite FTS5)
 

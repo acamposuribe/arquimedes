@@ -11,7 +11,7 @@ import json
 from pathlib import Path
 
 from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
-from arquimedes.enrich_llm import get_model_id
+from arquimedes.enrich_llm import get_model_id, set_effort, set_model, set_codex_params
 from arquimedes.models import EnrichedField, Provenance
 
 
@@ -119,7 +119,7 @@ def enrich_figures_stage(
         {"status": "enriched"|"skipped"|"failed", "detail": str}
     """
     enrichment_config = config.get("enrichment", {})
-    model: str = get_model_id(config)
+    model: str = get_model_id(config, "figure")
     prompt_version: str = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version: str = enrichment_config.get("enrichment_schema_version", "1")
     figure_batch_size: int = enrichment_config.get("figure_batch_size", 6)
@@ -257,6 +257,9 @@ def enrich_figures_stage(
 
         # Call LLM
         try:
+            set_effort(llm_fn, config, "figure")
+            set_model(llm_fn, config, "figure")
+            set_codex_params(llm_fn, config, "figure")
             system, messages = enrich_prompts.build_figure_batch_prompt(
                 figures_with_context, doc_context_str
             )

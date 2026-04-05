@@ -72,7 +72,7 @@ enrich_prompts ──────────────────┘
 - [x] Commit
 
 ### Task 3: `enrich_llm.py` + tests
-- [x] `make_cli_llm_fn(config) → LlmFn` — shells out to agent CLI(s) from `config["llm"]["agent_cmd"]` (list: tried in order, first success wins), fast-fail on auth/rate-limit via stderr monitoring
+- [x] `make_cli_llm_fn(config, stage) → LlmFn` — shells out to stage-specific routes from `enrichment.llm_routes[stage]` (ordered attempts; fallback to legacy `config["llm"]["agent_cmd"]` if absent), fast-fail on auth/rate-limit via stderr monitoring
 - [x] `parse_json_or_repair(client, model, text, schema_description) → dict` — JSON parse, one schema-repair retry on failure, raise `EnrichmentError` if still invalid
 - [x] Custom `EnrichmentError` exception
 - [x] Tests: mock client — success, retry on rate limit, schema-repair path, final failure

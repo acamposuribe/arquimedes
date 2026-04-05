@@ -85,9 +85,22 @@ def _make_concept(concept_data: dict, model: str, prompt_version: str) -> Concep
     )
     return ConceptCandidate(
         concept_name=concept_data.get("concept_name", ""),
+        concept_type=concept_data.get("concept_type", "local"),
         relevance=concept_data.get("relevance", ""),
         provenance=provenance,
     )
+
+
+def _make_concepts(concepts_data: list[dict], model: str, prompt_version: str, *, concept_type: str) -> list[ConceptCandidate]:
+    """Build ConceptCandidate objects from a list of concept dicts."""
+    concepts: list[ConceptCandidate] = []
+    for concept_data in concepts_data:
+        if not isinstance(concept_data, dict) or not concept_data.get("concept_name"):
+            continue
+        concept = _make_concept(concept_data, model, prompt_version)
+        concept.concept_type = concept_type
+        concepts.append(concept)
+    return concepts
 
 
 # ---------------------------------------------------------------------------
@@ -100,7 +113,8 @@ _DOCUMENT_SCHEMA_DESC = """\
   "document_type": {"value": "regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "facets": {<facet_name>: {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}},
-  "concepts": [{"concept_name": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}]
+    "concepts_local": [{"concept_name": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}],
+    "concepts_bridge_candidates": [{"concept_name": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}]
 }"""
 
 
@@ -126,7 +140,7 @@ def enrich_document_stage(
         {"status": "enriched"|"skipped"|"failed", "detail": str}
     """
     enrichment_config = config.get("enrichment", {})
-    model: str = get_model_id(config)
+    model: str = get_model_id(config, "document")
     prompt_version: str = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version: str = enrichment_config.get("enrichment_schema_version", "1")
 
@@ -157,6 +171,9 @@ def enrich_document_stage(
         if _pre_parsed_response is not None:
             parsed = _pre_parsed_response
         else:
+            enrich_llm.set_effort(llm_fn, config, "document")
+            enrich_llm.set_model(llm_fn, config, "document")
+            enrich_llm.set_codex_params(llm_fn, config, "document")
             system, messages = enrich_prompts.build_document_prompt(meta, toc, chunks, annotations)
             raw_text = llm_fn(system, messages)
             parsed = enrich_llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_SCHEMA_DESC)
@@ -214,15 +231,17 @@ def enrich_document_stage(
                 bib["_prompt_version"] = prompt_version
                 meta_out["bibliography"] = bib
 
-        concepts_data = parsed.get("concepts", [])
-        if not isinstance(concepts_data, list):
-            concepts_data = []
+        concepts_local_data = parsed.get("concepts_local")
+        if not isinstance(concepts_local_data, list):
+            concepts_local_data = parsed.get("concepts", []) if isinstance(parsed.get("concepts"), list) else []
 
-        concepts: list[ConceptCandidate] = [
-            _make_concept(c, actual_model, prompt_version)
-            for c in concepts_data
-            if isinstance(c, dict) and c.get("concept_name")
-        ]
+        concepts_bridge_data = parsed.get("concepts_bridge_candidates", [])
+        if not isinstance(concepts_bridge_data, list):
+            concepts_bridge_data = []
+
+        concepts: list[ConceptCandidate] = []
+        concepts.extend(_make_concepts(concepts_local_data, actual_model, prompt_version, concept_type="local"))
+        concepts.extend(_make_concepts(concepts_bridge_data, actual_model, prompt_version, concept_type="bridge_candidate"))
         enriched_count["concepts"] = len(concepts)
 
     except Exception as exc:

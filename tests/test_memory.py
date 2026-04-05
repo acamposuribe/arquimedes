@@ -73,6 +73,13 @@ def _write_clusters(root: Path, clusters: list[dict]) -> None:
     (derived / "concept_clusters.jsonl").write_text(lines)
 
 
+def _write_bridge_clusters(root: Path, clusters: list[dict]) -> None:
+    derived = root / "derived"
+    derived.mkdir(exist_ok=True)
+    lines = "\n".join(json.dumps(c) for c in clusters) + "\n"
+    (derived / "bridge_concept_clusters.jsonl").write_text(lines)
+
+
 def _add_material(repo: Path, mid: str = "aabbcc112233", **meta_overrides) -> Path:
     mat_dir = repo / "extracted" / mid
     _write_meta(mat_dir, mid, **meta_overrides)
@@ -308,6 +315,49 @@ class TestWikiPages:
             "SELECT COUNT(*) FROM wiki_pages"
         ).fetchone()[0]
         assert count_after == count_before
+
+    def test_bridge_concept_pages_written(self, repo):
+        _setup_two_materials_with_clusters(repo)
+        _write_bridge_clusters(repo, [{
+            "cluster_id": "bridge_0001",
+            "canonical_name": "Archive Space Framework",
+            "slug": "archive-space-framework",
+            "aliases": ["archival space framework"],
+            "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
+            "confidence": 0.9,
+            "material_ids": [
+                _MID_A,
+                _MID_B,
+            ],
+            "source_concepts": [
+                {
+                    "material_id": _MID_A,
+                    "concept_name": "archival habitat",
+                    "relevance": "high",
+                    "source_pages": [3],
+                    "evidence_spans": ["the archive as built form"],
+                    "confidence": 0.88,
+                },
+                {
+                    "material_id": _MID_B,
+                    "concept_name": "archive architecture",
+                    "relevance": "medium",
+                    "source_pages": [7],
+                    "evidence_spans": ["structures of collective memory"],
+                    "confidence": 0.75,
+                },
+            ],
+        }])
+        memory_rebuild()
+
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        row = con.execute(
+            "SELECT path FROM wiki_pages WHERE page_type='concept' AND page_id='bridge_0001'"
+        ).fetchone()
+        con.close()
+
+        assert row is not None
+        assert "bridge-concepts" in row[0]
 
 
 class TestConceptClustersExtraColumns:

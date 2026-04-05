@@ -11,6 +11,8 @@ An architect and architecture professor needs a collaborative knowledge base tha
 
 The system is inspired by Karpathy's LLM knowledge base pattern: raw data collected, compiled by LLM into a wiki, operated on by CLI tools and agents, viewable in a browser. The key difference is this is collaborative, domain-specific (architecture), and agent-first.
 
+For the practical end-to-end operating flow, including what happens when a collaborator adds a file and which steps use an LLM, see `docs/PIPELINE.md`.
+
 For the original conceptual pattern, see `docs/llm-wiki.md`. That file is the local reference for the source idea. This spec defines how Arquimedes instantiates and extends that pattern for architecture practice and research, with explicit provenance, deterministic extraction, multimodal materials, collaboration, and a future server-maintainer daemon.
 
 For how Arquimedes should evolve from a searchable archive into a connected memory system before the wiki compiler exists, see `docs/superpowers/specs/2026-04-05-connection-model.md`. That note explains how structural, semantic, retrieval, attention, and materialized connections should emerge across phases.
@@ -36,8 +38,7 @@ Current project docs such as `CLAUDE.md` describe how to build Arquimedes itself
 iCloud folder (shared)
   → Server agent detects new files (FSEvents)
   → arq ingest (register in manifest)
-  → arq extract-raw (deterministic PDF parsing)
-  → arq enrich (LLM summaries, facets, descriptions)
+  → arq extract (deterministic extraction + LLM enrichment)
   → arq index rebuild (SQLite FTS5 over extracted/enriched artifacts)
   → arq cluster (canonical concept clustering)
   → arq compile (wiki generation; auto-runs arq memory rebuild)
@@ -149,9 +150,44 @@ Collections let collaborators scope work to a subset of materials — useful for
 # config.yaml (committed defaults)
 library_root: "~/Arquimedes-Library"
 llm:
-  agent_cmd:                      # agent CLIs, tried in order
+  agent_cmd:                      # legacy fallback; stage routes take precedence
     - "claude --print"
     - "codex exec"
+enrichment:
+  llm_routes:
+    document:
+      - provider: codex
+        command: "codex exec"
+        model: gpt-5.4-mini
+        effort: high
+      - provider: copilot
+        command: "copilot"
+        model: gpt-5-mini
+        effort: high
+    chunk:
+      - provider: copilot
+        command: "copilot"
+        model: gpt-5-mini
+    figure:
+      - provider: codex
+        command: "codex exec"
+        model: gpt-5.4-mini
+        effort: medium
+      - provider: copilot
+        command: "copilot"
+        model: gpt-4o
+    cluster:
+      - provider: claude
+        command: "claude --print"
+        model: sonnet
+        effort: medium
+      - provider: codex
+        command: "codex exec"
+        model: gpt-5.4-mini
+        effort: high
+      - provider: copilot
+        command: "copilot"
+        model: gpt-5-mini
 extraction:
   chunk_size: 500            # tokens per chunk
   generate_thumbnails: true
@@ -280,6 +316,7 @@ LLM-dependent. Reads raw extraction artifacts and adds semantic metadata. Every 
 
 **Concept candidates** (new file: `concepts.jsonl`):
 - LLM-identified concepts that this material contributes to
+- These should be rich, reusable concept phrases: broad enough to connect materials across the corpus, but specific enough to retain analytical meaning
 - Used by the wiki compiler to build/update concept pages
 
 ### Why this split matters:
@@ -360,6 +397,20 @@ wiki/
 - `arq compile --full` — full rebuild
 - Server agent runs incremental compile after each extraction
 
+### Wiki ownership model:
+
+The wiki is a published semantic artifact owned by the compiler/server maintainer, not a free-edit collaboration layer.
+
+**Currently maintainer-owned pages:**
+- all material pages under `wiki/practice/**` and `wiki/research/**`
+- all concept pages under `wiki/shared/concepts/`
+- all generated glossary and `_index.md` pages
+
+These pages are kept current by the semantic publication pipeline:
+`cluster -> compile -> memory rebuild`
+
+Collaborators may read, search, and cite the wiki, but they should not treat these generated pages as hand-edited working documents. Their local responsibility is to rebuild deterministic machine layers (`index ensure`, integrated memory ensure), not to republish semantic structure.
+
 ### Link format:
 Standard markdown links: `[Thermal Mass](../shared/concepts/thermal-mass.md)`. No Obsidian-specific syntax. Compatible with both web UI and Obsidian.
 
@@ -427,6 +478,8 @@ The watcher can optionally run `arq lint --quick` (deterministic checks only) af
 
 Wraps the same Python functions. Tools: `search`, `deep_search`, `read_material`, `read_page`, `list_figures`, `list_annotations`, `compile`, `ingest`, `status`. Any MCP-compatible agent (Claude, OpenAI, etc.) can connect.
 
+For collaborator-facing use, these tools should eventually follow a freshness-on-read contract: before querying the local knowledge base, check for newer published repo state when applicable and run `arq index ensure` so search and memory remain current without requiring the collaborator to think about sync manually.
+
 ### Universal access:
 - CLI works from any agent via shell (Codex, Gemini, Claude Code)
 - MCP works from Claude Code, Claude API, OpenAI Responses API
@@ -443,6 +496,11 @@ FastAPI + Jinja2 templates + vanilla JS (no heavy frontend framework):
 - **Open original**: link to file in iCloud (`file://` URL for local access)
 - **Recent**: latest additions and compilations
 
+The web UI should own freshness for collaborators. It should not assume the user has already pulled and ensured locally. In later phases, the UI should provide:
+- a lightweight freshness check on app open and/or first search in a session
+- an explicit `Update` action
+- `arq index ensure` after sync so local search and local memory stay current before results are shown
+
 No auth initially (local network). Basic auth can be added later.
 
 ## Server Agent (Mac Mini)
@@ -458,8 +516,7 @@ This is the phase where the Karpathy-style "wiki maintainer" becomes operational
 3. **Debouncing + batching**: iCloud sync triggers multiple events per file. The watcher debounces events (default 10s window) and batches files that arrive together into a single pipeline run.
 4. On batch ready:
    - `arq ingest` — register new materials in manifest
-   - `arq extract-raw` — deterministic parsing
-   - `arq enrich` — LLM enrichment
+   - `arq extract` — deterministic parsing + LLM enrichment
    - `arq compile` — update wiki
    - `arq index rebuild` — update local search index
    - `git add . && git commit -m "auto: ingest <n> new materials" && git push`
@@ -469,6 +526,7 @@ This is the phase where the Karpathy-style "wiki maintainer" becomes operational
 ### Collaborator sync (`arq sync`):
 
 - Runs `git pull` every 5 minutes (configurable)
+- Runs `arq index ensure` immediately after pull so collaborator search and local memory stay current
 - Lightweight launchd service
 - Collaborators install once: `arq sync --install` creates the launchd plist
 

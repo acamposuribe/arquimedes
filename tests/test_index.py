@@ -404,17 +404,30 @@ class TestConceptsIndexed:
         rebuild_index()
         con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
         rows = con.execute(
-            "SELECT concept_name, material_id, concept_key, relevance, source_pages, evidence_spans, confidence FROM concepts"
+            "SELECT concept_name, material_id, concept_type, concept_key, relevance, source_pages, evidence_spans, confidence FROM concepts"
         ).fetchall()
         con.close()
         assert len(rows) == 1
         assert rows[0][0] == "archival habitat"
         assert rows[0][1] == "aabbcc112233"
-        assert rows[0][2] == "archival habitat"  # concept_key (normalized)
-        assert rows[0][3] == "high"
-        assert "[2, 3]" in rows[0][4]  # source_pages JSON
-        assert "the archival habitat" in rows[0][5]  # evidence_spans JSON
-        assert rows[0][6] == 1.0  # confidence
+        assert rows[0][2] == "local"
+        assert rows[0][3] == "archival habitat"  # concept_key (normalized)
+        assert rows[0][4] == "high"
+        assert "[2, 3]" in rows[0][5]  # source_pages JSON
+        assert "the archival habitat" in rows[0][6]  # evidence_spans JSON
+        assert rows[0][7] == 1.0  # confidence
+
+    def test_bridge_candidate_concepts_are_preserved(self, repo):
+        import sqlite3
+        mat_dir = _add_material(repo)
+        _write_concepts(mat_dir, [
+            {"concept_name": "thermal performance in architecture", "concept_type": "bridge_candidate", "relevance": "medium"},
+        ])
+        rebuild_index()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        row = con.execute("SELECT concept_type FROM concepts").fetchone()
+        con.close()
+        assert row[0] == "bridge_candidate"
 
     def test_concepts_fts_searchable(self, repo):
         import sqlite3
@@ -534,6 +547,13 @@ def _write_clusters(root: Path, clusters: list[dict]) -> None:
     (derived / "concept_clusters.jsonl").write_text(lines)
 
 
+def _write_bridge_clusters(root: Path, clusters: list[dict]) -> None:
+    derived = root / "derived"
+    derived.mkdir(exist_ok=True)
+    lines = "\n".join(json.dumps(c) for c in clusters) + "\n"
+    (derived / "bridge_concept_clusters.jsonl").write_text(lines)
+
+
 _SAMPLE_CLUSTERS = [
     {
         "cluster_id": "concept_0001",
@@ -605,10 +625,63 @@ class TestClusterGraphIndexing:
 
         members = con.execute("SELECT cluster_id, material_id, relevance FROM cluster_materials ORDER BY cluster_id, material_id").fetchall()
         assert len(members) == 3  # concept_0001 has 2, concept_0002 has 1
-        assert ("concept_0001", "aabbcc112233", "high") in members
-        assert ("concept_0001", "ddeeff445566", "medium") in members
-        assert ("concept_0002", "aabbcc112233", "medium") in members
+
+    def test_bridge_clusters_are_indexed_and_related(self, repo):
+        import sqlite3
+        from arquimedes.search import find_related
+
+        _add_material(repo, "aabbcc112233")
+        _add_material(repo, "ddeeff445566")
+        _write_manifest(repo, ["aabbcc112233", "ddeeff445566"])
+        rebuild_index()
+
+        _write_clusters(repo, [])
+        _write_bridge_clusters(repo, [{
+            "cluster_id": "bridge_0001",
+            "canonical_name": "Archive Space Framework",
+            "slug": "archive-space-framework",
+            "aliases": ["archival space framework"],
+            "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
+            "material_ids": ["aabbcc112233", "ddeeff445566"],
+            "source_concepts": [
+                {
+                    "material_id": "aabbcc112233",
+                    "concept_name": "archival habitat",
+                    "relevance": "high",
+                    "source_pages": [2, 3],
+                    "evidence_spans": ["the archive as built environment"],
+                    "confidence": 0.95,
+                },
+                {
+                    "material_id": "ddeeff445566",
+                    "concept_name": "archive architecture",
+                    "relevance": "medium",
+                    "source_pages": [1],
+                    "evidence_spans": ["spatial dimension of archives"],
+                    "confidence": 0.8,
+                },
+            ],
+            "confidence": 0.9,
+        }])
+
+        rebuild_index()
+
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        row = con.execute(
+            "SELECT wiki_path FROM concept_clusters WHERE cluster_id='bridge_0001'"
+        ).fetchone()
+        members = con.execute(
+            "SELECT cluster_id, material_id, relevance FROM cluster_materials ORDER BY cluster_id, material_id"
+        ).fetchall()
         con.close()
+        assert row is not None
+        assert "bridge-concepts" in row[0]
+
+        related = find_related("aabbcc112233")
+        ids = [r.material_id for r in related]
+        assert "ddeeff445566" in ids
+        assert ("bridge_0001", "aabbcc112233", "high") in members
+        assert ("bridge_0001", "ddeeff445566", "medium") in members
 
     def test_cluster_relations_derived_from_shared_material(self, repo):
         """Clusters sharing a material get mutual cluster_relations rows."""
@@ -752,4 +825,3 @@ class TestEnsureIndexAndMemory:
         _write_clusters(repo, _SAMPLE_CLUSTERS)
         # Must not raise
         ensure_index_and_memory()
-

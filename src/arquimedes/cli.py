@@ -282,25 +282,33 @@ def figures(material_id: str):
 @click.option("--force", is_flag=True, help="Re-cluster even if input is unchanged.")
 def cluster_cmd(force: bool):
     """Cluster concept candidates across materials into canonical concepts."""
-    from arquimedes.cluster import cluster_concepts
+    from arquimedes.cluster import cluster_concepts, cluster_bridge_concepts
     from arquimedes.enrich_llm import EnrichmentError
     from arquimedes.config import load_config
 
     try:
-        summary = cluster_concepts(load_config(), force=force)
+        local_summary = cluster_concepts(load_config(), force=force)
+        bridge_summary = cluster_bridge_concepts(load_config(), force=force)
     except EnrichmentError as e:
         raise click.ClickException(str(e))
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
 
-    if summary.get("skipped"):
-        click.echo("Clustering is up to date — skipped.")
-        return
+    if local_summary.get("skipped"):
+        click.echo("Local clustering is up to date — skipped.")
+    else:
+        total = local_summary["total_concepts"]
+        n_clusters = local_summary["clusters"]
+        multi = local_summary["multi_material"]
+        click.echo(f"Local: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
 
-    total = summary["total_concepts"]
-    n_clusters = summary["clusters"]
-    multi = summary["multi_material"]
-    click.echo(f"{total} concepts → {n_clusters} clusters ({multi} multi-material)")
+    if bridge_summary.get("skipped"):
+        click.echo("Bridge clustering is up to date — skipped.")
+    else:
+        total = bridge_summary["bridge_concepts"]
+        n_clusters = bridge_summary["clusters"]
+        multi = bridge_summary["multi_material"]
+        click.echo(f"Bridge: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
 
 
 @cli.command()
@@ -320,11 +328,24 @@ def compile(full: bool, force_cluster: bool):
         raise click.ClickException(str(e))
 
     cl = summary.get("clustering", {})
-    if not cl.get("skipped"):
-        total = cl.get("total_concepts", 0)
-        n_clusters = cl.get("clusters", 0)
-        multi = cl.get("multi_material", 0)
-        click.echo(f"Clustering: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
+    local = cl.get("local", {}) if isinstance(cl, dict) else {}
+    bridge = cl.get("bridge", {}) if isinstance(cl, dict) else {}
+    if local:
+        if local.get("skipped"):
+            click.echo("Local clustering is up to date — skipped.")
+        else:
+            total = local.get("total_concepts", 0)
+            n_clusters = local.get("clusters", 0)
+            multi = local.get("multi_material", 0)
+            click.echo(f"Local: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
+    if bridge:
+        if bridge.get("skipped"):
+            click.echo("Bridge clustering is up to date — skipped.")
+        else:
+            total = bridge.get("bridge_concepts", 0)
+            n_clusters = bridge.get("clusters", 0)
+            multi = bridge.get("multi_material", 0)
+            click.echo(f"Bridge: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
     click.echo("Compiling:")
     click.echo(f"  {summary['material_pages']} material page(s) written, {summary['material_pages_skipped']} skipped")
     click.echo(f"  {summary['concept_pages']} concept page(s) written")
@@ -394,6 +415,7 @@ def index_ensure():
         click.echo(f"  clusters:              {memory_counts.get('clusters', 0)}")
         click.echo(f"  aliases:               {memory_counts.get('aliases', 0)}")
         click.echo(f"  cluster-material links:{memory_counts.get('cluster_material_links', 0)}")
+        click.echo(f"  cluster relations:     {memory_counts.get('cluster_relations', 0)}")
         click.echo(f"  wiki pages:            {memory_counts.get('wiki_pages', 0)}")
         click.echo("Memory bridge rebuilt.")
 
@@ -424,6 +446,7 @@ def memory_rebuild_cmd():
     click.echo(f"  clusters:              {counts['clusters']}")
     click.echo(f"  aliases:               {counts['aliases']}")
     click.echo(f"  cluster-material links:{counts['cluster_material_links']}")
+    click.echo(f"  cluster relations:     {counts['cluster_relations']}")
     click.echo(f"  wiki pages:            {counts['wiki_pages']}")
     click.echo("Memory bridge rebuilt → indexes/search.sqlite")
 
@@ -443,6 +466,7 @@ def memory_ensure_cmd():
         click.echo(f"  clusters:              {counts['clusters']}")
         click.echo(f"  aliases:               {counts['aliases']}")
         click.echo(f"  cluster-material links:{counts['cluster_material_links']}")
+        click.echo(f"  cluster relations:     {counts['cluster_relations']}")
         click.echo(f"  wiki pages:            {counts['wiki_pages']}")
         click.echo("Memory bridge rebuilt → indexes/search.sqlite")
     else:

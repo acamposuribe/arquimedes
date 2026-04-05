@@ -176,6 +176,9 @@ class TestBuildDocumentPrompt:
         assert "abc123-c1" in content
         assert "[HIGHLIGHTED]" in content
         assert "summary" in content and "facets" in content
+        assert "concepts_local" in content
+        assert "concepts_bridge_candidates" in content
+        assert "Do not force names, dates, or locations into every local concept" in content
 
     def test_small_doc_includes_all_chunks(self):
         _, messages = build_document_prompt(_meta(), None, _chunks(), [])
@@ -206,17 +209,42 @@ class TestBuildDocumentPrompt:
 
 class TestBuildCombinedPrompt:
     def test_shape_and_schema(self):
-        system, messages = build_combined_prompt(_meta(), _toc(), _chunks(), _annotations())
+        system, messages = build_combined_prompt(
+            _meta(), _toc(), _chunks(), _chunks(), _annotations()
+        )
         assert isinstance(system, str) and "JSON" in system
         content = messages[0]["content"]
         assert '"document"' in content and '"chunks"' in content
         assert "summary" in content and "chunk_id" in content
+        assert "concepts_local" in content
+        assert "concepts_bridge_candidates" in content
 
-    def test_includes_chunks_and_annotations(self):
-        _, messages = build_combined_prompt(_meta(), _toc(), _chunks(), _annotations())
+    def test_includes_only_target_chunks_in_chunk_targets(self):
+        _, messages = build_combined_prompt(
+            _meta(), _toc(), _chunks(), [_chunks()[0]], _annotations()
+        )
         content = messages[0]["content"]
         assert "abc123-c0" in content
+        target_section = content.split("## Chunk Targets", 1)[1]
+        assert "abc123-c1" not in target_section
         assert "[HIGHLIGHTED]" in content
+
+    def test_large_doc_uses_curated_document_context(self):
+        big_chunks = [
+            {"chunk_id": f"c{i:04d}", "text": "x" * 2000, "source_pages": [i], "emphasized": i == 0}
+            for i in range(200)
+        ]
+        _, messages = build_combined_prompt(
+            _meta(),
+            _toc(),
+            big_chunks,
+            big_chunks[:2],
+            [],
+            max_context_tokens=5000,
+        )
+        content = messages[0]["content"]
+        assert "Curated context:" in content
+        assert "## Chunk Targets" in content
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +288,7 @@ class TestBuildFigureBatchPrompt:
         assert "image" not in types
         all_text = " ".join(b["text"] for b in content_blocks if b["type"] == "text")
         assert "fig_0001" in all_text and "Figure 1" in all_text
+        assert "prioritize what is visibly present in the image itself" in all_text
 
     def test_vision_figure_includes_base64(self, tmp_path):
         img_path = self._make_png(tmp_path / "fig_0001.png")

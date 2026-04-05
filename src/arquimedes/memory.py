@@ -1,8 +1,8 @@
 """Memory bridge — project canonical concept graph into SQLite for agent access.
 
-Reads derived/concept_clusters.jsonl (produced by arq cluster) and materialises
-graph structures into search.sqlite so agents can traverse them without opening
-wiki markdown.
+Reads derived/concept_clusters.jsonl and derived/bridge_concept_clusters.jsonl
+(produced by arq cluster) and materialises graph structures into search.sqlite
+so agents can traverse them without opening wiki markdown.
 
 Phase 5.5 is deterministic: no new LLM calls. It is a projection layer.
 """
@@ -36,11 +36,54 @@ def _concept_wiki_path(slug: str) -> str:
     return f"wiki/shared/concepts/{slug}.md"
 
 
+def _bridge_concept_wiki_path(slug: str) -> str:
+    """wiki/shared/bridge-concepts/{slug}.md"""
+    return f"wiki/shared/bridge-concepts/{slug}.md"
+
+
 # ---------------------------------------------------------------------------
 # Schema helpers
 # ---------------------------------------------------------------------------
 
 _BRIDGE_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS concept_clusters (
+    cluster_id     TEXT PRIMARY KEY,
+    canonical_name TEXT NOT NULL DEFAULT '',
+    slug           TEXT NOT NULL DEFAULT '',
+    aliases        TEXT NOT NULL DEFAULT '[]',
+    confidence     REAL NOT NULL DEFAULT 0.0,
+    wiki_path      TEXT NOT NULL DEFAULT '',
+    material_count INTEGER NOT NULL DEFAULT 0
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS concept_clusters_fts USING fts5(
+    cluster_id UNINDEXED,
+    canonical_name,
+    aliases,
+    content='concept_clusters',
+    content_rowid='rowid',
+    tokenize='porter unicode61'
+);
+
+CREATE TABLE IF NOT EXISTS cluster_materials (
+    cluster_id         TEXT NOT NULL,
+    material_id        TEXT NOT NULL,
+    relevance          TEXT NOT NULL DEFAULT '',
+    source_pages       TEXT NOT NULL DEFAULT '[]',
+    evidence_spans     TEXT NOT NULL DEFAULT '[]',
+    confidence         REAL NOT NULL DEFAULT 0.0,
+    material_wiki_path TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (cluster_id, material_id)
+);
+
+CREATE TABLE IF NOT EXISTS cluster_relations (
+    cluster_id            TEXT NOT NULL,
+    related_cluster_id    TEXT NOT NULL,
+    shared_material_count INTEGER NOT NULL DEFAULT 0,
+    shared_material_ids   TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY (cluster_id, related_cluster_id)
+);
+
 CREATE TABLE IF NOT EXISTS concept_cluster_aliases (
     cluster_id TEXT NOT NULL,
     alias      TEXT NOT NULL,
@@ -116,6 +159,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict]) -> dict:
     n_concept_pages = 0
     n_material_pages = 0
     n_cluster_material_links = 0
+    n_cluster_relations = 0
 
     # Build material → [cluster_ids] map for cluster_relations + shared_material_ids
     mat_to_clusters: dict[str, list[str]] = defaultdict(list)
@@ -140,7 +184,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict]) -> dict:
                 seen_mids.add(mid)
                 unique_mids.append(mid)
 
-        wiki_path = _concept_wiki_path(slug)
+        wiki_path = c.get("wiki_path") or _concept_wiki_path(slug)
         material_count = len(unique_mids)
 
         # Full INSERT: concept_clusters (with bridge columns)
@@ -221,6 +265,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict]) -> dict:
                VALUES (?,?,?,?)""",
             (a, b, len(mids), json.dumps(mids, ensure_ascii=False)),
         )
+        n_cluster_relations += 1
 
     # Rebuild FTS after inserting cluster data
     con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('rebuild')")
@@ -243,6 +288,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict]) -> dict:
         "clusters": len(clusters),
         "aliases": n_aliases,
         "cluster_material_links": n_cluster_material_links,
+        "cluster_relations": n_cluster_relations,
         "concept_pages": n_concept_pages,
         "material_pages": n_material_pages,
         "wiki_pages": n_concept_pages + n_material_pages,
@@ -257,6 +303,19 @@ def _fingerprint_file(path: Path) -> str:
     if not path.exists():
         return ""
     return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def _cluster_fingerprint(root: Path) -> str:
+    local_path = root / "derived" / "concept_clusters.jsonl"
+    bridge_path = root / "derived" / "bridge_concept_clusters.jsonl"
+    if not local_path.exists() and not bridge_path.exists():
+        return ""
+    hasher = hashlib.sha256()
+    if local_path.exists():
+        hasher.update(local_path.read_bytes())
+    if bridge_path.exists():
+        hasher.update(bridge_path.read_bytes())
+    return hasher.hexdigest()[:16]
 
 
 def _read_stamp(stamp_path: Path) -> dict:
@@ -291,7 +350,7 @@ def _write_stamp(
 def memory_rebuild(config: dict | None = None) -> dict:
     """Rebuild memory bridge tables in search.sqlite.
 
-    Reads derived/concept_clusters.jsonl and the materials table, then:
+        Reads bridge cluster JSONL files and the materials table, then:
     - creates concept_cluster_aliases and wiki_pages rows
     - updates bridge columns on concept_clusters, cluster_materials,
       cluster_relations
@@ -304,29 +363,25 @@ def memory_rebuild(config: dict | None = None) -> dict:
 
     root = get_project_root()
     index_path = get_index_path(config)
-    clusters_path = root / "derived" / "concept_clusters.jsonl"
     manifest_path = root / "manifests" / "materials.jsonl"
     stamp_path = root / "derived" / "memory_bridge_stamp.json"
+    cluster_paths = [
+        root / "derived" / "concept_clusters.jsonl",
+        root / "derived" / "bridge_concept_clusters.jsonl",
+    ]
 
     if not index_path.exists():
         raise FileNotFoundError(
             f"Search index not found at {index_path}. Run `arq index rebuild` first."
         )
-    if not clusters_path.exists():
+    if not any(path.exists() for path in cluster_paths):
         raise FileNotFoundError(
-            f"Cluster file not found at {clusters_path}. Run `arq cluster` first."
+            f"Cluster file not found at {cluster_paths[0]} or {cluster_paths[1]}. Run `arq cluster` first."
         )
 
-    clusters: list[dict] = []
-    with open(clusters_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                clusters.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    from arquimedes.cluster import load_bridge_clusters, load_clusters
+
+    clusters = load_clusters(root) + load_bridge_clusters(root)
 
     con = sqlite3.connect(str(index_path))
     con.row_factory = sqlite3.Row
@@ -337,7 +392,7 @@ def memory_rebuild(config: dict | None = None) -> dict:
     finally:
         con.close()
 
-    clusters_fp = _fingerprint_file(clusters_path)
+    clusters_fp = _cluster_fingerprint(root)
     manifest_fp = _fingerprint_file(manifest_path)
     _write_stamp(stamp_path, clusters_fp, manifest_fp, counts)
 
@@ -355,7 +410,6 @@ def memory_ensure(config: dict | None = None) -> tuple[bool, dict]:
 
     root = get_project_root()
     index_path = get_index_path(config)
-    clusters_path = root / "derived" / "concept_clusters.jsonl"
     manifest_path = root / "manifests" / "materials.jsonl"
     stamp_path = root / "derived" / "memory_bridge_stamp.json"
 
@@ -364,7 +418,7 @@ def memory_ensure(config: dict | None = None) -> tuple[bool, dict]:
             f"Search index not found at {index_path}. Run `arq index rebuild` first."
         )
 
-    clusters_fp = _fingerprint_file(clusters_path)
+    clusters_fp = _cluster_fingerprint(root)
     manifest_fp = _fingerprint_file(manifest_path)
     stamp = _read_stamp(stamp_path)
 

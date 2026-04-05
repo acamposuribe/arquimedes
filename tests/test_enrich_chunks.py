@@ -263,10 +263,10 @@ class TestEnrichChunksStage:
         assert c["source_pages"] == [1]
         assert c["emphasized"] is False
 
-    def test_fails_when_chunk_missing_from_response(self, tmp_path):
-        """If LLM omits a chunk_id from its response, stage should fail."""
-        output_dir = _make_extracted_dir(tmp_path, n_chunks=2)
-        # Only return enrichment for c001, omit c002
+    def test_fails_when_many_chunks_missing_from_response(self, tmp_path):
+        """If LLM omits >3 chunk_ids from response, stage should fail."""
+        output_dir = _make_extracted_dir(tmp_path, n_chunks=5)
+        # Only return enrichment for c001, omit c002-c005 (4 missing > tolerance of 3)
         incomplete = json.dumps({
             "chunks": [{
                 "chunk_id": "c001",
@@ -279,7 +279,27 @@ class TestEnrichChunksStage:
 
         result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "failed"
-        assert "c002" in result["detail"]
+        assert "missing" in result["detail"].lower()
+
+    def test_tolerates_few_missing_chunks(self, tmp_path):
+        """Up to 3 missing chunks should produce a warning but succeed."""
+        output_dir = _make_extracted_dir(tmp_path, n_chunks=4)
+        # Return enrichment for c001-c003, omit c004 (1 missing ≤ tolerance of 3)
+        partial = json.dumps({
+            "chunks": [
+                {
+                    "chunk_id": f"c00{i}",
+                    "summary": {"value": "S", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
+                    "keywords": {"value": ["k"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
+                }
+                for i in range(1, 4)
+            ]
+        })
+        llm_fn = _make_llm_fn([partial])
+        config = _make_config()
+
+        result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "enriched"
 
     def test_fails_when_chunk_missing_summary(self, tmp_path):
         """If a chunk response lacks summary, stage should fail."""
@@ -309,3 +329,31 @@ class TestEnrichChunksStage:
         result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "skipped"
         llm_fn.assert_not_called()
+
+    def test_preparsed_path_only_stamps_returned_target_chunks(self, tmp_path):
+        """Combined-call writes should keep missing target chunks stale."""
+        output_dir = _make_extracted_dir(tmp_path, n_chunks=3)
+        config = _make_config()
+        llm_fn = MagicMock()
+        llm_fn.last_model = "test-agent"
+
+        result = enrich_chunks_stage(
+            output_dir,
+            config,
+            llm_fn,
+            force=False,
+            _pre_parsed_response={
+                "_target_chunk_ids": ["c001", "c002"],
+                "chunks": [{
+                    "chunk_id": "c001",
+                    "summary": {"value": "Summary for c001", "source_pages": [1], "evidence_spans": ["Some text..."], "confidence": 0.9},
+                    "keywords": {"value": ["term1"], "source_pages": [1], "evidence_spans": ["Some text..."], "confidence": 0.85},
+                    "content_class": "argument",
+                }],
+            },
+        )
+
+        assert result["status"] == "enriched"
+        stamps = json.loads((output_dir / "chunk_enrichment_stamps.json").read_text(encoding="utf-8"))
+        assert "c001" in stamps
+        assert "c002" not in stamps

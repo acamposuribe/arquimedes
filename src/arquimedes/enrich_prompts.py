@@ -171,9 +171,12 @@ _DOCUMENT_SCHEMA = """\
     "course_topic": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
     "studio_project": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
   },
-  "concepts": [
-    {"concept_name": "...", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
-  ]
+    "concepts_local": [
+        {"concept_name": "specific, reusable concept phrase", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
+    ],
+    "concepts_bridge_candidates": [
+        {"concept_name": "broader reusable umbrella phrase", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
+    ]
 }\
 """
 
@@ -197,6 +200,26 @@ Only include facets where you are confident (omit fields you cannot determine). 
 For "bibliography": extract journal name, volume, issue, page range, DOI, publisher, place, \
 book title, and editors as they appear on the title page, header, footer, or references — \
 omit any sub-field you cannot find. \
+For "concepts_local": extract 8-15 strong material-level concept candidates that this material \
+genuinely contributes to. A good local concept is a reusable intellectual unit with strong textual \
+evidence. Prefer concept phrases that are specific enough to carry real analytical content but still \
+could recur across materials. Include named mechanisms, typologies, institutional logics, methods, \
+conditions, and frameworks when the document supports them strongly. Concepts may be theoretically \
+dense and multi-word; do not reduce them to thin generic labels or ultra-narrow fragments. Prefer \
+architecture-, spatial-, material-, institutional-, and visual-culture-relevant concepts when present. \
+Avoid near-duplicate concepts and incidental topics mentioned only in passing. Avoid generic labels \
+like "history", "power", "space", or "memory" unless they are sharply qualified into a real \
+concept phrase. 
+
+If a historical qualifier helps distinguish the concept, use only the minimum needed. Do not force \
+names, dates, or locations into every local concept; keep the label reusable unless the detail adds \
+clear meaning.
+
+For "concepts_bridge_candidates": extract 4-8 broader umbrella candidates that could connect this \
+material to related materials. Favor larger frameworks, problematics, fields of inquiry, spatial or \
+institutional conditions, and reusable analytic umbrellas grounded in this document. These may be \
+broad but still meaningful. Avoid vague one-word abstractions, chapter themes, or trivial paraphrases \
+of the title.
 Return ONLY valid JSON, no markdown fences, no explanations.
 
 {schema}\
@@ -368,7 +391,7 @@ _COMBINED_SCHEMA = """\
       "studio_project": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
     },
     "concepts": [
-      {"concept_name": "...", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
+      {"concept_name": "specific, reusable concept phrase", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
     ]
   },
   "chunks": [
@@ -387,12 +410,18 @@ _COMBINED_USER_TEMPLATE = """\
 
 {doc_context}
 
-## Document Text
+## Document Context Text
 
 Sections marked with [HIGHLIGHTED]...[/HIGHLIGHTED] were annotated by the reader and should \
 be weighted as priority context. [NOTE: ...] markers contain the reader's own comments.
 
-{chunks_text}
+{doc_chunks_text}
+
+## Chunk Targets
+
+Return chunk-level outputs only for the chunk_ids listed in this section.
+
+{target_chunks_text}
 
 ## Instructions
 
@@ -402,9 +431,29 @@ Analyze this architecture document and return a single JSON object with two top-
 For "document": provide summary, document_type, keywords, facets (only where confident — omit \
 fields you cannot determine), concepts, and bibliography (journal/book publication details \
 extracted from title page, header, or references — omit sub-fields you cannot find).
+For "document.concepts_local": extract 8-15 strong material-level concept candidates that this \
+material genuinely contributes to. A good local concept is a reusable intellectual unit with strong \
+textual evidence. Prefer concept phrases that are specific enough to carry real analytical content \
+but still could recur across materials. Include named mechanisms, typologies, institutional logics, \
+methods, conditions, and frameworks when the document supports them strongly. Concepts may be \
+theoretically dense and multi-word; do not reduce them to thin generic labels or ultra-narrow \
+fragments. Prefer architecture-, spatial-, material-, institutional-, and visual-culture-relevant \
+concepts when present. Avoid near-duplicate concepts and incidental topics mentioned only in \
+passing. Avoid generic labels like "history", "power", "space", or "memory" unless they are \
+sharply qualified into a real concept phrase.
 
-For "chunks": provide a list entry for each chunk_id listed above with a one-line summary and \
-keywords specific to that chunk's content.
+If a historical qualifier helps distinguish the concept, use only the minimum needed. Do not force \
+names, dates, or locations into every local concept; keep the label reusable unless the detail adds \
+clear meaning.
+
+For "document.concepts_bridge_candidates": extract 4-8 broader umbrella candidates that could connect \
+this material to related materials. Favor larger frameworks, problematics, fields of inquiry, \
+spatial or institutional conditions, and reusable analytic umbrellas grounded in this document. These \
+may be broad but still meaningful. Avoid vague one-word abstractions, chapter themes, or trivial \
+paraphrases of the title.
+
+For "chunks": provide a list entry only for each chunk_id listed in "Chunk Targets", with a \
+one-line summary and keywords specific to that chunk's content.
 
 Return ONLY valid JSON, no markdown fences, no explanations.
 
@@ -415,20 +464,36 @@ Return ONLY valid JSON, no markdown fences, no explanations.
 def build_combined_prompt(
     meta: dict,
     toc: list | None,
-    chunks: list[dict],
+    doc_chunks: list[dict],
+    target_chunks: list[dict],
     annotations: list[dict],
+    *,
+    max_context_tokens: int = _DEFAULT_MAX_CONTEXT_TOKENS,
 ) -> tuple[str, list[dict]]:
     """Build (system_prompt, messages) for combined document + chunk enrichment.
 
     The LLM returns both document-level metadata and per-chunk summaries/keywords
     in a single response.
+
+    `doc_chunks` provide document-level context and may be curated for large
+    documents. `target_chunks` are the specific stale chunks that should receive
+    chunk-level outputs.
     """
     doc_context = build_document_context(meta, toc, None)
-    chunks_text = _build_chunks_text(chunks, annotations)
+    full_doc_chunks_text = _build_chunks_text(doc_chunks, annotations)
+    total_tokens = estimate_tokens(doc_context + full_doc_chunks_text + _COMBINED_SCHEMA)
+    if total_tokens <= max_context_tokens:
+        doc_chunks_text = full_doc_chunks_text
+    else:
+        doc_chunks_text = _curate_context_for_large_doc(
+            doc_chunks, annotations, toc, max_context_tokens
+        )
+    target_chunks_text = _build_chunks_text(target_chunks, annotations)
 
     user_content = _COMBINED_USER_TEMPLATE.format(
         doc_context=doc_context,
-        chunks_text=chunks_text,
+        doc_chunks_text=doc_chunks_text,
+        target_chunks_text=target_chunks_text,
         schema=_COMBINED_SCHEMA,
     )
 
@@ -547,6 +612,10 @@ and classify its relevance:
 - "substantive": architectural drawings, photos, diagrams, or other visual knowledge
 - "decorative": logos, publisher marks, decorative borders, page ornaments
 - "front_matter": journal covers, title page images, platform/database artifacts
+
+When an image is available, prioritize what is visibly present in the image itself. Use caption \
+candidates and surrounding page text as supporting context, not as a replacement for visual \
+evidence. Only fall back to text-only inference when the image is unavailable or unreadable.
 
 """
 

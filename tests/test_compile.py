@@ -10,6 +10,7 @@ import pytest
 
 from arquimedes.cluster import (
     _normalize_concept_name,
+    _validate_bridge_and_attach_provenance,
     _validate_and_attach_provenance,
     cluster_fingerprint,
     is_clustering_stale,
@@ -70,11 +71,16 @@ RAW_LLM_CLUSTERS = [
 def _concept_index_from_rows(rows):
     idx = {}
     for row in rows:
-        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence = row
+        if len(row) == 8:
+            concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
+        else:
+            concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence = row
+            concept_type = "local"
         idx[(material_id, concept_key)] = {
             "concept_name": concept_name,
             "concept_key": concept_key,
             "material_id": material_id,
+            "concept_type": concept_type,
             "relevance": relevance,
             "source_pages": source_pages,
             "evidence_spans": evidence_spans,
@@ -89,11 +95,14 @@ def _make_sqlite_db(tmp_path: Path) -> Path:
     con = sqlite3.connect(str(db_path))
     con.execute(
         "CREATE TABLE concepts ("
-        "concept_name TEXT, concept_key TEXT, material_id TEXT,"
+        "concept_name TEXT, concept_key TEXT, material_id TEXT, concept_type TEXT DEFAULT 'local',"
         "relevance TEXT, source_pages TEXT, evidence_spans TEXT, confidence REAL,"
-        "PRIMARY KEY (material_id, concept_key))"
+        "PRIMARY KEY (material_id, concept_type, concept_key))"
     )
-    con.executemany("INSERT INTO concepts VALUES (?,?,?,?,?,?,?)", CONCEPT_ROWS)
+    con.executemany(
+        "INSERT INTO concepts VALUES (?,?,?,?,?,?,?,?)",
+        [(row[0], row[1], row[2], "local", row[3], row[4], row[5], row[6]) for row in CONCEPT_ROWS],
+    )
     con.execute(
         "CREATE TABLE materials (material_id TEXT PRIMARY KEY, title TEXT,"
         "summary TEXT DEFAULT '', domain TEXT DEFAULT '', collection TEXT DEFAULT '',"
@@ -140,6 +149,86 @@ def _make_meta(material_id: str = "mat_aaa", title: str = "Test") -> dict:
         },
         # no top-level facet keys — they live under "facets"
     }
+
+
+def test_validate_splits_single_material_umbrella_cluster():
+    """A local cluster that over-merges one material should be split to singletons."""
+    raw_clusters = [{
+        "cluster_id": "concept_0001",
+        "canonical_name": "archive theory umbrella",
+        "aliases": ["archival habitat", "memory palace"],
+        "source_concepts": [
+            {"material_id": "mat_aaa", "concept_name": "archival habitat"},
+            {"material_id": "mat_aaa", "concept_name": "memory palace"},
+        ],
+        "confidence": 0.4,
+    }]
+
+    rows = [CONCEPT_ROWS[0], CONCEPT_ROWS[2]]
+    validated = _validate_and_attach_provenance(
+        raw_clusters,
+        _concept_index_from_rows(rows),
+        dict(MATERIAL_ROWS),
+    )
+
+    assert len(validated) == 2
+    assert {cluster["canonical_name"] for cluster in validated} == {
+        "archival habitat",
+        "memory palace",
+    }
+    for cluster in validated:
+        assert len(cluster["source_concepts"]) == 1
+        assert len(cluster["material_ids"]) == 1
+
+
+def test_validate_bridge_allows_multiple_concepts_from_same_material():
+    """Bridge clusters can preserve multiple concepts from one material when they support one umbrella."""
+    raw_clusters = [{
+        "cluster_id": "bridge_0001",
+        "canonical_name": "archive as spatial memory infrastructure",
+        "aliases": ["archival habitat", "memory palace", "archive as space"],
+        "source_concepts": [
+            {"material_id": "mat_aaa", "concept_name": "archival habitat"},
+            {"material_id": "mat_aaa", "concept_name": "memory palace"},
+            {"material_id": "mat_bbb", "concept_name": "archive as space"},
+        ],
+        "confidence": 0.8,
+    }]
+
+    rows = [CONCEPT_ROWS[0], CONCEPT_ROWS[1], CONCEPT_ROWS[2]]
+    validated = _validate_bridge_and_attach_provenance(
+        raw_clusters,
+        _concept_index_from_rows(rows),
+        dict(MATERIAL_ROWS),
+    )
+
+    assert len(validated) == 1
+    assert validated[0]["canonical_name"] == "archive as spatial memory infrastructure"
+    assert len(validated[0]["source_concepts"]) == 3
+    assert set(validated[0]["material_ids"]) == {"mat_aaa", "mat_bbb"}
+
+
+def test_validate_resolves_truncated_concept_name():
+    """Minor LLM truncation should still resolve to the indexed concept row."""
+    raw_clusters = [{
+        "cluster_id": "concept_0001",
+        "canonical_name": "archive as architectural space",
+        "aliases": ["archive as space"],
+        "source_concepts": [
+            {"material_id": "mat_bbb", "concept_name": "archive as spac"},
+        ],
+        "confidence": 0.85,
+    }]
+
+    rows = [CONCEPT_ROWS[1]]
+    validated = _validate_and_attach_provenance(
+        raw_clusters,
+        _concept_index_from_rows(rows),
+        dict(MATERIAL_ROWS),
+    )
+
+    assert len(validated) == 1
+    assert validated[0]["source_concepts"][0]["concept_name"] == "archive as space"
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +465,16 @@ def test_incremental_skip(tmp_path, monkeypatch):
     import arquimedes.config as config_mod
     import arquimedes.cluster as cluster_mod
 
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "manifests" / "materials.jsonl").write_text(
+        json.dumps({"material_id": "mat_aaa", "file_hash": "x",
+                    "relative_path": "R/mat_aaa.pdf", "file_type": "pdf",
+                    "domain": "research", "collection": "papers",
+                    "ingested_at": "2026-01-01T00:00:00+00:00"})
+    )
+
     db_path = _make_sqlite_db(tmp_path)
     index_dir = tmp_path / "indexes"
     index_dir.mkdir()
@@ -423,6 +522,7 @@ def test_incremental_skip(tmp_path, monkeypatch):
         cluster_stamp,
     )
 
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
@@ -435,6 +535,14 @@ def test_incremental_skip(tmp_path, monkeypatch):
         },
     )
     monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: clusters_data)
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_bridge_concepts",
+        lambda config, llm_fn=None, force=False: {
+            "bridge_concepts": 0, "clusters": 0, "multi_material": 0, "skipped": True
+        },
+    )
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
 
     result = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=False)
 
@@ -462,19 +570,32 @@ def test_orphan_removal(tmp_path):
     orphan_concept.parent.mkdir(parents=True)
     orphan_concept.write_text("# Old Concept", encoding="utf-8")
 
+    # Create an existing bridge concept page for a removed bridge cluster
+    orphan_bridge = wiki / "shared" / "bridge-concepts" / "old-bridge.md"
+    orphan_bridge.parent.mkdir(parents=True)
+    orphan_bridge.write_text("# Old Bridge Concept", encoding="utf-8")
+
     # Create a valid material page and concept page
     valid_mat = wiki / "practice" / "_general" / "mat_aaa.md"
     valid_mat.write_text("# Valid", encoding="utf-8")
     valid_concept = wiki / "shared" / "concepts" / "memory-palace.md"
     valid_concept.write_text("# Memory Palace", encoding="utf-8")
+    valid_bridge = wiki / "shared" / "bridge-concepts" / "memory-and-place.md"
+    valid_bridge.parent.mkdir(parents=True, exist_ok=True)
+    valid_bridge.write_text("# Memory and Place", encoding="utf-8")
+    concept_index = wiki / "shared" / "concepts" / "_index.md"
+    concept_index.write_text("# All Concepts", encoding="utf-8")
 
-    removed = _remove_orphans(wiki, {"mat_aaa"}, {"memory-palace"})
+    removed = _remove_orphans(wiki, {"mat_aaa"}, {"memory-palace", "memory-and-place"})
 
     assert not orphan_mat.exists()
     assert not orphan_concept.exists()
+    assert not orphan_bridge.exists()
     assert valid_mat.exists()
     assert valid_concept.exists()
-    assert len(removed) == 2
+    assert valid_bridge.exists()
+    assert concept_index.exists()
+    assert len(removed) == 3
 
 
 # ---------------------------------------------------------------------------
@@ -575,6 +696,8 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     import arquimedes.compile as compile_mod
     import arquimedes.config as config_mod
     import arquimedes.cluster as cluster_mod
+    import arquimedes.index as index_mod
+    import arquimedes.memory as memory_mod
     from arquimedes.index import rebuild_index
 
     # Set up a real index (with all tables)
@@ -621,9 +744,29 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     }
     (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
 
+    bridge_cluster = {
+        "cluster_id": "b_001",
+        "canonical_name": "Archive Space Framework",
+        "slug": "archive-space-framework",
+        "aliases": ["archival space framework"],
+        "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
+        "confidence": 0.88,
+        "material_ids": [mid],
+        "source_concepts": [{
+            "material_id": mid,
+            "concept_name": "archive space",
+            "relevance": "high",
+            "source_pages": [1, 2],
+            "evidence_spans": ["the archive as built form"],
+            "confidence": 0.88,
+        }],
+    }
+
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(index_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(
         cluster_mod, "cluster_concepts",
         lambda config, llm_fn=None, force=False: {
@@ -634,6 +777,14 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
         cluster_mod, "load_clusters",
         lambda root=None: [cluster],
     )
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_bridge_concepts",
+        lambda config, llm_fn=None, force=False: {
+            "bridge_concepts": 1, "clusters": 1, "multi_material": 1, "skipped": True
+        },
+    )
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [bridge_cluster])
 
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
 
@@ -651,5 +802,155 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     con.close()
 
     assert any("archive-space" in r[0] for r in concept_pages), "concept page not in wiki_pages"
+    assert any("bridge-concepts/archive-space-framework" in r[0] for r in concept_pages), "bridge concept page not in wiki_pages"
     assert any(mid in r[0] for r in material_pages), "material page not in wiki_pages"
     assert {r[0] for r in aliases} == {"archival space", "archive as space"}
+
+
+# ---------------------------------------------------------------------------
+# Test: Collection pages
+# ---------------------------------------------------------------------------
+
+from arquimedes.compile_pages import render_collection_page
+
+
+def test_collection_page_renders_all_sections():
+    """render_collection_page produces overview, materials, concepts, facets, recent."""
+    materials = [
+        {"name": "Paper A", "path": "paper_a.md", "summary": "About climate."},
+        {"name": "Paper B", "path": "paper_b.md", "summary": "About mass."},
+    ]
+    key_concepts = [
+        {"name": "Thermal Mass", "path": "../shared/concepts/thermal-mass.md", "count": 2},
+    ]
+    top_facets = [
+        {"field": "climate", "value": "mediterranean", "count": 2},
+    ]
+    recent = [
+        {"name": "Paper A", "path": "paper_a.md", "ingested_at": "2026-04-05T10:00:00+00:00"},
+        {"name": "Paper B", "path": "paper_b.md", "ingested_at": "2026-04-04T10:00:00+00:00"},
+    ]
+    page = render_collection_page(
+        "Research / Thermal Mass", "research", "thermal-mass",
+        materials, key_concepts, top_facets, recent,
+    )
+    assert "# Research / Thermal Mass" in page
+    assert "## Overview" in page
+    assert "**Materials:** 2" in page
+    assert "## Recent Additions" in page
+    assert "Paper A" in page
+    assert "2026-04-05" in page
+    assert "## Materials" in page
+    assert "## Key Concepts" in page
+    assert "Thermal Mass" in page
+    assert "2 materials" in page
+    assert "## Top Facets" in page
+    assert "Climate" in page
+    assert "mediterranean" in page
+
+
+def test_collection_page_empty_sections():
+    """Empty concepts/facets/recent omit those sections."""
+    materials = [{"name": "X", "path": "x.md", "summary": ""}]
+    page = render_collection_page("P / G", "p", "g", materials, [], [], [])
+    assert "## Materials" in page
+    assert "## Key Concepts" not in page
+    assert "## Top Facets" not in page
+    assert "## Recent Additions" not in page
+
+
+def test_compile_writes_collection_pages(tmp_path, monkeypatch):
+    """arq compile writes collection _index.md with collection page content."""
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+    from arquimedes.index import rebuild_index
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    mid = "mat_coll"
+    meta = _make_meta(mid, "Collection Test Material")
+    mat_dir = tmp_path / "extracted" / mid
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps(meta))
+    (mat_dir / "chunks.jsonl").write_text("")
+    (mat_dir / "annotations.jsonl").write_text("")
+    (manifests / "materials.jsonl").write_text(
+        json.dumps({
+            "material_id": mid, "file_hash": mid,
+            "relative_path": f"Research/{mid}.pdf", "file_type": "pdf",
+            "domain": "research", "collection": "papers",
+            "ingested_at": "2026-04-05T12:00:00+00:00",
+        })
+    )
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+
+    derived = tmp_path / "derived"
+    derived.mkdir(exist_ok=True)
+    cluster = {
+        "cluster_id": "c_coll", "canonical_name": "Test Concept",
+        "slug": "test-concept", "aliases": [], "confidence": 0.9,
+        "material_ids": [mid],
+        "source_concepts": [{
+            "material_id": mid, "concept_name": "test concept",
+            "relevance": "high", "source_pages": [1],
+            "evidence_spans": [], "confidence": 0.9,
+        }],
+    }
+    (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        cluster_mod, "cluster_concepts",
+        lambda config, llm_fn=None, force=False: {"skipped": True},
+    )
+    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: [cluster])
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_bridge_concepts",
+        lambda config, llm_fn=None, force=False: {"skipped": True},
+    )
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    coll_page = (tmp_path / "wiki" / "research" / "papers" / "_index.md").read_text()
+    assert "## Overview" in coll_page
+    assert "## Materials" in coll_page
+    assert "Collection Test Material" in coll_page
+    assert "## Key Concepts" in coll_page
+    assert "Test Concept" in coll_page
+    assert "## Recent Additions" in coll_page
+    assert "2026-04-05" in coll_page
+
+
+def test_collection_page_key_concepts_ranked():
+    """Key concepts rendered in the order given (pre-sorted by compile.py)."""
+    key_concepts = [
+        {"name": "Alpha", "path": "a.md", "count": 3},
+        {"name": "Beta", "path": "b.md", "count": 3},
+        {"name": "Zebra", "path": "z.md", "count": 1},
+    ]
+    page = render_collection_page("T", "d", "c", [], key_concepts, [], [])
+    assert page.index("Alpha") < page.index("Beta")
+    assert page.index("Alpha") < page.index("Zebra")
+
+
+def test_collection_page_general_collection():
+    """_general collection also renders correctly."""
+    materials = [{"name": "X", "path": "x.md", "summary": "test"}]
+    page = render_collection_page(
+        "Research /  General", "research", "_general",
+        materials, [], [], [],
+    )
+    assert "## Overview" in page
+    assert "_general" in page
+    assert "## Materials" in page

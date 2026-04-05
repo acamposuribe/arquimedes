@@ -281,9 +281,12 @@ def render_material_page(
         for c in sorted(clusters, key=lambda x: x.get("canonical_name", "")):
             cname = c["canonical_name"]
             slug = c["slug"]
-            concept_path = _concept_wiki_path(slug)
+            concept_path = c.get("wiki_path") or _concept_wiki_path(slug)
             rel = _relative_link(page_path, concept_path)
-            lines.append(f"- [{cname}]({rel})")
+            link_label = cname
+            if "/bridge-concepts/" in concept_path:
+                link_label += " (bridge)"
+            lines.append(f"- [{link_label}]({rel})")
         lines.append("")
 
     # --- Facets ---
@@ -406,13 +409,16 @@ def render_concept_page(
     """
     canonical_name = cluster["canonical_name"]
     slug = cluster["slug"]
-    page_path = _concept_wiki_path(slug)
+    page_path = cluster.get("wiki_path") or _concept_wiki_path(slug)
     source_concepts = cluster.get("source_concepts", [])
     aliases = [a for a in cluster.get("aliases", []) if a != canonical_name]
     lines: list[str] = []
 
     # --- Title ---
     lines.append(f"# {canonical_name}\n")
+
+    if "/bridge-concepts/" in page_path:
+        lines.append("_Bridge cluster_\n")
 
     # --- Aliases ---
     if aliases:
@@ -433,7 +439,7 @@ def render_concept_page(
             evidence_spans = sc.get("evidence_spans") or []
 
             # Link back to material page (if path is known)
-            page_from = _concept_wiki_path(slug)
+            page_from = page_path
             if material_paths and mid in material_paths:
                 mat_rel = _relative_link(page_from, material_paths[mid])
                 mat_heading = f"[{title}]({mat_rel})"
@@ -454,10 +460,109 @@ def render_concept_page(
         for rc in related_concepts:
             rc_name = rc["canonical_name"]
             rc_slug = rc["slug"]
-            rc_path = _concept_wiki_path(rc_slug)
+            rc_path = rc.get("wiki_path") or _concept_wiki_path(rc_slug)
             rel = _relative_link(page_path, rc_path)
-            lines.append(f"- [{rc_name}]({rel})")
+            link_label = rc_name
+            if "/bridge-concepts/" in rc_path:
+                link_label += " (bridge)"
+            lines.append(f"- [{link_label}]({rel})")
         lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Collection page
+# ---------------------------------------------------------------------------
+
+def render_collection_page(
+    title: str,
+    domain: str,
+    collection: str,
+    materials: list[dict],
+    key_concepts: list[dict],
+    top_facets: list[dict],
+    recent_additions: list[dict],
+) -> str:
+    """Render a collection _index.md page.
+
+    Args:
+        title: friendly collection title (H1)
+        domain: domain slug
+        collection: collection slug
+        materials: list of {name, path, summary}
+        key_concepts: list of {name, path, count}
+        top_facets: list of {field, value, count}
+        recent_additions: list of {name, path, ingested_at}
+    """
+    lines: list[str] = []
+    lines.append(f"# {title}\n")
+
+    # Overview
+    lines.append("## Overview\n")
+    lines.append(f"- **Domain:** {domain}")
+    lines.append(f"- **Collection:** {collection}")
+    lines.append(f"- **Materials:** {len(materials)}")
+    lines.append("")
+
+    # Recent additions
+    if recent_additions:
+        lines.append("## Recent Additions\n")
+        for r in recent_additions[:5]:
+            name = r.get("name", "")
+            path = r.get("path", "")
+            ts = r.get("ingested_at", "")
+            date_str = ts[:10] if ts else ""
+            link = f"[{name}]({path})" if path else name
+            if date_str:
+                lines.append(f"- {link} ({date_str})")
+            else:
+                lines.append(f"- {link}")
+        lines.append("")
+
+    # Materials
+    if materials:
+        lines.append("## Materials\n")
+        sorted_mats = sorted(materials, key=lambda e: e.get("name", "").lower())
+        for e in sorted_mats:
+            name = e.get("name", "")
+            path = e.get("path", "")
+            summary = e.get("summary", "")
+            link = f"[{name}]({path})" if path else name
+            if summary:
+                lines.append(f"- {link} — {summary}")
+            else:
+                lines.append(f"- {link}")
+        lines.append("")
+
+    # Key concepts
+    if key_concepts:
+        lines.append("## Key Concepts\n")
+        for kc in key_concepts:
+            name = kc.get("name", "")
+            path = kc.get("path", "")
+            count = kc.get("count", 0)
+            link = f"[{name}]({path})" if path else name
+            lines.append(f"- {link} ({count} material{'s' if count != 1 else ''})")
+        lines.append("")
+
+    # Top facets (grouped by field)
+    if top_facets:
+        lines.append("## Top Facets\n")
+        # Group by field, preserving input order
+        from collections import OrderedDict
+        grouped: OrderedDict[str, list[dict]] = OrderedDict()
+        for tf in top_facets:
+            field = tf.get("field", "")
+            grouped.setdefault(field, []).append(tf)
+        for field, entries in grouped.items():
+            heading = field.replace("_", " ").title()
+            lines.append(f"### {heading}\n")
+            for tf in entries:
+                value = tf.get("value", "")
+                count = tf.get("count", 0)
+                lines.append(f"- {value} ({count})")
+            lines.append("")
 
     return "\n".join(lines)
 
@@ -514,8 +619,11 @@ def render_glossary(clusters: list[dict]) -> str:
         if letter != current_letter:
             current_letter = letter
             lines.append(f"\n### {letter}\n")
-        path = _concept_wiki_path(slug)
-        lines.append(f"- [{name}]({path})")
+        path = c.get("wiki_path") or _concept_wiki_path(slug)
+        link_label = name
+        if "/bridge-concepts/" in path:
+            link_label += " (bridge)"
+        lines.append(f"- [{link_label}]({path})")
 
     lines.append("")
     return "\n".join(lines)

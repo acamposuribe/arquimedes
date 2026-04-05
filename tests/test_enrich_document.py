@@ -42,10 +42,18 @@ MOCK_DOC_RESPONSE = json.dumps({
             "confidence": 0.8,
         }
     },
-    "concepts": [
+    "concepts_local": [
         {
             "concept_name": "thermal mass",
             "relevance": "primary topic",
+            "source_pages": [1],
+            "evidence_spans": ["Thermal mass slows heat transfer"],
+        }
+    ],
+    "concepts_bridge_candidates": [
+        {
+            "concept_name": "thermal performance in architecture",
+            "relevance": "secondary topic",
             "source_pages": [1],
             "evidence_spans": ["Thermal mass slows heat transfer"],
         }
@@ -165,8 +173,9 @@ class TestEnrichDocumentStage:
             for line in concepts_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
-        assert len(lines) == 1
-        assert lines[0]["concept_name"] == "thermal mass"
+        assert len(lines) == 2
+        assert {line["concept_type"] for line in lines} == {"local", "bridge_candidate"}
+        assert any(line["concept_name"] == "thermal mass" for line in lines)
 
     def test_enrichment_stamp_written_to_meta(self, tmp_path):
         """After enrichment, meta.json should contain _enrichment_stamp."""

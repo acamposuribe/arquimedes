@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 
@@ -26,6 +27,7 @@ def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
     doc = fitz.open(str(pdf_path))
     figures: list[Figure] = []
     seen_xrefs: set[int] = set()
+    seen_hashes: set[str] = set()
     fig_counter = 0
 
     for page_num in range(len(doc)):
@@ -58,6 +60,13 @@ def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
                 continue
 
             image_bytes = base_image["image"]
+
+            # Skip duplicate content (same image re-embedded with different xref)
+            content_hash = hashlib.md5(image_bytes).hexdigest()
+            if content_hash in seen_hashes:
+                continue
+            seen_hashes.add(content_hash)
+
             ext = base_image.get("ext", "png")
 
             fig_counter += 1
@@ -127,6 +136,9 @@ def rasterize_pages(
     # Count existing figures to continue numbering
     fig_offset = len(existing_figures) if existing_figures else 0
 
+    # Track content hashes to skip duplicate rasterizations (e.g. watermarks)
+    seen_hashes: set[str] = set()
+
     for page_num in range(len(doc)):
         page = doc[page_num]
 
@@ -148,6 +160,12 @@ def rasterize_pages(
             # Skip if too small after rasterization
             if pix.width < MIN_IMAGE_WIDTH or pix.height < MIN_IMAGE_HEIGHT:
                 continue
+
+            # Skip duplicate content (repeated watermarks, headers, footers)
+            content_hash = hashlib.md5(pix.samples).hexdigest()
+            if content_hash in seen_hashes:
+                continue
+            seen_hashes.add(content_hash)
 
             fig_offset += 1
             fig_id = f"fig_{fig_offset:04d}"

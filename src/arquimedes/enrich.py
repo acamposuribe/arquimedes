@@ -51,7 +51,7 @@ _ALL_STAGES = ["document", "chunk", "figure"]
 def _is_document_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for document stage without calling LLM."""
     enrichment_config = config.get("enrichment", {})
-    model = get_model_id(config)
+    model = get_model_id(config, "document")
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
     try:
@@ -65,14 +65,20 @@ def _is_document_stale(output_dir: Path, config: dict) -> bool:
 
 def _is_chunk_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for chunk stage."""
+    stale_ids, _total = _chunk_staleness_info(output_dir, config)
+    return bool(stale_ids)
+
+
+def _chunk_staleness_info(output_dir: Path, config: dict) -> tuple[set[str], int]:
+    """Return (stale_chunk_ids, total_chunk_count) for a material."""
     enrichment_config = config.get("enrichment", {})
-    model = get_model_id(config)
+    model = get_model_id(config, "chunk")
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
 
     chunks_path = output_dir / "chunks.jsonl"
     if not chunks_path.exists():
-        return False
+        return set(), 0
 
     try:
         meta_path = output_dir / "meta.json"
@@ -120,16 +126,17 @@ def _is_chunk_stale(output_dir: Path, config: dict) -> bool:
 
         existing_stamps = enrich_stamps.read_chunk_stamps(output_dir)
 
+        stale_ids: set[str] = set()
         for chunk in chunks:
             chunk_id = chunk.get("chunk_id", "")
             fp = enrich_stamps.single_chunk_fingerprint(chunk, annotations, doc_context)
             current_stamp = enrich_stamps.make_stamp(prompt_version, model, schema_version, fp)
             existing = existing_stamps.get(chunk_id)
             if enrich_stamps.is_stale(existing, current_stamp):
-                return True
-        return False
+                stale_ids.add(chunk_id)
+        return stale_ids, len(chunks)
     except Exception:
-        return True
+        return {"unknown"}, 0
 
 
 def _is_figure_stale(output_dir: Path, config: dict) -> bool:
@@ -142,7 +149,7 @@ def _is_figure_stale(output_dir: Path, config: dict) -> bool:
         return False
 
     enrichment_config = config.get("enrichment", {})
-    model = get_model_id(config)
+    model = get_model_id(config, "figure")
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
 
@@ -234,18 +241,58 @@ _COMBINED_SCHEMA_DESC = """\
 }"""
 
 
-def _should_combine(output_dir: Path) -> bool:
-    """Return True if this material is small enough for a combined doc+chunk call."""
+def _should_combine(
+    output_dir: Path,
+    config: dict,
+    *,
+    document_stale: bool,
+) -> bool:
+    """Return True if a combined doc+chunk call fits within budget.
+
+    Uses the same curated prompt path as the real combined prompt builder, so
+    large documents can still combine when the curated doc context plus target
+    chunks fit.
+    """
     chunks_path = output_dir / "chunks.jsonl"
     if not chunks_path.exists():
         return False
-    total_chars = 0
-    for line in chunks_path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            c = json.loads(line)
-            total_chars += len(c.get("text", ""))
-    return total_chars // 4 < _COMBINED_TOKEN_THRESHOLD
+
+    from arquimedes import enrich_prompts
+    from arquimedes.enrich_llm import _stage_route_config
+
+    doc_routes = _stage_route_config(config, "document")
+    chunk_routes = _stage_route_config(config, "chunk")
+    if doc_routes or chunk_routes:
+        if doc_routes != chunk_routes:
+            return False
+
+    meta = _load_json(output_dir / "meta.json", {})
+    toc = _load_json(output_dir / "toc.json")
+    chunks = _load_jsonl(chunks_path)
+    annotations = _load_jsonl(output_dir / "annotations.jsonl")
+    if not chunks:
+        return False
+
+    if document_stale:
+        target_chunks = chunks
+    else:
+        stale_chunk_ids, _total = _chunk_staleness_info(output_dir, config)
+        target_chunks = [c for c in chunks if c.get("chunk_id", "") in stale_chunk_ids]
+        if not target_chunks:
+            return False
+
+    _system, messages = enrich_prompts.build_combined_prompt(
+        meta,
+        toc,
+        chunks,
+        target_chunks,
+        annotations,
+        max_context_tokens=_COMBINED_TOKEN_THRESHOLD,
+    )
+    user_content = messages[0]["content"]
+    if isinstance(user_content, str):
+        return enrich_prompts.estimate_tokens(user_content) <= _COMBINED_TOKEN_THRESHOLD
+    return False
 
 
 def _run_combined_enrichment(
@@ -254,6 +301,7 @@ def _run_combined_enrichment(
     llm_fn,
     *,
     force: bool = False,
+    document_stale: bool = False,
 ) -> tuple[dict, dict]:
     """Run doc+chunk enrichment in a single LLM call.
 
@@ -263,16 +311,31 @@ def _run_combined_enrichment(
     from arquimedes import enrich_llm, enrich_prompts
 
     enrichment_config = config.get("enrichment", {})
-    model = get_model_id(config)
+    model = get_model_id(config, "document")
 
     # Load artifacts
     meta = _load_json(output_dir / "meta.json", {})
     toc = _load_json(output_dir / "toc.json")
     chunks = _load_jsonl(output_dir / "chunks.jsonl")
     annotations = _load_jsonl(output_dir / "annotations.jsonl")
+    if document_stale or force:
+        target_chunks = chunks
+        target_chunk_ids = {c.get("chunk_id", "") for c in chunks if c.get("chunk_id", "")}
+    else:
+        stale_chunk_ids, _total_chunks = _chunk_staleness_info(output_dir, config)
+        target_chunk_ids = stale_chunk_ids
+        target_chunks = [c for c in chunks if c.get("chunk_id", "") in target_chunk_ids]
+        if not target_chunks:
+            return None, None
 
-    # Build combined prompt and make one LLM call
-    system, messages = enrich_prompts.build_combined_prompt(meta, toc, chunks, annotations)
+    # Build combined prompt and make one LLM call (use document effort — it's the harder task)
+    from arquimedes.enrich_llm import set_effort, set_model, set_codex_params
+    set_effort(llm_fn, config, "document")
+    set_model(llm_fn, config, "document")
+    set_codex_params(llm_fn, config, "document")
+    system, messages = enrich_prompts.build_combined_prompt(
+        meta, toc, chunks, target_chunks, annotations
+    )
     try:
         raw_text = llm_fn(system, messages)
         parsed = enrich_llm.parse_json_or_repair(
@@ -333,7 +396,10 @@ def _run_combined_enrichment(
     chunk_result = enrich_chunks_stage(
         output_dir, config, llm_fn,
         force=force,
-        _pre_parsed_response={"chunks": chunks_data},
+        _pre_parsed_response={
+            "chunks": chunks_data,
+            "_target_chunk_ids": sorted(target_chunk_ids),
+        },
     ) if chunks_data is not None else {"status": "failed", "detail": "Combined call: chunks portion invalid"}
 
     return doc_result, chunk_result
@@ -383,15 +449,17 @@ def enrich(
 
     # Defer llm_fn construction until we know something is stale (agent CLIs are slow)
     import threading
-    _llm_fn_ref = [llm_fn]
     _llm_fn_lock = threading.Lock()
+    _stage_llm_cache: dict[str, object] = {}
 
-    def _get_llm_fn():
+    def _get_llm_fn(stage: str):
+        if llm_fn is not None:
+            return llm_fn
         with _llm_fn_lock:
-            if _llm_fn_ref[0] is None:
+            if stage not in _stage_llm_cache:
                 from arquimedes.enrich_llm import make_cli_llm_fn
-                _llm_fn_ref[0] = make_cli_llm_fn(config)
-            return _llm_fn_ref[0]
+                _stage_llm_cache[stage] = make_cli_llm_fn(config, stage)
+            return _stage_llm_cache[stage]
 
     # Determine which materials to process
     if material_id:
@@ -439,24 +507,39 @@ def enrich(
 
         material_results: dict = {"title": title}
 
+        doc_stale_now = force or (
+            "document" in requested_stages and _is_document_stale(output_dir, config)
+        )
+        chunk_stale_now = force or (
+            "chunk" in requested_stages and _is_chunk_stale(output_dir, config)
+        )
+
+        # If the document is being re-enriched, chunk fingerprints become stale too
+        # because chunk prompts depend on current document-level context.
+        effective_chunk_stale = chunk_stale_now or (
+            "chunk" in requested_stages and doc_stale_now
+        )
+
         # Check if combined doc+chunk call is appropriate
         use_combined = (
             not dry_run
             and "document" in requested_stages
             and "chunk" in requested_stages
-            and _should_combine(output_dir)
+            and doc_stale_now
+            and _should_combine(output_dir, config, document_stale=doc_stale_now)
         )
 
         # Track which stages were handled by the combined call
         combined_handled: set[str] = set()
 
         if use_combined:
-            doc_stale = force or _is_document_stale(output_dir, config)
-            chunk_stale = force or _is_chunk_stale(output_dir, config)
-
-            if doc_stale and chunk_stale:
+            if doc_stale_now and effective_chunk_stale:
                 doc_result, chunk_result = _run_combined_enrichment(
-                    output_dir, config, _get_llm_fn(), force=force,
+                    output_dir,
+                    config,
+                    _get_llm_fn("document"),
+                    force=force,
+                    document_stale=doc_stale_now,
                 )
                 if doc_result is not None:
                     material_results["document"] = doc_result
@@ -497,6 +580,13 @@ def enrich(
                 elif s == "figure" and _is_figure_stale(output_dir, config):
                     stale_stages.add(s)
 
+            if (
+                "document" in stale_stages
+                and "chunk" in remaining
+                and (output_dir / "chunks.jsonl").exists()
+            ):
+                stale_stages.add("chunk")
+
             for s in remaining:
                 if s not in stale_stages:
                     material_results[s] = {"status": "skipped", "detail": "up to date"}
@@ -505,11 +595,9 @@ def enrich(
             parallel_doc_fig = "document" in stale_stages and "figure" in stale_stages
 
             if parallel_doc_fig:
-                from arquimedes.enrich_llm import make_cli_llm_fn as _make_fn
-
                 # Separate llm_fn per thread to avoid last_model race
-                doc_fn = _get_llm_fn()
-                fig_fn = _make_fn(config)
+                doc_fn = _get_llm_fn("document")
+                fig_fn = _get_llm_fn("figure")
 
                 with ThreadPoolExecutor(max_workers=2) as stage_pool:
                     fig_future = stage_pool.submit(
@@ -545,15 +633,15 @@ def enrich(
                         continue
                     if s == "document":
                         result = enrich_document_stage(
-                            output_dir, config, _get_llm_fn(), force=force
+                            output_dir, config, _get_llm_fn("document"), force=force
                         )
                     elif s == "chunk":
                         result = enrich_chunks_stage(
-                            output_dir, config, _get_llm_fn(), force=force
+                            output_dir, config, _get_llm_fn("chunk"), force=force
                         )
                     else:
                         result = enrich_figures_stage(
-                            output_dir, config, _get_llm_fn(), force=force
+                            output_dir, config, _get_llm_fn("figure"), force=force
                         )
                     material_results[s] = result
                     if result["status"] == "failed":

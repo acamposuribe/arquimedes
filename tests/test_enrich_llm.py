@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from unittest.mock import MagicMock
 
 import pytest
@@ -11,11 +12,13 @@ from arquimedes.enrich_llm import (
     EnrichmentError,
     _build_agent_cmd,
     _build_prompt_text,
+    _build_stage_request,
     _run_agent_subprocess,
     get_agent_model_name,
     get_model_id,
     make_cli_llm_fn,
     parse_json_or_repair,
+    set_codex_params,
 )
 
 
@@ -111,6 +114,12 @@ class TestGetAgentModelName:
     def test_codex(self):
         assert get_agent_model_name(["codex", "exec"]) == "codex"
 
+    def test_codex_with_model(self):
+        assert get_agent_model_name(["codex", "exec", "-m", "gpt-5.4-mini"]) == "codex:gpt-5.4-mini"
+
+    def test_copilot_with_model(self):
+        assert get_agent_model_name(["copilot", "--model", "gpt-5-mini"]) == "copilot:gpt-5-mini"
+
     def test_other_agent(self):
         assert get_agent_model_name(["myagent", "run"]) == "myagent"
 
@@ -158,12 +167,91 @@ class TestBuildAgentCmd:
     def test_codex_gets_ephemeral_and_skip_git(self):
         cmd = _build_agent_cmd(["codex", "exec"], "sys")
         assert "--ephemeral" in cmd
-        assert "--skip-git-repo-check" in cmd
-        assert "--bare" not in cmd  # claude-only flag
+        assert "--skip-git-repo-check" not in cmd  # not a valid codex flag
 
     def test_codex_no_duplicate_ephemeral(self):
         cmd = _build_agent_cmd(["codex", "exec", "--ephemeral"], "sys")
         assert cmd.count("--ephemeral") == 1
+
+    def test_codex_model_and_effort(self):
+        cmd = _build_agent_cmd(["codex", "exec"], "sys", codex_model="gpt-5.4-mini", codex_effort="high")
+        assert "-m" in cmd
+        assert cmd[cmd.index("-m") + 1] == "gpt-5.4-mini"
+        assert "-c" in cmd
+        assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"  # no extra quotes
+
+    def test_codex_no_model_when_not_specified(self):
+        cmd = _build_agent_cmd(["codex", "exec"], "sys")
+        assert "-m" not in cmd
+        assert "-c" not in cmd
+
+    def test_claude_effort_added_when_specified(self):
+        cmd = _build_agent_cmd(["claude", "--print"], "sys", effort="low")
+        assert "--effort" in cmd
+        idx = cmd.index("--effort")
+        assert cmd[idx + 1] == "low"
+
+    def test_claude_effort_omitted_when_none(self):
+        cmd = _build_agent_cmd(["claude", "--print"], "sys", effort=None)
+        assert "--effort" not in cmd
+
+    def test_claude_explicit_effort_not_overridden(self):
+        cmd = _build_agent_cmd(["claude", "--print", "--effort", "high"], "sys", effort="low")
+        assert cmd.count("--effort") == 1
+        idx = cmd.index("--effort")
+        assert cmd[idx + 1] == "high"  # user's explicit choice preserved
+
+    def test_claude_model_override(self):
+        cmd = _build_agent_cmd(["claude", "--print"], "sys", model_override="haiku")
+        assert "--model" in cmd
+        idx = cmd.index("--model")
+        assert cmd[idx + 1] == "haiku"
+
+    def test_claude_model_override_replaces_default(self):
+        """When base_parts don't have --model, override takes precedence over sonnet default."""
+        cmd = _build_agent_cmd(["claude", "--print"], "sys", model_override="haiku")
+        assert cmd.count("--model") == 1
+        idx = cmd.index("--model")
+        assert cmd[idx + 1] == "haiku"
+
+    def test_claude_no_model_override_defaults_to_sonnet(self):
+        cmd = _build_agent_cmd(["claude", "--print"], "sys", model_override=None)
+        idx = cmd.index("--model")
+        assert cmd[idx + 1] == "sonnet"
+
+
+class TestBuildStageRequest:
+    def test_copilot_uses_prompt_flag_and_allows_tools(self):
+        cmd, stdin_text, fast_fail = _build_stage_request(
+            ["copilot"],
+            "copilot",
+            "system",
+            "user prompt",
+            model="gpt-5-mini",
+            effort="high",
+        )
+        assert stdin_text == ""
+        assert fast_fail is True
+        assert "--prompt" in cmd
+        assert "--silent" in cmd
+        assert "--allow-all" in cmd
+        assert "--no-custom-instructions" in cmd
+        assert cmd[cmd.index("--model") + 1] == "gpt-5-mini"
+        assert cmd[cmd.index("--effort") + 1] == "high"
+
+    def test_codex_uses_stdin_and_model_flag(self):
+        cmd, stdin_text, fast_fail = _build_stage_request(
+            ["codex", "exec"],
+            "codex",
+            "system",
+            "user prompt",
+            model="gpt-5.4-mini",
+            effort="medium",
+        )
+        assert stdin_text.startswith("[SYSTEM]")
+        assert fast_fail is False
+        assert "--ephemeral" in cmd
+        assert cmd[cmd.index("-m") + 1] == "gpt-5.4-mini"
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +294,56 @@ class TestMakeCliLlmFn:
         fn = make_cli_llm_fn(config)
         result = fn("system", [{"role": "user", "content": "hi"}])
         assert '{"ok": true}' in result
+
+    def test_stage_routes_use_copilot_fallback(self, tmp_path, monkeypatch):
+        codex = tmp_path / "codex"
+        codex.write_text('#!/bin/bash\necho "rate limit exceeded" >&2\nexit 1')
+        codex.chmod(0o755)
+
+        copilot = tmp_path / "copilot"
+        args_path = tmp_path / "copilot-args.txt"
+        copilot.write_text(
+            f'#!/bin/bash\n'
+            f'printf "%s\\n" "$@" > "{args_path}"\n'
+            f'cat - > /dev/null\n'
+            f'echo "{{\\"ok\\": true}}"\n'
+        )
+        copilot.chmod(0o755)
+
+        monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+
+        config = {
+            "enrichment": {
+                "max_retries": 1,
+                "llm_routes": {
+                    "document": [
+                        {"provider": "codex", "command": "codex exec", "model": "gpt-5.4-mini", "effort": "high"},
+                        {"provider": "copilot", "command": "copilot", "model": "gpt-5-mini", "effort": "high"},
+                    ]
+                },
+            }
+        }
+        fn = make_cli_llm_fn(config, "document")
+        result = fn("system", [{"role": "user", "content": "hi"}])
+        assert '{"ok": true}' in result
+        args = args_path.read_text().splitlines()
+        assert "--prompt" in args
+        assert "--silent" in args
+        assert "--allow-all" in args
+        assert "--model" in args and args[args.index("--model") + 1] == "gpt-5-mini"
+        assert "--effort" in args and args[args.index("--effort") + 1] == "high"
+
+    def test_stage_route_model_id_includes_stage_signature(self):
+        config = {
+            "enrichment": {
+                "llm_routes": {
+                    "chunk": [
+                        {"provider": "copilot", "command": "copilot", "model": "gpt-5-mini"},
+                    ]
+                }
+            }
+        }
+        assert get_model_id(config, "chunk").startswith("copilot:gpt-5-mini")
 
     def test_raises_on_all_agents_failing(self, tmp_path):
         failing = tmp_path / "failing-agent"

@@ -6,6 +6,8 @@
 > **Phase 5 spec:** [Wiki compiler design](superpowers/specs/2026-04-05-phase5-wiki-compiler-design.md)
 > **Phase 5.5 spec:** [Memory bridge design](superpowers/specs/2026-04-05-phase5-5-memory-bridge-design.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
+> **Pipeline:** [Operational pipeline](PIPELINE.md)
+> **Phase 5 addendum:** [Collection pages spec](superpowers/specs/2026-04-05-phase5-collection-pages-design.md)
 
 ## Context
 
@@ -79,12 +81,14 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 5: Wiki Compiler
 
-- [x] **(concept clustering)** `arq cluster` — LLM pass over all concepts in the index (keys, titles, evidence); emit `derived/concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; see [Phase 5 spec](superpowers/specs/2026-04-05-phase5-wiki-compiler-design.md)
+- [x] **(concept clustering)** `arq cluster` — LLM pass over all concepts in the index (keys, titles, evidence); emit `derived/concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments; see [Phase 5 spec](superpowers/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] `arq compile` — generate material pages, concept pages (one page per cluster), index pages
+- [x] **(collection pages addendum)** Extend `arq compile` so `wiki/{domain}/{collection}/_index.md` becomes a first-class deterministic collection page; see [collection pages spec](superpowers/specs/2026-04-05-phase5-collection-pages-design.md)
+- [x] Collection pages should include: overview, recent additions, material list, top canonical concepts by recurrence, top facets by frequency
 - [x] Incremental compilation (per-material stamps for material pages; global `cluster_stamp` — when clusters change, rebuild **all** concept pages)
 - [x] Cross-referencing with standard markdown links
 - [x] Wiki tree: practice/, research/, shared/concepts/
-- [ ] Define the wiki structures the future server maintainer will own and keep current
+- [x] Define the wiki structures the future server maintainer will own and keep current: all generated material pages, concept pages, glossary pages, and directory `_index.md` pages under `wiki/`; later phases may add maintainer-owned reports/logs/filings, but collaborators should treat the generated wiki tree as compiler/server-maintainer-owned
 
 ## Phase 5.5: Memory Bridge
 
@@ -96,6 +100,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - [x] Ensure the semantic graph is queryable for agents, not only readable in markdown
 - [x] Make `arq compile` auto-run `arq memory rebuild`, so semantic publication updates wiki and machine-queryable memory together
 - [x] Make collaborator-side `arq index ensure` auto-run `arq memory ensure`, so pulled wiki/cluster artifacts regain their canonical connections locally without compile
+- [x] Update CLI output so `arq index ensure` reports both index status and memory-bridge status
 - [x] Keep semantic publication server-maintainer-only: collaborators rebuild deterministic local projections, but never re-cluster or re-compile the wiki
 
 ## Phase 6: Wiki Linting & Health Checks
@@ -111,24 +116,26 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 - [ ] MCP server wrapping search, read, compile, lint functions
 - [ ] `arq read`, `arq figures` CLI commands
+- [ ] Freshness-on-read contract for collaborator-facing agent tools: before search/read operations, sync latest repo state when applicable and run `arq index ensure` so local search + memory are current
 
 ## Phase 8: Web UI
 
 - [ ] FastAPI + Jinja2 server (`arq serve`)
 - [ ] Browse wiki tree, search with facets, view material pages
 - [ ] Figure gallery, links to original iCloud files
+- [ ] Freshness UX: collaborator-facing update path before search (auto-check on app open / first search in session and explicit Update button), followed by `arq index ensure`
 
 ## Phase 9: Server Agent + Sync
 
 - [ ] Introduce a dedicated maintainer instruction file for the server agent (operational schema, not build-system docs)
 - [ ] `arq watch` — file watcher with configurable backend (fsevents | poll)
 - [ ] Debouncing + batching (10s window, single commit per batch)
-- [ ] `arq sync` — auto-pull daemon for collaborators with `arq index ensure` after pull
+- [ ] `arq sync` — auto-pull daemon for collaborators with `arq index ensure` after pull, so local search and memory are always current before use
 - [ ] `arq sync` should inherit the memory bridge automatically via `arq index ensure` → `arq memory ensure`
 - [ ] `arq lint --quick` after each compile, `arq lint --full` on weekly schedule
 - [ ] launchd integration for both watch and sync
 - [ ] Auto-commit + push pipeline
-- [ ] Always-on maintainer flow: ingest → extract-raw → enrich → compile → lint/index → commit/push
+- [ ] Always-on maintainer flow: ingest → extract → compile → lint/index → commit/push
 - [ ] **Material removal cascade**: when a raw file is deleted from iCloud, the watcher should remove the manifest entry, extracted artifacts, wiki pages, concept cluster references, and rebuild the index. The full pipeline must be reversible.
 
 ---

@@ -127,12 +127,13 @@ CREATE VIRTUAL TABLE IF NOT EXISTS annotations_fts USING fts5(
 CREATE TABLE IF NOT EXISTS concepts (
     concept_name   TEXT NOT NULL,
     material_id    TEXT NOT NULL,
+    concept_type   TEXT NOT NULL DEFAULT 'local',
     concept_key    TEXT NOT NULL DEFAULT '',
     relevance      TEXT NOT NULL DEFAULT '',
     source_pages   TEXT NOT NULL DEFAULT '[]',
     evidence_spans TEXT NOT NULL DEFAULT '[]',
     confidence     REAL NOT NULL DEFAULT 0.0,
-    PRIMARY KEY (material_id, concept_key)
+    PRIMARY KEY (material_id, concept_type, concept_key)
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
@@ -507,13 +508,15 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
                         concept_name = c.get("concept_name", "").strip()
                         if not concept_name:
                             continue
+                        concept_type = c.get("concept_type", "local")
                         concept_key = _normalize_concept_key(concept_name)
                         prov = c.get("provenance") or {}
                         con.execute(
-                            "INSERT OR REPLACE INTO concepts VALUES (?,?,?,?,?,?,?)",
+                            "INSERT OR REPLACE INTO concepts VALUES (?,?,?,?,?,?,?,?)",
                             (
                                 concept_name,
                                 mid,
+                                concept_type,
                                 concept_key,
                                 c.get("relevance", ""),
                                 json.dumps(prov.get("source_pages", []), ensure_ascii=False),
@@ -531,8 +534,7 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
         con.execute("INSERT INTO concepts_fts(concepts_fts) VALUES ('rebuild')")
 
         # Populate cluster graph tables (no-op if derived/concept_clusters.jsonl absent)
-        clusters_path = root / "derived" / "concept_clusters.jsonl"
-        _populate_clusters(con, clusters_path)
+        _populate_clusters(con, root)
 
         # Write index_state
         manifest_hash = _compute_manifest_hash(manifest_path)
@@ -561,8 +563,8 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
 
 # --- Cluster graph indexing ---
 
-def _populate_clusters(con: sqlite3.Connection, clusters_path: Path) -> int:
-    """Populate concept_clusters, cluster_materials, cluster_relations from a clusters JSONL file.
+def _populate_clusters(con: sqlite3.Connection, project_root: Path) -> int:
+    """Populate concept_clusters, cluster_materials, cluster_relations from cluster JSONL files.
 
     Clears existing cluster tables first, then re-inserts. Safe to call on any
     open connection (caller is responsible for commit). Returns cluster count written.
@@ -573,19 +575,11 @@ def _populate_clusters(con: sqlite3.Connection, clusters_path: Path) -> int:
     # Rebuild FTS for clusters
     con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('delete-all')")
 
-    if not clusters_path.exists():
-        return 0
+    from arquimedes.cluster import load_bridge_clusters, load_clusters
 
-    clusters: list[dict] = []
-    with open(clusters_path) as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                clusters.append(json.loads(line))
-            except json.JSONDecodeError:
-                continue
+    clusters = load_clusters(project_root) + load_bridge_clusters(project_root)
+    if not clusters:
+        return 0
 
     # Build material→[cluster_ids] map for cluster_relations
     mat_to_clusters: dict[str, list[str]] = {}
@@ -596,16 +590,20 @@ def _populate_clusters(con: sqlite3.Connection, clusters_path: Path) -> int:
             continue
 
         aliases = c.get("aliases") or []
+        wiki_path = c.get("wiki_path", "") or ""
+        material_count = len(c.get("material_ids") or [])
         con.execute(
             """INSERT OR REPLACE INTO concept_clusters
-               (cluster_id, canonical_name, slug, aliases, confidence)
-               VALUES (?,?,?,?,?)""",
+               (cluster_id, canonical_name, slug, aliases, confidence, wiki_path, material_count)
+               VALUES (?,?,?,?,?,?,?)""",
             (
                 cluster_id,
                 c.get("canonical_name", ""),
                 c.get("slug", ""),
                 json.dumps(aliases, ensure_ascii=False),
                 float(c.get("confidence", 0.0)),
+                wiki_path,
+                material_count,
             ),
         )
 
@@ -663,8 +661,6 @@ def index_clusters(config: dict | None = None) -> int:
 
     root = get_project_root()
     index_path = root / "indexes" / "search.sqlite"
-    clusters_path = root / "derived" / "concept_clusters.jsonl"
-
     if not index_path.exists():
         return 0
 
@@ -721,7 +717,7 @@ def index_clusters(config: dict | None = None) -> int:
                 PRIMARY KEY (page_type, page_id)
             );
         """)
-        count = _populate_clusters(con, clusters_path)
+        count = _populate_clusters(con, root)
         con.commit()
     finally:
         con.close()
@@ -850,11 +846,17 @@ def _compute_extracted_snapshot(extracted_dir: Path, material_ids: list[str], ro
 
 
 def _clusters_hash(root: Path) -> str:
-    """Hash of derived/concept_clusters.jsonl for staleness detection."""
-    p = root / "derived" / "concept_clusters.jsonl"
-    if not p.exists():
+    """Hash of bridge cluster JSONL files for staleness detection."""
+    local_path = root / "derived" / "concept_clusters.jsonl"
+    bridge_path = root / "derived" / "bridge_concept_clusters.jsonl"
+    if not local_path.exists() and not bridge_path.exists():
         return ""
-    return hashlib.sha256(p.read_bytes()).hexdigest()[:16]
+    hasher = hashlib.sha256()
+    if local_path.exists():
+        hasher.update(local_path.read_bytes())
+    if bridge_path.exists():
+        hasher.update(bridge_path.read_bytes())
+    return hasher.hexdigest()[:16]
 
 
 def _count_manifest_lines(manifest_path: Path) -> int:

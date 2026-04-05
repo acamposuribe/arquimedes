@@ -214,10 +214,9 @@ From `config.yaml`:
 
 ```yaml
 llm:
-  agent_cmd:                      # agent CLIs, tried in order (first success wins)
-    - "claude --print"            # primary
-    - "codex exec"                # fallback
-                                 # agent authenticates with its own credentials
+  agent_cmd:                      # legacy fallback; stage routes take precedence
+    - "claude --print"
+    - "codex exec"
 
 enrichment:
   prompt_version: "enrich-v1.0"
@@ -226,6 +225,40 @@ enrichment:
   figure_batch_size: 6          # figures per multimodal call
   max_retries: 3                # agent CLI call retries
   parallel: 4                   # concurrent material enrichments (1 = sequential)
+  llm_routes:
+    document:
+      - provider: codex
+        command: "codex exec"
+        model: gpt-5.4-mini
+        effort: high
+      - provider: copilot
+        command: "copilot"
+        model: gpt-5-mini
+        effort: high
+    chunk:
+      - provider: copilot
+        command: "copilot"
+        model: gpt-5-mini
+    figure:
+      - provider: codex
+        command: "codex exec"
+        model: gpt-5.4-mini
+        effort: medium
+      - provider: copilot
+        command: "copilot"
+        model: gpt-4o
+    cluster:
+      - provider: claude
+        command: "claude --print"
+        model: sonnet
+        effort: medium
+      - provider: codex
+        command: "codex exec"
+        model: gpt-5.4-mini
+        effort: high
+      - provider: copilot
+        command: "copilot"
+        model: gpt-5-mini
 ```
 
 ### Performance
@@ -236,7 +269,7 @@ enrichment:
 - **Parallel materials:** when multiple materials need enrichment, they are processed concurrently via `ThreadPoolExecutor(max_workers=parallel)`
 - **Parallel stages:** within a single material, document + figure stages run concurrently (independent inputs), while chunk stage waits for document (uses doc summary in prompt context)
 - **Early skip:** orchestrator checks staleness before dispatching to stage functions, avoiding unnecessary LLM construction
-- **Ordered agent fallback:** agents are tried in order from `agent_cmd` list; first success wins. If an agent fails (exit code, auth error, rate limit), the next is tried automatically
+- **Ordered stage fallback:** routes are tried in order from `enrichment.llm_routes[stage]` (falling back to legacy `llm.agent_cmd` if no stage routes exist). If an agent fails (exit code, auth error, rate limit), the next is tried automatically
 - **Fast-fail on auth/rate-limit:** subprocess stderr is monitored in real-time; patterns like "not logged in", "rate limit", "quota exceeded" trigger immediate process kill (via `os.killpg`) instead of waiting for timeout
 
 ## Scope Boundaries

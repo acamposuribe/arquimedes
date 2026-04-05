@@ -563,16 +563,18 @@ def _search_concepts(
     query: str,
     material_id: str,
     limit: int,
+    *,
+    concept_type: str = "local",
 ) -> list[ConceptHit]:
     sql = """
         SELECT co.concept_name, co.relevance, co.source_pages, co.evidence_spans, co.confidence
         FROM concepts_fts
         JOIN concepts co ON concepts_fts.rowid = co.rowid
-        WHERE concepts_fts MATCH ? AND co.material_id = ?
+        WHERE concepts_fts MATCH ? AND co.material_id = ? AND co.concept_type = ?
         ORDER BY concepts_fts.rank
         LIMIT ?
     """
-    rows = con.execute(sql, [query, material_id, limit]).fetchall()
+    rows = con.execute(sql, [query, material_id, concept_type, limit]).fetchall()
     hits: list[ConceptHit] = []
     for i, row in enumerate(rows, 1):
         try:
@@ -700,7 +702,8 @@ def format_human(result: SearchResult) -> str:
             lines.append("Canonical concept clusters:")
             for cl in result.canonical_clusters:
                 alias_str = f"  (aliases: {', '.join(cl.aliases[:3])})" if cl.aliases else ""
-                lines.append(f"  • {cl.canonical_name}{alias_str}  [{cl.material_count} material(s)]")
+                bridge_tag = " [bridge]" if "/bridge-concepts/" in cl.wiki_path else ""
+                lines.append(f"  • {cl.canonical_name}{bridge_tag}{alias_str}  [{cl.material_count} material(s)]")
 
         lines.append("")
         lines.append(f'{result.total} result(s) for "{result.query}" (depth {result.depth})')
@@ -814,12 +817,13 @@ def _do_find_related(
     except sqlite3.OperationalError:
         pass  # cluster tables absent (pre-clustering index)
 
-    # Shared concepts via concept_key (weight 1.0 each — normalized matching)
+    # Shared local concepts via concept_key (weight 1.0 each — normalized matching)
     rows = con.execute(
         """SELECT c2.material_id, c1.concept_name
            FROM concepts c1
            JOIN concepts c2 ON c1.concept_key = c2.concept_key
-           WHERE c1.material_id = ? AND c2.material_id != ?""",
+           WHERE c1.material_id = ? AND c2.material_id != ?
+             AND c1.concept_type = 'local' AND c2.concept_type = 'local'""",
         [material_id, material_id],
     ).fetchall()
     for row in rows:
@@ -952,6 +956,7 @@ def list_concepts(
     *,
     min_materials: int = 1,
     limit: int = 100,
+    concept_type: str = "local",
 ) -> list[ConceptEntry]:
     """List all concept candidates across the collection, grouped by normalized concept_key."""
     if config is None:
@@ -974,12 +979,13 @@ def list_concepts(
                    GROUP_CONCAT(DISTINCT material_id) AS material_ids_csv,
                    GROUP_CONCAT(relevance) AS relevance_values
             FROM concepts
+            WHERE concept_type = ?
             GROUP BY concept_key
             HAVING COUNT(DISTINCT material_id) >= ?
             ORDER BY material_count DESC, concept_key
             LIMIT ?
             """,
-            [min_materials, limit],
+            [concept_type, min_materials, limit],
         ).fetchall()
     finally:
         con.close()

@@ -14,8 +14,8 @@ library_root: "~/Arquimedes-Library"
 # The agent authenticates with its own credentials — no API keys needed here.
 # llm:
 #   agent_cmd:
-#     - "claude --print"      # primary
-#     - "codex exec"          # fallback
+#     - "claude --print"      # legacy fallback
+#     - "codex exec"          # legacy fallback
 
 # Extraction settings
 # extraction:
@@ -31,6 +31,40 @@ library_root: "~/Arquimedes-Library"
 # enrichment:
 #   prompt_version: "enrich-v1.0"
 #   parallel: 4                # concurrent material enrichments (1 = sequential)
+#   llm_routes:
+#     document:
+#       - provider: codex
+#         command: "codex exec"
+#         model: gpt-5.4-mini
+#         effort: high
+#       - provider: copilot
+#         command: "copilot"
+#         model: gpt-5-mini
+#         effort: high
+#     chunk:
+#       - provider: copilot
+#         command: "copilot"
+#         model: gpt-5-mini
+#     figure:
+#       - provider: codex
+#         command: "codex exec"
+#         model: gpt-5.4-mini
+#         effort: medium
+#       - provider: copilot
+#         command: "copilot"
+#         model: gpt-4o
+#     cluster:
+#       - provider: claude
+#         command: "claude --print"
+#         model: sonnet
+#         effort: medium
+#       - provider: codex
+#         command: "codex exec"
+#         model: gpt-5.4-mini
+#         effort: high
+#       - provider: copilot
+#         command: "copilot"
+#         model: gpt-5-mini
 
 # Watch daemon settings (server mode)
 # watch:

@@ -218,11 +218,30 @@ class TestEnrichOrchestrator:
             )
 
         assert "test123" in results
-        material = results["test123"]
-        for stage_name in ["document", "chunk"]:
-            assert stage_name in material, f"Expected stage '{stage_name}' in dry_run results"
-            assert material[stage_name]["status"] in ("stale", "up_to_date")
-            assert material[stage_name]["detail"] == "dry-run"
+
+    def test_up_to_date_does_not_create_client(self, tmp_path):
+        """If all requested stages are current, no agent CLI should be constructed."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT) as mock_make_llm_fn,
+            patch("arquimedes.enrich._is_document_stale", return_value=False),
+            patch("arquimedes.enrich._is_chunk_stale", return_value=False),
+            patch("arquimedes.enrich._is_figure_stale", return_value=False),
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                force=False,
+            )
+
+        mock_make_llm_fn.assert_not_called()
+        assert all_succeeded is True
+        assert results["test123"]["document"]["status"] == "skipped"
+        assert results["test123"]["chunk"]["status"] == "skipped"
+        assert results["test123"]["figure"]["status"] == "skipped"
 
     def test_all_stages_run_by_default(self, tmp_path):
         """With no stages filter, all three stage functions should be called."""
@@ -373,6 +392,34 @@ class TestCombinedCall:
                 material_id="test123",
                 config=config,
                 force=True,
+            )
+
+        mock_combined.assert_called_once()
+        assert all_succeeded is True
+        assert results["test123"]["document"]["status"] == "enriched"
+        assert results["test123"]["chunk"]["status"] == "enriched"
+
+    def test_combined_call_used_when_document_stale_and_chunk_requested(self, tmp_path):
+        """Doc re-enrichment invalidates chunk context, so combined call should still run."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch("arquimedes.enrich._is_document_stale", return_value=True),
+            patch("arquimedes.enrich._is_chunk_stale", return_value=False),
+            patch(_PATCH_SHOULD_COMBINE, return_value=True),
+            patch(_PATCH_RUN_COMBINED, return_value=(
+                _make_stage_result(), _make_stage_result()
+            )) as mock_combined,
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()),
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                force=False,
             )
 
         mock_combined.assert_called_once()

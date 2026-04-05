@@ -451,11 +451,12 @@ class ConceptCandidate:
     """LLM-identified concept candidate stored in concepts.jsonl."""
 
     concept_name: str
+    concept_type: str = "local"
     relevance: str = ""
     provenance: Provenance | None = None
 
     def to_dict(self) -> dict:
-        result = {"concept_name": self.concept_name, "relevance": self.relevance}
+        result = {"concept_name": self.concept_name, "concept_type": self.concept_type, "relevance": self.relevance}
         if self.provenance is not None:
             result["provenance"] = asdict(self.provenance)
         return result
@@ -467,6 +468,7 @@ class ConceptCandidate:
             prov = Provenance(**data["provenance"])
         return cls(
             concept_name=data["concept_name"],
+            concept_type=data.get("concept_type", "local"),
             relevance=data.get("relevance", ""),
             provenance=prov,
         )

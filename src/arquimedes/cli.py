@@ -282,7 +282,8 @@ def figures(material_id: str):
 
 @cli.command("cluster")
 @click.option("--force", is_flag=True, help="Re-cluster even if input is unchanged.")
-def cluster_cmd(force: bool):
+@click.option("--bridge", is_flag=True, help="Also run bridge clustering over bridge candidates.")
+def cluster_cmd(force: bool, bridge: bool):
     """Cluster concept candidates across materials into canonical concepts."""
     from arquimedes.cluster import cluster_concepts, cluster_bridge_concepts
     from arquimedes.enrich_llm import EnrichmentError
@@ -292,7 +293,9 @@ def cluster_cmd(force: bool):
 
     try:
         local_summary = cluster_concepts(load_config(), force=force, llm_state=llm_state)
-        bridge_summary = cluster_bridge_concepts(load_config(), force=force, llm_state=llm_state)
+        bridge_summary = None
+        if bridge:
+            bridge_summary = cluster_bridge_concepts(load_config(), force=force, llm_state=llm_state)
     except EnrichmentError as e:
         raise click.ClickException(str(e))
     except FileNotFoundError as e:
@@ -306,13 +309,14 @@ def cluster_cmd(force: bool):
         multi = local_summary["multi_material"]
         click.echo(f"Local: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
 
-    if bridge_summary.get("skipped"):
-        click.echo("Bridge clustering is up to date — skipped.")
-    else:
-        total = bridge_summary["bridge_concepts"]
-        n_clusters = bridge_summary["clusters"]
-        multi = bridge_summary["multi_material"]
-        click.echo(f"Bridge: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
+    if bridge:
+        if bridge_summary and bridge_summary.get("skipped"):
+            click.echo("Bridge clustering is up to date — skipped.")
+        elif bridge_summary:
+            total = bridge_summary["bridge_concepts"]
+            n_clusters = bridge_summary["clusters"]
+            multi = bridge_summary["multi_material"]
+            click.echo(f"Bridge: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
 
 
 @cli.command()

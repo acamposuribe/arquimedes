@@ -599,6 +599,7 @@ def enrich(
             if parallel_doc_fig:
                 # Separate llm_fn per thread to avoid last_model race
                 doc_fn = _get_llm_fn("document")
+                chunk_fn = _get_llm_fn("chunk")
                 fig_fn = _get_llm_fn("figure")
 
                 with ThreadPoolExecutor(max_workers=2) as stage_pool:
@@ -620,7 +621,7 @@ def enrich(
                     if "chunk" in stale_stages:
                         _progress(f"[chunk] start {mid}")
                         chunk_result = enrich_chunks_stage(
-                            output_dir, config, doc_fn, force=force
+                            output_dir, config, chunk_fn, force=force
                         )
                         material_results["chunk"] = chunk_result
                         _progress(f"[chunk] done {mid}: {chunk_result.get('status', '?')}")

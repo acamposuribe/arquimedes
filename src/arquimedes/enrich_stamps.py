@@ -40,6 +40,21 @@ def canonical_hash(*parts) -> str:
     return h.hexdigest()[:16]
 
 
+def _normalize_doc_context(doc_context: dict) -> dict:
+    """Normalize doc context fields that should not cause stamp churn.
+
+    In particular, treat blank and "unknown" raw document type values as the
+    same fallback state so metadata cleanup does not keep invalidating stamps.
+    """
+    normalized = dict(doc_context or {})
+    raw_type = str(normalized.get("raw_document_type", "") or "").strip().casefold()
+    if not raw_type or raw_type == "unknown":
+        normalized["raw_document_type"] = "unknown"
+    else:
+        normalized["raw_document_type"] = str(normalized.get("raw_document_type", "")).strip()
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Document-level fingerprint
 # ---------------------------------------------------------------------------
@@ -68,7 +83,9 @@ def document_fingerprint(output_dir: Path) -> str:
         "authors": raw_meta.get("authors", []),
         "year": raw_meta.get("year", ""),
         "raw_keywords": raw_meta.get("raw_keywords", []),
-        "raw_document_type": raw_meta.get("raw_document_type", ""),
+        "raw_document_type": _normalize_doc_context(
+            {"raw_document_type": raw_meta.get("raw_document_type", "")}
+        )["raw_document_type"],
         "domain": raw_meta.get("domain", ""),
         "collection": raw_meta.get("collection", ""),
         "page_count": raw_meta.get("page_count", 0),
@@ -142,7 +159,7 @@ def chunk_fingerprint(output_dir: Path, doc_context: dict) -> str:
     ann_path = output_dir / "annotations.jsonl"
     annotations_text = ann_path.read_text(encoding="utf-8") if ann_path.exists() else "[]"
 
-    return canonical_hash(raw_chunks, annotations_text, doc_context)
+    return canonical_hash(raw_chunks, annotations_text, _normalize_doc_context(doc_context))
 
 
 def single_chunk_fingerprint(
@@ -172,7 +189,7 @@ def single_chunk_fingerprint(
         [a for a in annotations if a.get("page") in chunk_pages],
         key=lambda a: (a.get("page", 0), a.get("quoted_text", "")),
     )
-    return canonical_hash(raw_chunk, relevant_annotations, doc_context)
+    return canonical_hash(raw_chunk, relevant_annotations, _normalize_doc_context(doc_context))
 
 
 # ---------------------------------------------------------------------------

@@ -108,6 +108,14 @@ class TestDocumentFingerprint:
         (d / "meta.json").write_text(json.dumps(meta))
         assert document_fingerprint(d) == fp1
 
+    def test_unknown_raw_document_type_is_stable_fallback(self, tmp_path):
+        d = _write_extraction(tmp_path, meta_extra={"raw_document_type": ""})
+        fp_blank = document_fingerprint(d)
+        meta = json.loads((d / "meta.json").read_text())
+        meta["raw_document_type"] = "unknown"
+        (d / "meta.json").write_text(json.dumps(meta))
+        assert document_fingerprint(d) == fp_blank
+
 
 # ---------------------------------------------------------------------------
 # chunk_fingerprint
@@ -125,6 +133,12 @@ class TestChunkFingerprint:
         fp1 = chunk_fingerprint(d, _doc_context())
         fp2 = chunk_fingerprint(d, {**_doc_context(), "title": "Different Title"})
         assert fp1 != fp2
+
+    def test_blank_and_unknown_raw_document_type_match(self, tmp_path):
+        d = _write_extraction(tmp_path, meta_extra={"raw_document_type": ""})
+        blank_ctx = {"title": "Urban Housing", "raw_document_type": "", "headings": []}
+        unknown_ctx = {"title": "Urban Housing", "raw_document_type": "unknown", "headings": []}
+        assert chunk_fingerprint(d, blank_ctx) == chunk_fingerprint(d, unknown_ctx)
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +166,12 @@ class TestSingleChunkFingerprint:
         # Annotation on non-matching page (no change)
         ann_other = [{"page": 99, "quoted_text": "x", "comment": ""}]
         assert single_chunk_fingerprint(chunk, ann_other, ctx) == fp_base
+
+    def test_blank_and_unknown_raw_document_type_match(self):
+        chunk = {"chunk_id": "c0", "text": "Hello", "source_pages": [1], "emphasized": False}
+        blank_ctx = {"title": "Urban Housing", "raw_document_type": "", "headings": []}
+        unknown_ctx = {"title": "Urban Housing", "raw_document_type": "unknown", "headings": []}
+        assert single_chunk_fingerprint(chunk, [], blank_ctx) == single_chunk_fingerprint(chunk, [], unknown_ctx)
 
 
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ Runs document, chunk, and figure enrichment stages for one or all materials.
 from __future__ import annotations
 
 import json
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -39,6 +40,11 @@ def _load_json(path: Path, default=None):
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _progress(message: str) -> None:
+    """Emit lightweight progress logs for long-running enrich operations."""
+    print(message, file=sys.stderr, flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +514,9 @@ def enrich(
             "chunk" in requested_stages and doc_stale_now
         )
 
+        if not dry_run:
+            _progress(f"[enrich] start {mid}  {title}")
+
         # Check if combined doc+chunk call is appropriate
         use_combined = (
             not dry_run
@@ -575,6 +584,11 @@ def enrich(
             ):
                 stale_stages.add("chunk")
 
+            if stale_stages:
+                _progress(
+                    f"[enrich] stages {mid}: {', '.join(s for s in ('document', 'chunk', 'figure') if s in stale_stages)}"
+                )
+
             for s in remaining:
                 if s not in stale_stages:
                     material_results[s] = {"status": "skipped", "detail": "up to date"}
@@ -593,25 +607,30 @@ def enrich(
                     )
 
                     # Document in main thread so chunk can follow immediately
+                    _progress(f"[document] start {mid}")
                     doc_result = enrich_document_stage(
                         output_dir, config, doc_fn, force=force
                     )
                     material_results["document"] = doc_result
+                    _progress(f"[document] done {mid}: {doc_result.get('status', '?')}")
                     if doc_result["status"] == "failed":
                         succeeded = False
 
                     # Chunk after document (uses doc summary in prompt context)
                     if "chunk" in stale_stages:
+                        _progress(f"[chunk] start {mid}")
                         chunk_result = enrich_chunks_stage(
                             output_dir, config, doc_fn, force=force
                         )
                         material_results["chunk"] = chunk_result
+                        _progress(f"[chunk] done {mid}: {chunk_result.get('status', '?')}")
                         if chunk_result["status"] == "failed":
                             succeeded = False
 
                     # Collect figure result
                     fig_result = fig_future.result()
                     material_results["figure"] = fig_result
+                    _progress(f"[figure] done {mid}: {fig_result.get('status', '?')}")
                     if fig_result["status"] == "failed":
                         succeeded = False
             else:
@@ -619,6 +638,7 @@ def enrich(
                 for s in ("document", "chunk", "figure"):
                     if s not in stale_stages:
                         continue
+                    _progress(f"[{s}] start {mid}")
                     if s == "document":
                         result = enrich_document_stage(
                             output_dir, config, _get_llm_fn("document"), force=force
@@ -632,8 +652,12 @@ def enrich(
                             output_dir, config, _get_llm_fn("figure"), force=force
                         )
                     material_results[s] = result
+                    _progress(f"[{s}] done {mid}: {result.get('status', '?')}")
                     if result["status"] == "failed":
                         succeeded = False
+
+        if not dry_run:
+            _progress(f"[enrich] done {mid}  {title}")
 
         return mid, material_results, succeeded
 

@@ -535,15 +535,31 @@ _CHUNK_BATCH_USER_TEMPLATE = """\
 
 ## Instructions
 
-For each chunk above, provide a concise one-line summary, a list of architecture-relevant keywords, \
-and a content_class that categorizes the chunk's role in the document:
-- "argument": substantive analysis, theory, design discussion
-- "methodology": research methods, analytical frameworks
-- "case_study": specific projects, buildings, precedent descriptions
-- "bibliography": references, citations, endnotes, works cited
-- "front_matter": title pages, abstracts, acknowledgments, author bios
+For each chunk above, provide:
+- a concise one-line summary that names the chunk's distinctive claim, example, or move, not just the document's general theme
+- a list of architecture-relevant keywords grounded in this specific chunk
+- a content_class that categorizes the chunk's role in the document
+
+Choose content_class using these rules:
+- "front_matter": title pages, abstracts, acknowledgments, journal/platform metadata, author bios
+- "bibliography": references, citations, endnotes, works cited, citation-heavy notes
 - "caption": figure captions, table captions, image descriptions
-- "appendix": supplementary data, appendix material
+- "appendix": supplementary or supporting material outside the main argumentative flow
+- "methodology": research methods, analytical frameworks, how the archive/research is approached
+- "case_study": a specific person, project, building, archive episode, precedent, or concrete example is the main focus
+- "argument": substantive analysis or theory only when no more specific class above fits
+
+Prefer the most specific valid class. Do not default to "argument" when the chunk is mainly a case, method, bibliography, or front matter.
+
+For keywords:
+- prefer concrete entities, mechanisms, and named concepts central to this chunk
+- avoid generic repeats from the overall document context unless they are truly central here
+
+Examples:
+- a chunk centered on a specific archival encounter, person, or project -> "case_study"
+- a chunk explaining how the researcher reads or uses archives -> "methodology"
+- a chunk of endnotes or references -> "bibliography"
+- a chunk of theory with no stronger specific role -> "argument"
 
 Return ONLY valid JSON matching the schema below. No markdown fences, no explanations.
 

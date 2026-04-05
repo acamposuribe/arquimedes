@@ -316,6 +316,8 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     first = _run_cluster_audit(root, clusters, material_info, llm_factory)
     assert len(first) == 2
     assert len(calls) == 2
+    assert (root / "derived" / "lint" / "cluster_audit" / "concept_001.json").exists()
+    assert (root / "derived" / "lint" / "cluster_audit" / "concept_001.out.json").exists()
     for record in first:
         assert {"review_id", "cluster_id", "finding_type", "severity", "recommendation", "affected_material_ids", "affected_concept_names", "evidence", "input_fingerprint", "wiki_path"} <= set(record)
 

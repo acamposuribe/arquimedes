@@ -1491,6 +1491,14 @@ def _cluster_prompt_payload(
     }
 
 
+def _cluster_audit_paths(root: Path, cluster_id: str) -> tuple[Path, Path]:
+    safe_id = cluster_id.strip() or "cluster"
+    return (
+        root / LINT_DIR / "cluster_audit" / f"{safe_id}.json",
+        root / LINT_DIR / "cluster_audit" / f"{safe_id}.out.json",
+    )
+
+
 def _collection_prompt_payload(
     domain: str,
     collection: str,
@@ -1537,11 +1545,10 @@ def _collection_prompt_payload(
     }
 
 
-def _cluster_audit_prompt(cluster: dict, payload: dict) -> tuple[str, str]:
-    audit_scope = payload.get("audit_scope", "full")
+def _cluster_audit_prompt(input_path: Path, output_path: Path) -> tuple[str, str]:
     system = (
         "You are an architecture research librarian auditing a concept cluster. "
-        "Return JSON only. Find over-merges, missed equivalences, weak naming, "
+        "Return JSON only. Read the cluster-audit packet file. Find over-merges, missed equivalences, weak naming, "
         "single-material weakness, and missing materials. "
         "Single-material clusters should be audited more lightly, focusing on "
         "name quality, narrowness, and whether they should merge later. "
@@ -1550,13 +1557,15 @@ def _cluster_audit_prompt(cluster: dict, payload: dict) -> tuple[str, str]:
         "You will get only one read-only context round, so request everything you need at once."
     )
     user = (
-        f"Audit the following cluster with audit_scope={audit_scope} and return a JSON object.\n"
+        f"Read the cluster-audit packet file from {input_path}.\n"
         "Return a JSON object with keys: findings, context_requests.\n"
         "findings must be a JSON array. context_requests is optional and must be a JSON array of "
         "read-only SQL-index lookups if you need more context.\n"
         "Each finding must include: finding_type, severity, recommendation, "
-        "affected_material_ids, affected_concept_names, evidence.\n\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+        "affected_material_ids, affected_concept_names, evidence.\n"
+        f"Write the findings JSON to {output_path} using the Write tool.\n"
+        "Do not stream JSON into the response.\n"
+        "Confirm with a single line when done.\n"
     )
     return system, user
 
@@ -2070,8 +2079,12 @@ def _run_cluster_audit(
         existing_record = existing_by_cluster.get(review_id, [])
         if existing_record and all(row.get("input_fingerprint") == fingerprint for row in existing_record):
             return existing_record
+        input_path, output_path = _cluster_audit_paths(root, review_id)
+        _write_json(input_path, payload)
+        if output_path.exists():
+            output_path.unlink()
         llm_fn = llm_factory("cluster")
-        system, user = _cluster_audit_prompt(cluster, payload)
+        system, user = _cluster_audit_prompt(input_path, output_path)
         parsed = _run_reflection_prompt_with_context(
             llm_fn,
             system,
@@ -2079,6 +2092,13 @@ def _run_cluster_audit(
             "JSON object with keys: findings (array of findings) and optional context_requests (array of read-only SQL-index lookups)",
             tool,
         )
+        if output_path.exists() and output_path.stat().st_size > 0:
+            try:
+                parsed = json.loads(output_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError:
+                pass
+        if parsed is not None:
+            _write_json(output_path, parsed if isinstance(parsed, (dict, list)) else {"findings": parsed})
         findings = parsed.get("findings", []) if isinstance(parsed, dict) else parsed
         if not isinstance(findings, list):
             raise EnrichmentError("Cluster audit returned non-list findings")

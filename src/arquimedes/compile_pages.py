@@ -205,6 +205,39 @@ def _relative_link(from_path: str, to_path: str) -> str:
     return rel
 
 
+def _render_reflection_section(title: str, reflection: dict | None) -> list[str]:
+    lines: list[str] = []
+    if not reflection:
+        return lines
+    lines.append(f"## {title}\n")
+    takeaways = reflection.get("main_takeaways") or []
+    tensions = reflection.get("main_tensions") or []
+    questions = reflection.get("open_questions") or []
+    prose = reflection.get("why_this_concept_matters") or ""
+    if prose:
+        lines.append(prose)
+        lines.append("")
+    if takeaways:
+        lines.append("**Main takeaways**")
+        for item in takeaways[:8]:
+            if str(item).strip():
+                lines.append(f"- {item}")
+        lines.append("")
+    if tensions:
+        lines.append("**Main tensions**")
+        for item in tensions[:8]:
+            if str(item).strip():
+                lines.append(f"- {item}")
+        lines.append("")
+    if questions:
+        lines.append("**Open questions**")
+        for item in questions[:8]:
+            if str(item).strip():
+                lines.append(f"- {item}")
+        lines.append("")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Material page
 # ---------------------------------------------------------------------------
@@ -398,6 +431,7 @@ def render_concept_page(
     material_titles: dict[str, str],
     related_concepts: list[dict],
     material_paths: dict[str, str] | None = None,
+    reflection: dict | None = None,
 ) -> str:
     """Render a concept wiki page as markdown.
 
@@ -468,6 +502,8 @@ def render_concept_page(
             lines.append(f"- [{link_label}]({rel})")
         lines.append("")
 
+    lines.extend(_render_reflection_section("Phase 6 Reflection", reflection))
+
     return "\n".join(lines)
 
 
@@ -483,6 +519,7 @@ def render_collection_page(
     key_concepts: list[dict],
     top_facets: list[dict],
     recent_additions: list[dict],
+    reflection: dict | None = None,
 ) -> str:
     """Render a collection _index.md page.
 
@@ -563,6 +600,8 @@ def render_collection_page(
                 count = tf.get("count", 0)
                 lines.append(f"- {value} ({count})")
             lines.append("")
+
+    lines.extend(_render_reflection_section("Phase 6 Reflection", reflection))
 
     return "\n".join(lines)
 

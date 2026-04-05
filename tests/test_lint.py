@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import ReflectionIndexTool, _apply_collection_reflection_to_page, _apply_concept_reflection_to_page, _apply_bridge_cluster_maintenance, _build_material_info, _graph_reflection_due, _load_manifest, _run_bridge_cluster_maintenance, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
+from arquimedes.lint import ReflectionIndexTool, _apply_bridge_cluster_maintenance, _build_material_info, _graph_reflection_due, _load_manifest, _run_bridge_cluster_maintenance, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
 from arquimedes.cli import lint as lint_cmd
 
 
@@ -938,44 +938,6 @@ def test_collection_reflection_can_request_extra_context_via_tool(tmp_path, monk
     assert len(first) == 1
     assert len(calls) == 2
     assert "Tool results" in calls[1]
-
-
-def test_page_update_helpers_write_marked_reflection_sections(tmp_path, monkeypatch):
-    root, config = _setup_repo(tmp_path)
-    monkeypatch.chdir(root)
-    _write_json(root / "wiki" / "shared" / "concepts" / "archive-and-space.md", {"body": "Concept page."})
-    _write_json(root / "wiki" / "shared" / "concepts" / "_index.md", {"body": "Local concepts index."})
-    _write_json(root / "wiki" / "research" / "papers" / "_index.md", {"body": "Collection home."})
-
-    concept_record = {
-        "cluster_id": "concept_001",
-        "slug": "archive-and-space",
-        "canonical_name": "Archive and Space",
-        "main_takeaways": ["Shared concern with spatial archives"],
-        "main_tensions": ["Theory vs use"],
-        "open_questions": ["What is the archive doing?"],
-        "why_this_concept_matters": "It shapes the whole corpus.",
-        "supporting_material_ids": ["mat_001", "mat_002"],
-        "supporting_evidence": ["shared archive frame"],
-        "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
-    }
-    collection_record = {
-        "domain": "research",
-        "collection": "papers",
-        "main_takeaways": ["The collection centers archival space."],
-        "main_tensions": ["Theory vs use"],
-        "important_material_ids": ["mat_001", "mat_002"],
-        "important_cluster_ids": ["concept_001"],
-        "open_questions": ["What else is in the archive?"],
-        "wiki_path": "wiki/research/papers/_index.md",
-    }
-    assert _apply_concept_reflection_to_page(root, concept_record) is True
-    assert _apply_collection_reflection_to_page(root, collection_record) is True
-
-    concept_page = (root / "wiki" / "shared" / "bridge-concepts" / "archive-and-space.md").read_text(encoding="utf-8")
-    collection_page = (root / "wiki" / "research" / "papers" / "_index.md").read_text(encoding="utf-8")
-    assert "<!-- phase6:concept-reflection:start -->" in concept_page
-    assert "<!-- phase6:collection-reflection:start -->" in collection_page
 
 
 def test_lint_cli_supports_json_and_exit_codes(tmp_path, monkeypatch):

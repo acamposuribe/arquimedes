@@ -1803,75 +1803,6 @@ def _apply_bridge_cluster_maintenance(
     return updated, changed
 
 
-def _reflection_section(title: str, bullets: list[str], prose: str | None = None) -> str:
-    lines = [f"## {title}", ""]
-    if prose:
-        lines.append(prose)
-        lines.append("")
-    for bullet in bullets:
-        bullet = bullet.strip()
-        if bullet:
-            lines.append(f"- {bullet}")
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _upsert_marked_section(page_text: str, marker: str, section_text: str) -> str:
-    start = f"<!-- phase6:{marker}:start -->"
-    end = f"<!-- phase6:{marker}:end -->"
-    block = f"{start}\n{section_text.rstrip()}\n{end}"
-    if start in page_text and end in page_text:
-        before, rest = page_text.split(start, 1)
-        _old, after = rest.split(end, 1)
-        return before.rstrip() + "\n\n" + block + after
-    if page_text and not page_text.endswith("\n"):
-        page_text += "\n"
-    return page_text.rstrip() + "\n\n" + block + "\n"
-
-
-def _apply_concept_reflection_to_page(root: Path, record: dict) -> bool:
-    cluster_id = record.get("cluster_id", "")
-    page_path = root / "wiki" / "shared" / "concepts" / f"{record.get('slug', '')}.md"
-    if "/bridge-concepts/" in record.get("wiki_path", ""):
-        page_path = root / Path(record["wiki_path"])
-    if not page_path.exists():
-        return False
-    page = _read_text(page_path)
-    section = _reflection_section(
-        "Phase 6 Reflection",
-        [f"Main takeaways: {', '.join(record.get('main_takeaways', [])) or 'n/a'}",
-         f"Main tensions: {', '.join(record.get('main_tensions', [])) or 'n/a'}",
-         f"Open questions: {', '.join(record.get('open_questions', [])) or 'n/a'}"],
-        prose=record.get("why_this_concept_matters", ""),
-    )
-    updated = _upsert_marked_section(page, "concept-reflection", section)
-    if updated != page:
-        page_path.write_text(updated, encoding="utf-8")
-        return True
-    return False
-
-
-def _apply_collection_reflection_to_page(root: Path, record: dict) -> bool:
-    domain = record.get("domain", "")
-    collection = record.get("collection", "")
-    page_path = root / f"wiki/{domain}/{collection}/_index.md"
-    if not page_path.exists():
-        return False
-    page = _read_text(page_path)
-    section = _reflection_section(
-        "Phase 6 Reflection",
-        [f"Main takeaways: {', '.join(record.get('main_takeaways', [])) or 'n/a'}",
-         f"Main tensions: {', '.join(record.get('main_tensions', [])) or 'n/a'}",
-         f"Important materials: {', '.join(record.get('important_material_ids', [])) or 'n/a'}",
-         f"Open questions: {', '.join(record.get('open_questions', [])) or 'n/a'}"],
-    )
-    updated = _upsert_marked_section(page, "collection-reflection", section)
-    if updated != page:
-        page_path.write_text(updated, encoding="utf-8")
-        return True
-    return False
-
-
 def _build_material_info(root: Path, manifest_records: list[dict]) -> dict[str, dict]:
     metas = _load_all_metas(root, manifest_records)
     info: dict[str, dict] = {}
@@ -2404,12 +2335,6 @@ def run_reflective_lint(
             graph_findings = _load_jsonl(root / LINT_DIR / "graph_findings.jsonl")
             graph_skipped = True
             graph_skip_reason = graph_reason
-
-    if apply:
-        for record in concept_refs:
-            _apply_concept_reflection_to_page(root, record)
-        for record in collection_refs:
-            _apply_collection_reflection_to_page(root, record)
 
     # Always refresh memory so the reflection tables are queryable.
     memory_rebuild(config)

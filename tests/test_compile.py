@@ -749,6 +749,34 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
         }],
     }
     (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+    (derived / "lint").mkdir(parents=True, exist_ok=True)
+    (derived / "lint" / "concept_reflections.jsonl").write_text(
+        json.dumps({
+            "cluster_id": "b_001",
+            "slug": "archive-space-framework",
+            "canonical_name": "Archive Space Framework",
+            "main_takeaways": ["It links built form and archive practice."],
+            "main_tensions": ["Storage vs. inhabitation"],
+            "open_questions": ["What counts as an archive room?"],
+            "why_this_concept_matters": "It anchors the corpus.",
+            "input_fingerprint": "fp-concept",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    (derived / "lint" / "collection_reflections.jsonl").write_text(
+        json.dumps({
+            "collection_key": "research/papers",
+            "domain": "research",
+            "collection": "papers",
+            "main_takeaways": ["The corpus is centrally about archival space."],
+            "main_tensions": ["Theory vs use"],
+            "important_material_ids": [mid, mid2],
+            "important_cluster_ids": ["b_001"],
+            "open_questions": ["What other archives are missing?"],
+            "input_fingerprint": "fp-collection",
+        }) + "\n",
+        encoding="utf-8",
+    )
 
     bridge_cluster = {
         "cluster_id": "b_001",
@@ -804,6 +832,14 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     meta_after = json.loads((tmp_path / "extracted" / mid / "meta.json").read_text())
     assert meta_after.get("bridge_concepts"), "bridge concepts not written back to extracted meta"
     assert meta_after["bridge_concepts"][0]["canonical_name"] == "Archive Space Framework"
+
+    concept_page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "archive-space-framework.md").read_text()
+    assert "## Phase 6 Reflection" in concept_page
+    assert "It anchors the corpus." in concept_page
+
+    collection_page = (tmp_path / "wiki" / "research" / "papers" / "_index.md").read_text()
+    assert "## Phase 6 Reflection" in collection_page
+    assert "The corpus is centrally about archival space." in collection_page
 
     # Memory bridge tables must be populated in search.sqlite
     con = sqlite3.connect(str(tmp_path / "indexes" / "search.sqlite"))

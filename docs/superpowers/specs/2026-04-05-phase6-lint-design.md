@@ -238,15 +238,19 @@ Unlike concept and collection reflections, graph reflection should initially pro
 
 Phase 6 should not stop at reports.
 
-It must be able to materialize reflective knowledge into the wiki.
+It must be able to materialize reflective knowledge into the wiki, but only through the normal build pipeline.
 
 `arq lint --full` or `arq lint --fix` should:
-- update concept pages with reflection sections
-- update collection pages with reflection sections
-- optionally update related-links sections when recommendations are accepted
+- write reflection artifacts under `derived/lint/`
 - apply safe bridge-cluster maintenance actions coming from cluster reviews
+- leave wiki rendering to `arq compile`
 
-The source of truth for these reflective additions is the structured lint artifacts in `derived/lint/`, not freehand markdown editing.
+`arq compile` then renders those artifacts into:
+- concept pages
+- collection pages
+- any other generated wiki pages that need reflective sections
+
+The source of truth for these reflective additions is the structured lint artifacts in `derived/lint/`, not freehand markdown editing or direct wiki patching.
 
 ## Filed Outputs
 
@@ -255,8 +259,8 @@ Like the original LLM-wiki pattern, Phase 6 should leave durable filed outputs b
 Minimum durable outputs:
 - structured artifacts in `derived/lint/`
 - human-readable report in `wiki/_lint_report.md`
-- updated concept pages
-- updated collection pages
+- compiled concept-page reflection sections
+- compiled collection-page reflection sections
 
 Lint findings, takeaways, tensions, and open questions should compound in the system, not disappear into terminal output.
 
@@ -266,13 +270,13 @@ Phase 6 should support a human-in-the-loop review model.
 
 Recommended split:
 - deterministic fixes may apply automatically
-- reflective page updates may apply through `--full` or `--fix` when accepted or configured as safe
+- reflective artifacts are rendered into the wiki by `arq compile` after lint
 - graph findings and suggested future questions/sources may remain filed for later review
 
 The default safety model should be:
 - `--quick`: deterministic only
-- `--full`: generate reflective artifacts and apply safe page updates / maintenance fixes
-- `--fix`: deterministic fixes + explicitly safe or approved reflective page updates
+- `--full`: generate reflective artifacts and apply safe maintenance fixes
+- `--fix`: deterministic fixes + explicitly safe or approved maintenance fixes
 
 ## Cumulative Reflection Context
 

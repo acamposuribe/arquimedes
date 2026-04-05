@@ -394,6 +394,17 @@ def compile_wiki(
         c for c in bridge_clusters
         if len(dict.fromkeys(c.get("material_ids", []))) > 1
     ]
+    lint_dir = root / "derived" / "lint"
+    concept_reflections = {
+        row.get("cluster_id", ""): row
+        for row in _load_jsonl(lint_dir / "concept_reflections.jsonl")
+        if row.get("cluster_id", "")
+    }
+    collection_reflections = {
+        f"{row.get('domain', '')}/{row.get('collection', '')}": row
+        for row in _load_jsonl(lint_dir / "collection_reflections.jsonl")
+        if row.get("domain", "") and row.get("collection", "")
+    }
 
     local_concept_entries: list[dict] = []
     if db_path.exists():
@@ -496,7 +507,6 @@ def compile_wiki(
     # 8. Render bridge concept pages (all, when bridge clusters changed)
     concept_pages_written = 0
     if clusters_changed or force:
-        current_slugs = {c["slug"] for c in bridge_page_clusters}
         for c in bridge_page_clusters:
             mid_set = set(c.get("material_ids", []))
             related_concepts = []
@@ -509,7 +519,13 @@ def compile_wiki(
                         "slug": other["slug"],
                         "wiki_path": other.get("wiki_path", ""),
                     })
-            content = compile_pages.render_concept_page(c, material_titles, related_concepts, material_paths)
+            content = compile_pages.render_concept_page(
+                c,
+                material_titles,
+                related_concepts,
+                material_paths,
+                concept_reflections.get(c.get("cluster_id", "")),
+            )
             page_path = wiki_root / Path(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md").relative_to("wiki")
             _write_page(page_path, content)
             concept_pages_written += 1
@@ -517,7 +533,13 @@ def compile_wiki(
     # 9. Render index pages (always)
     manifest_records = _load_jsonl(root / "manifests" / "materials.jsonl")
     index_pages_written = _render_index_pages(
-        wiki_root, all_metas, bridge_page_clusters, material_clusters, manifest_records, local_concept_entries
+        wiki_root,
+        all_metas,
+        bridge_page_clusters,
+        material_clusters,
+        manifest_records,
+        local_concept_entries,
+        collection_reflections,
     )
 
     # 10. Feed bridge concepts back into extracted metadata for future enrichment/reflection.
@@ -575,6 +597,7 @@ def _render_index_pages(
     material_clusters: dict[str, list[dict]],
     manifest_records: list[dict] | None = None,
     local_concept_entries: list[dict] | None = None,
+    collection_reflections: dict[str, dict] | None = None,
 ) -> int:
     """Render master, domain, collection, and concept index pages. Returns count."""
     written = 0
@@ -697,6 +720,7 @@ def _render_index_pages(
             content = compile_pages.render_collection_page(
                 friendly_title, domain, collection,
                 coll_entries, key_concepts, top_facets, recent,
+                (collection_reflections or {}).get(f"{domain}/{collection}"),
             )
             _write_page(wiki_root / domain / collection / "_index.md", content)
             written += 1

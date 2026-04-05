@@ -318,14 +318,20 @@ def cluster_cmd(force: bool):
 @cli.command()
 @click.option("--full", is_flag=True, help="Full rebuild instead of incremental.")
 @click.option("--force-cluster", is_flag=True, help="Re-run clustering before compiling.")
-def compile(full: bool, force_cluster: bool):
+@click.option("--recompile-pages", is_flag=True, help="Re-render wiki pages from existing clusters without reclustering.")
+def compile(full: bool, force_cluster: bool, recompile_pages: bool):
     """Compile wiki pages from enriched materials and concept clusters."""
     from arquimedes.compile import compile_wiki
     from arquimedes.enrich_llm import EnrichmentError
     from arquimedes.config import load_config
 
     try:
-        summary = compile_wiki(load_config(), force=full, force_cluster=force_cluster)
+        summary = compile_wiki(
+            load_config(),
+            force=full,
+            force_cluster=force_cluster,
+            recompile_pages=recompile_pages,
+        )
     except EnrichmentError as e:
         raise click.ClickException(str(e))
     except FileNotFoundError as e:

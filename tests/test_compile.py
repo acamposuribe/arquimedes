@@ -1114,6 +1114,132 @@ def test_compile_runs_quick_lint_after_compile(tmp_path, monkeypatch):
     assert result["quick_lint"]["mode"] == "quick"
 
 
+def test_compile_recompile_pages_rerenders_without_reclustering(tmp_path, monkeypatch):
+    """recompile_pages should rerender pages from existing clusters without forcing clustering."""
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.memory as memory_mod
+    from arquimedes.index import rebuild_index
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    mid = "mat_recompile"
+    mid2 = "mat_recompile_two"
+    meta = _make_meta(mid, "Recompile Material")
+    meta2 = _make_meta(mid2, "Recompile Material Two")
+    mat_dir = tmp_path / "extracted" / mid
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps(meta))
+    (mat_dir / "chunks.jsonl").write_text("")
+    (mat_dir / "annotations.jsonl").write_text("")
+    mat_dir2 = tmp_path / "extracted" / mid2
+    mat_dir2.mkdir(parents=True)
+    (mat_dir2 / "meta.json").write_text(json.dumps(meta2))
+    (mat_dir2 / "chunks.jsonl").write_text("")
+    (mat_dir2 / "annotations.jsonl").write_text("")
+    (manifests / "materials.jsonl").write_text(
+        "\n".join([
+            json.dumps({
+                "material_id": mid,
+                "file_hash": mid,
+                "relative_path": f"Research/{mid}.pdf",
+                "file_type": "pdf",
+                "domain": "research",
+                "collection": "papers",
+                "ingested_at": "2026-01-01T00:00:00+00:00",
+            }),
+            json.dumps({
+                "material_id": mid2,
+                "file_hash": mid2,
+                "relative_path": f"Research/{mid2}.pdf",
+                "file_type": "pdf",
+                "domain": "research",
+                "collection": "papers",
+                "ingested_at": "2026-01-02T00:00:00+00:00",
+            }),
+        ])
+    )
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+
+    derived = tmp_path / "derived"
+    derived.mkdir(exist_ok=True)
+    cluster = {
+        "cluster_id": "b_recompile",
+        "canonical_name": "Recompile Concept",
+        "slug": "recompile-concept",
+        "aliases": [],
+            "wiki_path": "wiki/shared/bridge-concepts/recompile-concept.md",
+            "confidence": 1.0,
+            "material_ids": [mid, mid2],
+            "source_concepts": [{
+                "material_id": mid,
+                "concept_name": "recompile concept",
+                "relevance": "high",
+            "source_pages": [1],
+                "evidence_spans": ["recompile evidence"],
+                "confidence": 1.0,
+            }, {
+                "material_id": mid2,
+                "concept_name": "recompile concept two",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["recompile evidence two"],
+                "confidence": 1.0,
+            }],
+        }
+    (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+    (derived / "lint").mkdir(parents=True, exist_ok=True)
+    (derived / "lint" / "concept_reflections.jsonl").write_text(
+        json.dumps({
+            "cluster_id": "b_recompile",
+            "slug": "recompile-concept",
+            "canonical_name": "Recompile Concept",
+            "main_takeaways": ["Reflection text from artifacts."],
+            "main_tensions": [],
+            "open_questions": [],
+            "why_this_concept_matters": "It matters.",
+            "input_fingerprint": "fp-recompile",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    (tmp_path / "wiki" / "shared" / "bridge-concepts").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "wiki" / "shared" / "bridge-concepts" / "recompile-concept.md").write_text("OLD\n", encoding="utf-8")
+
+    calls: list[bool] = []
+
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False: calls.append(force) or {"skipped": True},
+    )
+    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: [cluster])
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_bridge_concepts",
+        lambda config, llm_fn=None, force=False: calls.append(force) or {"skipped": True},
+    )
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [cluster])
+
+    summary = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, recompile_pages=True)
+
+    assert calls == [False, False]
+    assert summary["concept_pages"] == 1
+    page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "recompile-concept.md").read_text()
+    assert "Reflection text from artifacts." in page
+
+
 def test_collection_page_key_concepts_ranked():
     """Key concepts rendered in the order given (pre-sorted by compile.py)."""
     key_concepts = [

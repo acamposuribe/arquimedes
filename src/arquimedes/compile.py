@@ -336,6 +336,7 @@ def compile_wiki(
     *,
     force: bool = False,
     force_cluster: bool = False,
+    recompile_pages: bool = False,
     llm_fn=None,
 ) -> dict:
     """Compile the wiki from enriched materials and concept clusters.
@@ -446,7 +447,7 @@ def compile_wiki(
     prev_material_stamps: dict[str, str] = (prev_stamp or {}).get("material_stamps", {})
     prev_cluster_stamp: str = (prev_stamp or {}).get("cluster_stamp", "")
     current_cluster_stamp = _cluster_file_stamp(root)
-    clusters_changed = (current_cluster_stamp != prev_cluster_stamp) or force
+    clusters_changed = (current_cluster_stamp != prev_cluster_stamp) or force or recompile_pages
 
     # 6. Material clusters index: material_id → list of bridge clusters
     material_clusters: dict[str, list[dict]] = {mid: [] for mid in all_metas}
@@ -463,7 +464,7 @@ def compile_wiki(
         output_dir = extracted_root / mid
         stamp = _material_stamp(output_dir)
         current_material_stamps[mid] = stamp
-        if not force and prev_material_stamps.get(mid) == stamp:
+        if not (force or recompile_pages) and prev_material_stamps.get(mid) == stamp:
             mat_pages_skipped += 1
             continue
 
@@ -506,7 +507,7 @@ def compile_wiki(
 
     # 8. Render bridge concept pages (all, when bridge clusters changed)
     concept_pages_written = 0
-    if clusters_changed or force:
+    if clusters_changed or force or recompile_pages:
         for c in bridge_page_clusters:
             mid_set = set(c.get("material_ids", []))
             related_concepts = []
@@ -517,7 +518,7 @@ def compile_wiki(
                     related_concepts.append({
                         "canonical_name": other["canonical_name"],
                         "slug": other["slug"],
-                        "wiki_path": other.get("wiki_path", ""),
+                        "wiki_path": other.get("wiki_path") or f"wiki/shared/bridge-concepts/{other['slug']}.md",
                     })
             content = compile_pages.render_concept_page(
                 c,

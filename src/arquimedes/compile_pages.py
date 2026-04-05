@@ -444,6 +444,7 @@ def render_concept_page(
     canonical_name = cluster["canonical_name"]
     slug = cluster["slug"]
     page_path = cluster.get("wiki_path") or _concept_wiki_path(slug)
+    is_bridge_page = "/bridge-concepts/" in page_path
     source_concepts = cluster.get("source_concepts", [])
     aliases = [a for a in cluster.get("aliases", []) if a != canonical_name]
     lines: list[str] = []
@@ -494,7 +495,9 @@ def render_concept_page(
         for rc in related_concepts:
             rc_name = rc["canonical_name"]
             rc_slug = rc["slug"]
-            rc_path = rc.get("wiki_path") or _concept_wiki_path(rc_slug)
+            rc_path = rc.get("wiki_path") or (
+                f"wiki/shared/bridge-concepts/{rc_slug}.md" if is_bridge_page else _concept_wiki_path(rc_slug)
+            )
             rel = _relative_link(page_path, rc_path)
             link_label = rc_name
             if "/bridge-concepts/" in rc_path:

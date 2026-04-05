@@ -157,10 +157,10 @@ DOC_TYPE_PATTERNS: list[tuple[str, list[str], list[str]]] = [
 
 def classify_document_type(
     pages: list[Page], title: str = "", filename: str = ""
-) -> str | None:
+) -> str:
     """Classify a document by type based on structural and textual cues.
 
-    Returns a document_type string or None if unclear.
+    Returns a document_type string, or "unknown" if unclear.
     """
     # Check first 3 pages for structural cues
     text_lower = " ".join(p.text.replace("\xad", "").lower() for p in pages[:3])
@@ -180,7 +180,7 @@ def classify_document_type(
             scores[doc_type] = score
 
     if not scores:
-        return None
+        return "unknown"
 
     best_type = max(scores, key=scores.get)
     best_score = scores[best_type]
@@ -189,4 +189,4 @@ def classify_document_type(
     if best_score >= 3:
         return best_type
 
-    return None  # ambiguous, defer to LLM
+    return "unknown"  # ambiguous, keep deterministic but explicit

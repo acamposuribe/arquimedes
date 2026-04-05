@@ -30,8 +30,10 @@ from typing import Any
 from arquimedes.cluster import (
     is_bridge_clustering_stale,
     is_clustering_stale,
+    bridge_cluster_fingerprint,
     load_bridge_clusters,
     load_clusters,
+    slugify,
 )
 from arquimedes.compile import compile_wiki
 from arquimedes.compile_pages import (
@@ -221,6 +223,19 @@ def _safe_list(value: Any) -> list[str]:
     if isinstance(value, str) and value.strip():
         return [value.strip()]
     return []
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = str(value).strip()
+        key = item.casefold()
+        if not item or key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
 
 
 def _truncate(text: str, limit: int = 220) -> str:
@@ -1595,6 +1610,36 @@ def _graph_reflection_prompt(
     return system, user
 
 
+def _bridge_maintenance_prompt(
+    bridge_clusters: list[dict],
+    cluster_reviews: list[dict],
+    material_info: dict[str, dict],
+) -> tuple[str, str]:
+    system = (
+        "You are an architecture research librarian maintaining the bridge-concept graph. "
+        "Return JSON only. Use the cluster reviews as maintainer feedback. "
+        "If the reviews indicate that two bridge concepts are duplicates or should merge, "
+        "propose a merge action. If a bridge concept has a better canonical name, propose a rename. "
+        "Only propose safe actions that preserve the underlying evidence. "
+        "You will get only one read-only context round, so request everything you need at once."
+    )
+    user = (
+        "Review these bridge clusters and cluster audit findings, then return a JSON object "
+        "with keys: actions, context_requests.\n"
+        "actions must be a JSON array. context_requests is optional and must be a JSON array of "
+        "read-only SQL-index lookups if you need more context.\n"
+        "Each action must include: action_type (merge|rename|keep), target_cluster_ids, "
+        "canonical_name, aliases, reason, confidence.\n"
+        "Only use action_type=merge when the target clusters are truly the same cross-material concept.\n"
+        "Only use action_type=rename when the cluster is correct but badly named.\n"
+        "Do not invent new bridge clusters here.\n\n"
+        f"Bridge clusters:\n{json.dumps(bridge_clusters[:50], ensure_ascii=False, indent=2)}\n\n"
+        f"Cluster reviews:\n{json.dumps(cluster_reviews[:50], ensure_ascii=False, indent=2)}\n\n"
+        f"Material info:\n{json.dumps(material_info, ensure_ascii=False, indent=2)}"
+    )
+    return system, user
+
+
 def _run_reflection_prompt_with_context(
     llm_fn,
     system: str,
@@ -1619,6 +1664,143 @@ def _run_reflection_prompt_with_context(
     if isinstance(parsed, dict):
         parsed.pop("context_requests", None)
     return parsed
+
+
+def _merge_bridge_clusters(
+    bridge_clusters: list[dict],
+    action: dict,
+) -> dict | None:
+    target_ids = []
+    seen_ids: set[str] = set()
+    for cid in _safe_list(action.get("target_cluster_ids", [])):
+        if cid and cid not in seen_ids:
+            seen_ids.add(cid)
+            target_ids.append(cid)
+    if len(target_ids) < 2:
+        return None
+
+    by_id = {cluster.get("cluster_id", ""): cluster for cluster in bridge_clusters if cluster.get("cluster_id", "")}
+    selected = [by_id[cid] for cid in target_ids if cid in by_id]
+    if len(selected) < 2:
+        return None
+
+    survivor = selected[0]
+    merged_source: list[dict] = []
+    merged_material_ids: list[str] = []
+    merged_aliases = []
+    seen_pairs: set[tuple[str, str]] = set()
+    for cluster in selected:
+        merged_aliases.extend(_safe_list(cluster.get("aliases", [])))
+        for mid in _safe_list(cluster.get("material_ids", [])):
+            if mid and mid not in merged_material_ids:
+                merged_material_ids.append(mid)
+        for source in cluster.get("source_concepts", []):
+            if not isinstance(source, dict):
+                continue
+            pair = (str(source.get("material_id", "")).strip(), str(source.get("concept_name", "")).strip())
+            if not pair[0] or not pair[1] or pair in seen_pairs:
+                continue
+            seen_pairs.add(pair)
+            merged_source.append({
+                "material_id": pair[0],
+                "concept_name": pair[1],
+                "relevance": source.get("relevance", ""),
+                "source_pages": source.get("source_pages", []),
+                "evidence_spans": source.get("evidence_spans", []),
+                "confidence": source.get("confidence", 0.0),
+            })
+
+    canonical_name = str(action.get("canonical_name", "")).strip() or survivor.get("canonical_name", "")
+    aliases = _dedupe_strings([
+        canonical_name,
+        *merged_aliases,
+        *[src["concept_name"] for src in merged_source],
+        *(_safe_list(action.get("aliases", []))),
+    ])
+
+    merged = {
+        **survivor,
+        "canonical_name": canonical_name,
+        "slug": slugify(canonical_name),
+        "aliases": aliases,
+        "material_ids": merged_material_ids,
+        "source_concepts": merged_source,
+        "confidence": float(action.get("confidence", survivor.get("confidence", 0.0)) or 0.0),
+        "wiki_path": f"wiki/shared/bridge-concepts/{slugify(canonical_name)}.md",
+    }
+    return merged
+
+
+def _apply_bridge_cluster_maintenance(
+    root: Path,
+    bridge_clusters: list[dict],
+    actions: list[dict],
+) -> tuple[list[dict], int]:
+    """Apply safe bridge-cluster maintenance actions and persist them."""
+    if not actions:
+        return bridge_clusters, 0
+
+    working = {cluster.get("cluster_id", ""): cluster for cluster in bridge_clusters if cluster.get("cluster_id", "")}
+    changed = 0
+
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        action_type = str(action.get("action_type", "")).strip().lower()
+        target_ids = [cid for cid in _safe_list(action.get("target_cluster_ids", [])) if cid in working]
+        if action_type == "merge":
+            if len(target_ids) < 2:
+                continue
+            merged = _merge_bridge_clusters([working[cid] for cid in target_ids], action)
+            if merged is None:
+                continue
+            survivor_id = target_ids[0]
+            for cid in target_ids[1:]:
+                working.pop(cid, None)
+            working[survivor_id] = merged
+            changed += 1
+        elif action_type == "rename":
+            if len(target_ids) != 1:
+                continue
+            cid = target_ids[0]
+            cluster = working[cid]
+            canonical_name = str(action.get("canonical_name", "")).strip() or cluster.get("canonical_name", "")
+            cluster = {
+                **cluster,
+                "canonical_name": canonical_name,
+                "slug": slugify(canonical_name),
+                "aliases": _dedupe_strings([
+                    canonical_name,
+                    *(_safe_list(cluster.get("aliases", []))),
+                    *(_safe_list(action.get("aliases", []))),
+                ]),
+                "wiki_path": f"wiki/shared/bridge-concepts/{slugify(canonical_name)}.md",
+            }
+            working[cid] = cluster
+            changed += 1
+
+    if changed <= 0:
+        return bridge_clusters, 0
+
+    updated = sorted(working.values(), key=lambda c: c.get("cluster_id", ""))
+    derived_dir = root / "derived"
+    derived_dir.mkdir(exist_ok=True)
+    bridge_path = derived_dir / "bridge_concept_clusters.jsonl"
+    with bridge_path.open("w", encoding="utf-8") as f:
+        for cluster in updated:
+            f.write(json.dumps(cluster, ensure_ascii=False) + "\n")
+
+    stamp_path = derived_dir / "bridge_cluster_stamp.json"
+    stamp_path.write_text(
+        json.dumps({
+            "clustered_at": datetime.now(timezone.utc).isoformat(),
+            "fingerprint": bridge_cluster_fingerprint(None),
+            "bridge_concepts": sum(len(c.get("source_concepts", [])) for c in updated),
+            "clusters": len(updated),
+        }, indent=2),
+        encoding="utf-8",
+    )
+    return updated, changed
 
 
 def _reflection_section(title: str, bullets: list[str], prose: str | None = None) -> str:
@@ -2062,6 +2244,93 @@ def _run_graph_reflection(
     return records
 
 
+def _run_bridge_cluster_maintenance(
+    root: Path,
+    bridge_clusters: list[dict],
+    cluster_reviews: list[dict],
+    material_info: dict[str, dict],
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+) -> tuple[list[dict], int]:
+    """Ask the maintainer LLM whether bridge clusters should be merged/renamed."""
+    if not bridge_clusters or not cluster_reviews:
+        return bridge_clusters, 0
+
+    prompt_reviews = [
+        review for review in cluster_reviews
+        if str(review.get("finding_type", "")).strip().lower() in {"merge", "duplicate", "missed_equivalence", "over_merged"}
+        or str(review.get("severity", "")).strip().lower() in {"high", "medium"}
+    ]
+    if not prompt_reviews:
+        return bridge_clusters, 0
+
+    payload = {
+        "bridge_clusters": [
+            {
+                "cluster_id": cluster.get("cluster_id", ""),
+                "canonical_name": cluster.get("canonical_name", ""),
+                "slug": cluster.get("slug", ""),
+                "aliases": cluster.get("aliases", []),
+                "material_ids": cluster.get("material_ids", []),
+                "source_concepts": cluster.get("source_concepts", []),
+                "confidence": cluster.get("confidence", 0.0),
+                "wiki_path": cluster.get("wiki_path", ""),
+            }
+            for cluster in bridge_clusters
+        ],
+        "cluster_reviews": prompt_reviews,
+        "material_info": material_info,
+    }
+
+    existing_path = root / LINT_DIR / "bridge_maintenance.jsonl"
+    existing = _load_jsonl(existing_path)
+    fingerprint = canonical_hash(payload)
+    if existing and all(row.get("input_fingerprint") == fingerprint for row in existing):
+        return bridge_clusters, 0
+
+    llm_fn = llm_factory("lint")
+    system, user = _bridge_maintenance_prompt(bridge_clusters, prompt_reviews, material_info)
+    parsed = _run_reflection_prompt_with_context(
+        llm_fn,
+        system,
+        user,
+        "JSON object with keys: actions (array) and optional context_requests (array of read-only SQL-index lookups)",
+        tool,
+    )
+    actions = parsed.get("actions", []) if isinstance(parsed, dict) else parsed
+    if not isinstance(actions, list):
+        raise EnrichmentError("Bridge maintenance returned non-list actions")
+
+    applied_actions = []
+    updated_clusters = bridge_clusters
+    changed = 0
+    if actions:
+        updated_clusters, changed = _apply_bridge_cluster_maintenance(root, bridge_clusters, actions)
+        applied_actions = [
+            {
+                "action_type": str(action.get("action_type", "")).strip().lower(),
+                "target_cluster_ids": _safe_list(action.get("target_cluster_ids", [])),
+                "canonical_name": str(action.get("canonical_name", "")).strip(),
+                "aliases": _safe_list(action.get("aliases", [])),
+                "reason": str(action.get("reason", "")).strip(),
+                "confidence": float(action.get("confidence", 0.0) or 0.0),
+            }
+            for action in actions
+            if isinstance(action, dict)
+        ]
+
+    _write_jsonl(
+        existing_path,
+        [{
+            "input_fingerprint": fingerprint,
+            "actions": applied_actions,
+            "applied": bool(changed),
+            "bridge_cluster_count": len(updated_clusters),
+        }],
+    )
+    return updated_clusters, changed
+
+
 def run_reflective_lint(
     config: dict,
     deterministic_report: dict,
@@ -2102,6 +2371,17 @@ def run_reflective_lint(
 
     with ReflectionIndexTool(root) as tool:
         cluster_reviews = _run_cluster_audit(root, clusters, material_info, llm_factory, tool)
+        if apply:
+            bridge_clusters, bridge_changes = _run_bridge_cluster_maintenance(
+                root,
+                bridge_clusters,
+                cluster_reviews,
+                material_info,
+                llm_factory,
+                tool,
+            )
+        else:
+            bridge_changes = 0
         concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool)
         collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool)
         graph_due, graph_reason = _graph_reflection_due(
@@ -2136,6 +2416,7 @@ def run_reflective_lint(
 
     return {
         "cluster_reviews": len(cluster_reviews),
+        "bridge_cluster_changes": bridge_changes,
         "concept_reflections": len(concept_refs),
         "collection_reflections": len(collection_refs),
         "graph_findings": len(graph_findings),

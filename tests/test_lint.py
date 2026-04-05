@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import ReflectionIndexTool, _apply_collection_reflection_to_page, _apply_concept_reflection_to_page, _build_material_info, _graph_reflection_due, _load_manifest, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
+from arquimedes.lint import ReflectionIndexTool, _apply_collection_reflection_to_page, _apply_concept_reflection_to_page, _apply_bridge_cluster_maintenance, _build_material_info, _graph_reflection_due, _load_manifest, _run_bridge_cluster_maintenance, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
 from arquimedes.cli import lint as lint_cmd
 
 
@@ -389,6 +389,7 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
         {"material_id": "mat_001"},
         {"material_id": "mat_002"},
     ])
+    rebuild_index(config)
 
     calls: list[str] = []
 
@@ -648,6 +649,122 @@ def test_graph_reflection_writes_schema_and_skips_unchanged(tmp_path, monkeypatc
     second = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, llm_factory)
     assert len(second) == 1
     assert len(calls) == 1
+
+
+def test_bridge_cluster_maintenance_merges_reviewed_duplicates(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [
+        {
+            "cluster_id": "bridge_0001",
+            "canonical_name": "Archive and Space",
+            "slug": "archive-and-space",
+            "aliases": ["Archive and Space"],
+            "material_ids": ["mat_001"],
+            "source_concepts": [
+                {
+                    "material_id": "mat_001",
+                    "concept_name": "archive and space",
+                    "relevance": "high",
+                    "source_pages": [1],
+                    "evidence_spans": ["archive and space"],
+                    "confidence": 0.9,
+                }
+            ],
+            "confidence": 0.8,
+            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+        },
+        {
+            "cluster_id": "bridge_0002",
+            "canonical_name": "Archival Space",
+            "slug": "archival-space",
+            "aliases": ["Archival Space"],
+            "material_ids": ["mat_002"],
+            "source_concepts": [
+                {
+                    "material_id": "mat_002",
+                    "concept_name": "archival space",
+                    "relevance": "medium",
+                    "source_pages": [2],
+                    "evidence_spans": ["archival space"],
+                    "confidence": 0.8,
+                }
+            ],
+            "confidence": 0.7,
+            "wiki_path": "wiki/shared/bridge-concepts/archival-space.md",
+        },
+    ])
+    _write_jsonl(root / "derived" / "cluster_reviews.jsonl", [
+        {
+            "review_id": "bridge_0001:0:merge",
+            "cluster_id": "bridge_0001",
+            "finding_type": "merge",
+            "severity": "medium",
+            "recommendation": "These bridge concepts are duplicates and should merge.",
+            "affected_material_ids": ["mat_001", "mat_002"],
+            "affected_concept_names": ["archive and space", "archival space"],
+            "evidence": ["shared archive frame"],
+            "input_fingerprint": "abc",
+            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+        }
+    ])
+
+    material_info = _build_material_info(root, [
+        {"material_id": "mat_001"},
+        {"material_id": "mat_002"},
+    ])
+    rebuild_index(config)
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(stage)
+            return json.dumps({
+                "actions": [
+                    {
+                        "action_type": "merge",
+                        "target_cluster_ids": ["bridge_0001", "bridge_0002"],
+                        "canonical_name": "Archive and Space",
+                        "aliases": ["Archival Space"],
+                        "reason": "They describe the same cross-material concept.",
+                        "confidence": 0.9,
+                    }
+                ]
+            })
+
+        return fn
+
+    with ReflectionIndexTool(root) as tool:
+        updated, changed = _run_bridge_cluster_maintenance(
+            root,
+            [json.loads(line) for line in (root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()],
+            [
+                {
+                    "review_id": "bridge_0001:0:merge",
+                    "cluster_id": "bridge_0001",
+                    "finding_type": "merge",
+                    "severity": "medium",
+                    "recommendation": "These bridge concepts are duplicates and should merge.",
+                    "affected_material_ids": ["mat_001", "mat_002"],
+                    "affected_concept_names": ["archive and space", "archival space"],
+                    "evidence": ["shared archive frame"],
+                    "input_fingerprint": "abc",
+                    "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+                }
+            ],
+            material_info,
+            llm_factory,
+            tool,
+        )
+
+    assert changed == 1
+    assert len(updated) == 1
+    assert updated[0]["canonical_name"] == "Archive and Space"
+    assert set(updated[0]["material_ids"]) == {"mat_001", "mat_002"}
+    assert len(calls) == 1
+    stamp = json.loads((root / "derived" / "bridge_cluster_stamp.json").read_text(encoding="utf-8"))
+    assert stamp["clusters"] == 1
 
 
 def test_reflection_index_tool_supports_read_only_search_and_open_record(tmp_path, monkeypatch):

@@ -130,6 +130,7 @@ Tasks:
 - detect weak single-material clusters
 - detect poor canonical names
 - detect missing materials that belong in an existing cluster
+- when safe and supported by the maintainer review, merge or rename bridge clusters so the wiki/search graph actually improves
 
 Output artifact:
 - `derived/lint/cluster_reviews.jsonl`
@@ -243,6 +244,7 @@ It must be able to materialize reflective knowledge into the wiki.
 - update concept pages with reflection sections
 - update collection pages with reflection sections
 - optionally update related-links sections when recommendations are accepted
+- apply safe bridge-cluster maintenance actions coming from cluster reviews
 
 The source of truth for these reflective additions is the structured lint artifacts in `derived/lint/`, not freehand markdown editing.
 

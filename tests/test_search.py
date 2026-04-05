@@ -698,8 +698,10 @@ def concepts_repo(tmp_path, monkeypatch):
     _write_annotations(alpha_dir)
     _write_figure(alpha_dir)
     _write_concepts(alpha_dir, [
-        {"concept_name": "archival habitat", "relevance": "high"},
-        {"concept_name": "embodied archives", "relevance": "high"},
+        {"concept_name": "archival habitat", "relevance": "high",
+         "provenance": {"source_pages": [2, 3], "evidence_spans": ["the archival habitat"], "confidence": 1.0}},
+        {"concept_name": "embodied archives", "relevance": "high",
+         "provenance": {"source_pages": [7], "evidence_spans": ["embodied knowledge"], "confidence": 0.9}},
     ])
 
     # mat_beta: shares "archival habitat" concept and author "Lee", different keyword
@@ -715,8 +717,10 @@ def concepts_repo(tmp_path, monkeypatch):
     _write_annotations(beta_dir)
     _write_figure(beta_dir)
     _write_concepts(beta_dir, [
-        {"concept_name": "archival habitat", "relevance": "high"},
-        {"concept_name": "oral history", "relevance": "medium"},
+        {"concept_name": "archival habitat", "relevance": "high",
+         "provenance": {"source_pages": [1, 5], "evidence_spans": ["archival habitat concept"], "confidence": 0.95}},
+        {"concept_name": "oral history", "relevance": "medium",
+         "provenance": {"source_pages": [4], "evidence_spans": ["oral history methods"], "confidence": 0.8}},
     ])
 
     # mat_gamma: no shared concept with alpha, different author, different location
@@ -732,7 +736,8 @@ def concepts_repo(tmp_path, monkeypatch):
     _write_annotations(gamma_dir)
     _write_figure(gamma_dir)
     _write_concepts(gamma_dir, [
-        {"concept_name": "passive cooling", "relevance": "medium"},
+        {"concept_name": "passive cooling", "relevance": "medium",
+         "provenance": {"source_pages": [1], "evidence_spans": ["passive cooling strategy"], "confidence": 0.7}},
     ])
 
     manifest_lines = [
@@ -791,6 +796,19 @@ class TestConceptSearch:
         assert "concepts" in d
         assert isinstance(d["concepts"], list)
         assert d["concepts"][0]["concept_name"] == "archival habitat"
+        # Provenance fields should be present when available
+        assert "source_pages" in d["concepts"][0]
+        assert "evidence_spans" in d["concepts"][0]
+
+    def test_concept_hit_has_provenance(self, concepts_repo):
+        """ConceptHit carries source_pages, evidence_spans, confidence from concepts.jsonl."""
+        result = search("archival habitat", depth=2)
+        alpha = next((r for r in result.results if r.material_id == "mat_alpha"), None)
+        assert alpha is not None
+        hit = next(c for c in alpha.concepts if c.concept_name == "archival habitat")
+        assert hit.source_pages == [2, 3]
+        assert "the archival habitat" in hit.evidence_spans
+        assert hit.confidence == 1.0
 
 
 # --- C4.3: arq related ---
@@ -940,3 +958,118 @@ class TestListConcepts:
         out = format_concepts_human(entries)
         assert "archival habitat" in out
         assert "2" in out  # material count for shared concept
+
+    def test_relevance_summary_aggregated(self, concepts_repo):
+        """Shared concept with same relevance shows '2×high', not arbitrary MAX."""
+        entries = list_concepts()
+        entry = next(e for e in entries if e.material_count == 2)
+        # Both mat_alpha and mat_beta have relevance "high" for archival habitat
+        assert "high" in entry.relevance_summary
+
+
+# --- Concept normalization ---
+
+class TestConceptNormalization:
+    def test_case_variants_merge(self, tmp_path, monkeypatch):
+        """'Archival Habitat' and 'archival habitat' in different materials share one concept_key."""
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+        (tmp_path / "indexes").mkdir()
+        (tmp_path / "extracted").mkdir()
+        manifests = tmp_path / "manifests"
+        manifests.mkdir()
+
+        for mid, name in [("m1", "Archival Habitat"), ("m2", "archival habitat")]:
+            mat_dir = tmp_path / "extracted" / mid
+            _write_meta(mat_dir, mid, title=f"Doc {mid}")
+            _write_chunks(mat_dir, mid)
+            _write_annotations(mat_dir)
+            _write_figure(mat_dir)
+            _write_concepts(mat_dir, [
+                {"concept_name": name, "relevance": "high",
+                 "provenance": {"source_pages": [1], "evidence_spans": [name], "confidence": 1.0}},
+            ])
+        (manifests / "materials.jsonl").write_text("\n".join(
+            json.dumps({"material_id": mid, "file_hash": mid,
+                        "relative_path": f"R/{mid}.pdf", "file_type": "pdf",
+                        "domain": "research", "collection": "_general",
+                        "ingested_at": "2026-01-01T00:00:00+00:00"})
+            for mid in ["m1", "m2"]
+        ))
+        monkeypatch.chdir(tmp_path)
+        rebuild_index()
+
+        entries = list_concepts()
+        # Should merge into ONE concept with count=2
+        matching = [e for e in entries if "archival" in e.concept_name.lower()]
+        assert len(matching) == 1
+        assert matching[0].material_count == 2
+
+    def test_plural_variants_merge(self, tmp_path, monkeypatch):
+        """'archival habitats' (plural) merges with 'archival habitat' (singular)."""
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+        (tmp_path / "indexes").mkdir()
+        (tmp_path / "extracted").mkdir()
+        manifests = tmp_path / "manifests"
+        manifests.mkdir()
+
+        for mid, name in [("m1", "archival habitats"), ("m2", "archival habitat")]:
+            mat_dir = tmp_path / "extracted" / mid
+            _write_meta(mat_dir, mid, title=f"Doc {mid}")
+            _write_chunks(mat_dir, mid)
+            _write_annotations(mat_dir)
+            _write_figure(mat_dir)
+            _write_concepts(mat_dir, [
+                {"concept_name": name, "relevance": "high",
+                 "provenance": {"source_pages": [1], "evidence_spans": [name], "confidence": 1.0}},
+            ])
+        (manifests / "materials.jsonl").write_text("\n".join(
+            json.dumps({"material_id": mid, "file_hash": mid,
+                        "relative_path": f"R/{mid}.pdf", "file_type": "pdf",
+                        "domain": "research", "collection": "_general",
+                        "ingested_at": "2026-01-01T00:00:00+00:00"})
+            for mid in ["m1", "m2"]
+        ))
+        monkeypatch.chdir(tmp_path)
+        rebuild_index()
+
+        entries = list_concepts()
+        matching = [e for e in entries if "archival" in e.concept_name.lower()]
+        assert len(matching) == 1
+        assert matching[0].material_count == 2
+
+    def test_related_uses_normalized_key(self, tmp_path, monkeypatch):
+        """find_related discovers connection even when concept_name casing differs."""
+        (tmp_path / "config").mkdir()
+        (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+        (tmp_path / "indexes").mkdir()
+        (tmp_path / "extracted").mkdir()
+        manifests = tmp_path / "manifests"
+        manifests.mkdir()
+
+        for mid, name in [("m1", "Archival Habitat"), ("m2", "archival habitats")]:
+            mat_dir = tmp_path / "extracted" / mid
+            _write_meta(mat_dir, mid, title=f"Doc {mid}")
+            _write_chunks(mat_dir, mid)
+            _write_annotations(mat_dir)
+            _write_figure(mat_dir)
+            _write_concepts(mat_dir, [
+                {"concept_name": name, "relevance": "high",
+                 "provenance": {"source_pages": [1], "evidence_spans": [name], "confidence": 1.0}},
+            ])
+        (manifests / "materials.jsonl").write_text("\n".join(
+            json.dumps({"material_id": mid, "file_hash": mid,
+                        "relative_path": f"R/{mid}.pdf", "file_type": "pdf",
+                        "domain": "research", "collection": "_general",
+                        "ingested_at": "2026-01-01T00:00:00+00:00"})
+            for mid in ["m1", "m2"]
+        ))
+        monkeypatch.chdir(tmp_path)
+        rebuild_index()
+
+        related = find_related("m1")
+        ids = [r.material_id for r in related]
+        assert "m2" in ids
+        types = {c.type for c in related[0].connections}
+        assert "shared_concept" in types

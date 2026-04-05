@@ -1,6 +1,6 @@
 # Arquimedes — Connection Model: Implementation Plan
 
-> **Status:** Ready to implement
+> **Status:** Complete
 > **Date:** 2026-04-05
 > **Spec:** [Connection model](../specs/2026-04-05-connection-model.md)
 > **Related plan:** [Phase 4 search index](2026-04-04-phase4-search-index.md)
@@ -51,10 +51,14 @@ This plan adds four capabilities to Phase 4 that turn latent metadata into live 
 **Schema:**
 ```sql
 CREATE TABLE IF NOT EXISTS concepts (
-    concept_name  TEXT NOT NULL,
-    material_id   TEXT NOT NULL,
-    relevance     TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (material_id, concept_name)
+    concept_name   TEXT NOT NULL,
+    material_id    TEXT NOT NULL,
+    concept_key    TEXT NOT NULL DEFAULT '',
+    relevance      TEXT NOT NULL DEFAULT '',
+    source_pages   TEXT NOT NULL DEFAULT '[]',
+    evidence_spans TEXT NOT NULL DEFAULT '[]',
+    confidence     REAL NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (material_id, concept_key)
 );
 
 CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
@@ -63,16 +67,32 @@ CREATE VIRTUAL TABLE IF NOT EXISTS concepts_fts USING fts5(
     content='concepts',
     content_rowid='rowid'
 );
+
+CREATE TABLE IF NOT EXISTS material_keywords (
+    material_id TEXT NOT NULL,
+    keyword     TEXT NOT NULL,
+    PRIMARY KEY (material_id, keyword)
+);
+
+CREATE TABLE IF NOT EXISTS material_authors (
+    material_id TEXT NOT NULL,
+    author      TEXT NOT NULL,
+    PRIMARY KEY (material_id, author)
+);
 ```
 
-Primary key is `(material_id, concept_name)` — concept names are the natural identifier, not synthetic IDs. This also makes shared-concept queries trivial: `GROUP BY concept_name`.
+Primary key is `(material_id, concept_key)` — `concept_key` is a normalized form (lowercase, whitespace-collapsed, basic plural removal) of `concept_name`. This prevents fragmentation when different materials emit `Archival Habitat` vs `archival habitats`. The display name is preserved in `concept_name`; all grouping, joining, and deduplication uses `concept_key`.
+
+Provenance fields (`source_pages`, `evidence_spans`, `confidence`) are carried through from `concepts.jsonl` so that Phase 5 concept pages can cite grounded evidence.
+
+Helper tables `material_keywords` and `material_authors` are populated at index time from `meta.json` arrays, normalized to lowercase. These enable proper SQL JOINs in `arq related` instead of brittle JSON-parsing scans.
 
 **Changes:**
-- `index.py`: add DDL, populate from `concepts.jsonl` during rebuild, `concepts_fts` rebuild call, `IndexStats.concepts` field
+- `index.py`: add DDL for `concepts` (with `concept_key`, provenance columns), `material_keywords`, `material_authors`; populate from `concepts.jsonl` and `meta.json` during rebuild; `concepts_fts` rebuild call; `IndexStats.concepts` field; `_normalize_concept_key()` helper (lowercase, whitespace collapse, basic English plural removal)
 - `index.py`: `_newest_input_mtime()` and `_compute_extracted_snapshot()` include `concepts.jsonl`
 - `cli.py`: `arq index rebuild` output shows concept count
 
-**Tests:** concept rows inserted with correct count; FTS match on concept name; staleness when concepts.jsonl changes.
+**Tests:** concept rows inserted with correct count; FTS match on concept name; staleness when concepts.jsonl changes; concept_key normalization deduplicates case/plural variants; provenance columns populated; material_keywords and material_authors populated.
 
 ---
 
@@ -83,8 +103,8 @@ Primary key is `(material_id, concept_name)` — concept names are the natural i
 Add `concepts_fts` as a fourth content-first source. A search for "archival habitat" at depth ≥ 2 should surface materials where that term is a concept candidate, even if it doesn't appear in the card summary.
 
 **Changes:**
-- `search.py`: `ConceptHit` dataclass (concept_name, relevance, rank)
-- `search.py`: `_search_concepts(con, query, material_id, limit)` — FTS5 match + join to base table
+- `search.py`: `ConceptHit` dataclass (concept_name, relevance, source_pages, evidence_spans, confidence, rank)
+- `search.py`: `_search_concepts(con, query, material_id, limit)` — FTS5 match + join to base table, pulls provenance columns
 - `search.py`: `_find_content_material_ids()` adds `concepts_fts` query as fourth source
 - `search.py`: `MaterialCard.concepts: list[ConceptHit]`, populated at depth ≥ 2
 - `search.py`: `search()` gets `concept_limit: int = 3` parameter
@@ -92,7 +112,7 @@ Add `concepts_fts` as a fourth content-first source. A search for "archival habi
 - `search.py`: `format_human()` renders concept hits
 - `cli.py`: `--concept-limit` option on `arq search`
 
-**Tests:** concept-only material surfaces at depth 2 not depth 1; concept hits attached to card; concept boost affects ranking.
+**Tests:** concept-only material surfaces at depth 2 not depth 1; concept hits attached to card; concept boost affects ranking; ConceptHit carries provenance (source_pages, evidence_spans, confidence).
 
 ---
 
@@ -108,14 +128,17 @@ This is the feature that makes Arquimedes feel like a brain. Given a material, r
 
 ```
 For material M:
-  1. Find shared concepts: other materials with matching concept_name
+  1. Find shared concepts: JOIN concepts c1 ON c2.concept_key = c1.concept_key
      → weight: 1.0 per shared concept (strongest signal — LLM-identified meaning)
-  2. Find shared enriched keywords: keyword intersection via JSON arrays
+     → uses concept_key (normalized) so case/plural variants match
+  2. Find shared enriched keywords: JOIN material_keywords mk1 ON mk2.keyword = mk1.keyword
      → weight: 0.3 per shared keyword
+     → keywords normalized to lowercase at index time in helper table
   3. Find shared facets: exact match on location, historical_period, scale, etc.
      → weight: 0.5 per shared facet value
-  4. Find same author
+  4. Find same author: JOIN material_authors ma1 ON ma2.author = ma1.author
      → weight: 0.8 per shared author
+     → authors normalized to lowercase at index time in helper table
   5. Score = sum of weighted connections
   6. Return top N related materials with score + connection reasons
 ```
@@ -143,7 +166,7 @@ class RelatedMaterial:
 - `search.py`: `format_related_human(material_id, related) → str`
 - `cli.py`: `arq related <material_id> [--limit N] [--human]` command
 
-**Tests:** material with shared concept appears in related; shared keyword contributes; scoring sums correctly; material doesn't relate to itself.
+**Tests:** material with shared concept appears in related (via concept_key, not concept_name); shared keyword contributes (via material_keywords table); shared author contributes (via material_authors table); scoring sums correctly; material doesn't relate to itself; case/plural concept variants still discover connections.
 
 ---
 
@@ -155,24 +178,28 @@ List all concept candidates across the collection with material counts. This is 
 
 **Query:**
 ```sql
-SELECT concept_name,
+SELECT concept_key,
+       MAX(concept_name) AS display_name,
        COUNT(DISTINCT material_id) AS material_count,
-       GROUP_CONCAT(DISTINCT material_id) AS material_ids,
-       relevance
+       GROUP_CONCAT(DISTINCT material_id) AS material_ids_csv,
+       GROUP_CONCAT(relevance) AS relevance_values
 FROM concepts
-GROUP BY concept_name
-ORDER BY material_count DESC, concept_name
+GROUP BY concept_key
+HAVING COUNT(DISTINCT material_id) >= ?
+ORDER BY material_count DESC, concept_key
+LIMIT ?
 ```
 
-With only one material currently, all counts will be 1. But as the library grows, concepts appearing across 3+ materials are strong candidates for concept wiki pages.
+Grouping by `concept_key` (not `concept_name`) ensures normalized variants cluster together. `MAX(concept_name)` picks one display form. `GROUP_CONCAT(relevance)` feeds a Python `_build_relevance_summary()` that produces counted summaries like `"2×high, 1×medium"` instead of an arbitrary `MAX(relevance)`.
 
 **Changes:**
 - `search.py` (or new `connections.py` if search.py gets too large — prefer keeping in search.py for now): `list_concepts(config, min_materials=1, limit=50) → list[ConceptEntry]`
-- `ConceptEntry` dataclass: concept_name, material_count, material_ids, relevance
+- `ConceptEntry` dataclass: concept_name, material_count, material_ids, relevance_summary (counted aggregation e.g. "2×high, 1×medium")
+- `_build_relevance_summary()` helper: turns GROUP_CONCAT output into readable counted summary
 - `format_concepts_human()` for table output
 - `cli.py`: `arq concepts [--min-materials N] [--limit N] [--human]`
 
-**Tests:** concepts listed with correct counts; `--min-materials 2` filters single-material concepts.
+**Tests:** concepts listed with correct counts; `--min-materials 2` filters single-material concepts; relevance_summary is aggregated ("2×high"), not arbitrary MAX; case/plural variants merge under same concept_key.
 
 ---
 
@@ -235,4 +262,4 @@ After these tasks, the connection graph exists in queryable form. Phase 5 materi
 
 ### Phase 2 — Retroactive
 
-- [ ] **C2.1** — `Chunk.annotation_overlap_ids: list[str]` in `models.py` and `chunking.py`
+- [x] **C2.1** — `Chunk.annotation_overlap_ids: list[str]` in `models.py` and `chunking.py`

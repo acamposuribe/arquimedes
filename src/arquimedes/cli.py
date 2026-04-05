@@ -278,11 +278,60 @@ def figures(material_id: str):
     click.echo("arq figures: not yet implemented")
 
 
+@cli.command("cluster")
+@click.option("--force", is_flag=True, help="Re-cluster even if input is unchanged.")
+def cluster_cmd(force: bool):
+    """Cluster concept candidates across materials into canonical concepts."""
+    from arquimedes.cluster import cluster_concepts
+    from arquimedes.enrich_llm import EnrichmentError
+    from arquimedes.config import load_config
+
+    try:
+        summary = cluster_concepts(load_config(), force=force)
+    except EnrichmentError as e:
+        raise click.ClickException(str(e))
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if summary.get("skipped"):
+        click.echo("Clustering is up to date — skipped.")
+        return
+
+    total = summary["total_concepts"]
+    n_clusters = summary["clusters"]
+    multi = summary["multi_material"]
+    click.echo(f"{total} concepts → {n_clusters} clusters ({multi} multi-material)")
+
+
 @cli.command()
-@click.option("--full", is_flag=True, help="Full rebuild instead of incremental")
-def compile(full: bool):
-    """Generate/update wiki from extracted materials."""
-    click.echo("arq compile: not yet implemented")
+@click.option("--full", is_flag=True, help="Full rebuild instead of incremental.")
+@click.option("--force-cluster", is_flag=True, help="Re-run clustering before compiling.")
+def compile(full: bool, force_cluster: bool):
+    """Compile wiki pages from enriched materials and concept clusters."""
+    from arquimedes.compile import compile_wiki
+    from arquimedes.enrich_llm import EnrichmentError
+    from arquimedes.config import load_config
+
+    try:
+        summary = compile_wiki(load_config(), force=full, force_cluster=force_cluster)
+    except EnrichmentError as e:
+        raise click.ClickException(str(e))
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    cl = summary.get("clustering", {})
+    if not cl.get("skipped"):
+        total = cl.get("total_concepts", 0)
+        n_clusters = cl.get("clusters", 0)
+        multi = cl.get("multi_material", 0)
+        click.echo(f"Clustering: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
+    click.echo("Compiling:")
+    click.echo(f"  {summary['material_pages']} material page(s) written, {summary['material_pages_skipped']} skipped")
+    click.echo(f"  {summary['concept_pages']} concept page(s) written")
+    click.echo(f"  {summary['index_pages']} index page(s) written")
+    if summary["orphans_removed"]:
+        click.echo(f"  {summary['orphans_removed']} orphan page(s) removed")
+    click.echo("Done. wiki/ updated.")
 
 
 @cli.command()
@@ -321,15 +370,15 @@ def index_rebuild():
 
 @index.command("ensure")
 def index_ensure():
-    """Rebuild search index only if stale."""
-    from arquimedes.index import ensure_index
+    """Rebuild search index and memory bridge only if stale."""
+    from arquimedes.index import ensure_index_and_memory
 
     try:
-        rebuilt, stats = ensure_index()
+        index_rebuilt, stats, memory_rebuilt, memory_counts = ensure_index_and_memory()
     except Exception as e:
         raise click.ClickException(str(e))
 
-    if rebuilt and stats is not None:
+    if index_rebuilt and stats is not None:
         click.echo("Index is stale — rebuilding...")
         click.echo(f"  materials:   {stats.materials}")
         click.echo(f"  chunks:      {stats.chunks}")
@@ -340,11 +389,64 @@ def index_ensure():
     else:
         click.echo("Index is current.")
 
+    if memory_rebuilt and not memory_counts.get("skipped"):
+        click.echo("Memory bridge is stale — rebuilding...")
+        click.echo(f"  clusters:              {memory_counts.get('clusters', 0)}")
+        click.echo(f"  aliases:               {memory_counts.get('aliases', 0)}")
+        click.echo(f"  cluster-material links:{memory_counts.get('cluster_material_links', 0)}")
+        click.echo(f"  wiki pages:            {memory_counts.get('wiki_pages', 0)}")
+        click.echo("Memory bridge rebuilt.")
+
 
 @cli.command()
 def watch():
     """Start file watcher daemon (server mode)."""
     click.echo("arq watch: not yet implemented")
+
+
+@cli.group()
+def memory():
+    """Manage the memory bridge (canonical concept graph in SQLite)."""
+    pass
+
+
+@memory.command("rebuild")
+def memory_rebuild_cmd():
+    """Project canonical concept clusters and wiki paths into search.sqlite."""
+    from arquimedes.memory import memory_rebuild
+
+    click.echo("Rebuilding memory bridge...")
+    try:
+        counts = memory_rebuild()
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    click.echo(f"  clusters:              {counts['clusters']}")
+    click.echo(f"  aliases:               {counts['aliases']}")
+    click.echo(f"  cluster-material links:{counts['cluster_material_links']}")
+    click.echo(f"  wiki pages:            {counts['wiki_pages']}")
+    click.echo("Memory bridge rebuilt → indexes/search.sqlite")
+
+
+@memory.command("ensure")
+def memory_ensure_cmd():
+    """Rebuild memory bridge only if cluster or manifest inputs changed."""
+    from arquimedes.memory import memory_ensure
+
+    try:
+        rebuilt, counts = memory_ensure()
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if rebuilt:
+        click.echo("Memory bridge is stale — rebuilding...")
+        click.echo(f"  clusters:              {counts['clusters']}")
+        click.echo(f"  aliases:               {counts['aliases']}")
+        click.echo(f"  cluster-material links:{counts['cluster_material_links']}")
+        click.echo(f"  wiki pages:            {counts['wiki_pages']}")
+        click.echo("Memory bridge rebuilt → indexes/search.sqlite")
+    else:
+        click.echo("Memory bridge is current.")
 
 
 @cli.command()

@@ -15,7 +15,9 @@ For the original conceptual pattern, see `docs/llm-wiki.md`. That file is the lo
 
 For how Arquimedes should evolve from a searchable archive into a connected memory system before the wiki compiler exists, see `docs/superpowers/specs/2026-04-05-connection-model.md`. That note explains how structural, semantic, retrieval, attention, and materialized connections should emerge across phases.
 
-The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer. It is responsible for ingesting new sources, enriching them, compiling and updating wiki pages, running health checks, and keeping indexes current. This maintainer role is assembled progressively:
+For the post-compile bridge that makes the wiki graph queryable for agents, see `docs/superpowers/specs/2026-04-05-phase5-5-memory-bridge-design.md`. That phase turns the readable semantic graph into a machine-queryable memory layer inside SQLite.
+
+The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer. It is responsible for ingesting new sources, enriching them, compiling and updating wiki pages, running health checks, and keeping indexes current. Semantic publication belongs to that server-maintainer path: clustering and wiki compilation are not collaborator responsibilities. Collaborator machines rebuild only deterministic local query layers from already-committed outputs. This maintainer role is assembled progressively:
 - **Wiki compilation** defines what the maintainer writes and updates
 - **Wiki linting** defines what the maintainer checks and improves
 - **The server daemon** makes that maintenance loop always-on and automatic
@@ -36,11 +38,12 @@ iCloud folder (shared)
   → arq ingest (register in manifest)
   → arq extract-raw (deterministic PDF parsing)
   → arq enrich (LLM summaries, facets, descriptions)
-  → arq compile (wiki generation)
-  → arq index rebuild (SQLite FTS5, local-only)
+  → arq index rebuild (SQLite FTS5 over extracted/enriched artifacts)
+  → arq cluster (canonical concept clustering)
+  → arq compile (wiki generation; auto-runs arq memory rebuild)
   → git commit + push (extracted/, wiki/, manifests/)
   → Collaborators auto-pull (arq sync daemon)
-  → arq index ensure (rebuild index locally if stale)
+  → arq index ensure (rebuild index locally if stale; auto-runs arq memory ensure)
   → Search via web UI, CLI, or MCP tools
 ```
 
@@ -406,13 +409,15 @@ The watcher can optionally run `arq lint --quick` (deterministic checks only) af
 | `arq read <material_id>` | Full extracted content |
 | `arq read <material_id> --page 5` | Specific page |
 | `arq figures <material_id>` | List figures with descriptions |
-| `arq compile [--full]` | Generate/update wiki |
+| `arq compile [--full]` | Generate/update wiki and rebuild memory bridge |
 | `arq lint` | Run all health checks (deterministic + LLM) |
 | `arq lint --quick` | Deterministic checks only (fast, no LLM) |
 | `arq lint --report` | Write detailed report to wiki/_lint_report.md |
 | `arq lint --fix` | Auto-fix deterministic issues, queue LLM suggestions |
 | `arq index rebuild` | Rebuild search index from scratch |
 | `arq index ensure` | Rebuild index only if stale (auto-check) |
+| `arq memory rebuild` | Deterministically project the cluster/wiki graph into SQLite |
+| `arq memory ensure` | Rebuild the local graph bridge only if stale |
 | `arq watch` | Start file watcher daemon (server) |
 | `arq sync` | Start auto-pull daemon (collaborator) |
 | `arq serve` | Start web UI |
@@ -487,9 +492,9 @@ This is the phase where the Karpathy-style "wiki maintainer" becomes operational
 3. **Enrich**: `arq enrich <id>` → verify meta.json gains summary/keywords/facets with provenance, chunks gain summaries, figures gain descriptions and visual_type
 4. **Search**: `arq search "thermal mass"` → verify relevant cards returned with correct facets
 5. **Deep search**: `arq search --deep "thermal mass"` → verify multi-layer drill returns chunk text
-6. **Compile**: `arq compile` → verify wiki pages generated with correct links and cross-references
+6. **Compile**: `arq compile` → verify wiki pages generated with correct links and cross-references, and memory bridge rebuilt
 7. **Lint**: `arq lint` → verify deterministic checks catch broken links, missing metadata; LLM checks find connections and suggest concepts
 8. **Watch**: start `arq watch`, drop file into iCloud folder → verify auto-pipeline runs end-to-end with debounced batch commit
-9. **Sync**: on second device, `arq sync` → verify git pull brings new content, `arq index ensure` auto-rebuilds local index
+9. **Sync**: on second device, `arq sync` → verify git pull brings new content, `arq index ensure` auto-rebuilds local index and local memory bridge
 10. **Web UI**: `arq serve` → browse wiki, search, view material pages, open figures
 11. **MCP**: connect agent to MCP server → verify search and read tools work

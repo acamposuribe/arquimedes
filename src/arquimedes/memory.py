@@ -1,0 +1,379 @@
+"""Memory bridge — project canonical concept graph into SQLite for agent access.
+
+Reads derived/concept_clusters.jsonl (produced by arq cluster) and materialises
+graph structures into search.sqlite so agents can traverse them without opening
+wiki markdown.
+
+Phase 5.5 is deterministic: no new LLM calls. It is a projection layer.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sqlite3
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+from arquimedes.config import get_project_root, load_config
+from arquimedes.index import get_index_path
+
+
+# ---------------------------------------------------------------------------
+# Path helpers (mirrors compile_pages, avoids circular import)
+# ---------------------------------------------------------------------------
+
+def _material_wiki_path(domain: str, collection: str, material_id: str) -> str:
+    """wiki/{domain}/{collection}/{material_id}.md"""
+    d = (domain or "practice").strip() or "practice"
+    c = (collection or "").strip() or "_general"
+    return f"wiki/{d}/{c}/{material_id}.md"
+
+
+def _concept_wiki_path(slug: str) -> str:
+    """wiki/shared/concepts/{slug}.md"""
+    return f"wiki/shared/concepts/{slug}.md"
+
+
+# ---------------------------------------------------------------------------
+# Schema helpers
+# ---------------------------------------------------------------------------
+
+_BRIDGE_TABLE_DDL = """
+CREATE TABLE IF NOT EXISTS concept_cluster_aliases (
+    cluster_id TEXT NOT NULL,
+    alias      TEXT NOT NULL,
+    PRIMARY KEY (cluster_id, alias)
+);
+
+CREATE TABLE IF NOT EXISTS wiki_pages (
+    page_type  TEXT NOT NULL,
+    page_id    TEXT NOT NULL,
+    title      TEXT NOT NULL DEFAULT '',
+    path       TEXT NOT NULL UNIQUE,
+    domain     TEXT NOT NULL DEFAULT '',
+    collection TEXT NOT NULL DEFAULT '',
+    PRIMARY KEY (page_type, page_id)
+);
+"""
+
+_BRIDGE_COLUMNS: list[tuple[str, str]] = [
+    ("concept_clusters",  "ALTER TABLE concept_clusters ADD COLUMN wiki_path TEXT NOT NULL DEFAULT ''"),
+    ("concept_clusters",  "ALTER TABLE concept_clusters ADD COLUMN material_count INTEGER NOT NULL DEFAULT 0"),
+    ("cluster_materials", "ALTER TABLE cluster_materials ADD COLUMN confidence REAL NOT NULL DEFAULT 0.0"),
+    ("cluster_materials", "ALTER TABLE cluster_materials ADD COLUMN material_wiki_path TEXT NOT NULL DEFAULT ''"),
+    ("cluster_relations", "ALTER TABLE cluster_relations ADD COLUMN shared_material_ids TEXT NOT NULL DEFAULT '[]'"),
+]
+
+
+def _ensure_bridge_schema(con: sqlite3.Connection) -> None:
+    """Create bridge-only tables and add bridge columns to existing tables if absent."""
+    con.executescript(_BRIDGE_TABLE_DDL)
+    for _table, stmt in _BRIDGE_COLUMNS:
+        try:
+            con.execute(stmt)
+        except sqlite3.OperationalError:
+            pass  # column already exists
+
+
+# ---------------------------------------------------------------------------
+# Bridge population
+# ---------------------------------------------------------------------------
+
+def _build_bridge(con: sqlite3.Connection, clusters: list[dict]) -> dict:
+    """Populate bridge tables from cluster data and materials table.
+
+    Does a full replacement of concept_clusters, cluster_materials,
+    cluster_relations (with all columns including bridge extras), plus
+    concept_cluster_aliases and wiki_pages.
+
+    Returns summary counts.
+    """
+    # Load material info from search.sqlite (domain/collection for path computation)
+    mat_rows = con.execute(
+        "SELECT material_id, domain, collection, title FROM materials"
+    ).fetchall()
+    mat_info: dict[str, dict] = {
+        r["material_id"]: {
+            "domain": r["domain"],
+            "collection": r["collection"],
+            "title": r["title"],
+        }
+        for r in mat_rows
+    }
+
+    # Clear all cluster tables + bridge-only tables; repopulate fully below
+    con.execute("DELETE FROM concept_cluster_aliases")
+    con.execute("DELETE FROM wiki_pages")
+    con.execute("DELETE FROM cluster_materials")
+    con.execute("DELETE FROM cluster_relations")
+    con.execute("DELETE FROM concept_clusters")
+    # Rebuild FTS
+    con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('delete-all')")
+
+    n_aliases = 0
+    n_concept_pages = 0
+    n_material_pages = 0
+    n_cluster_material_links = 0
+
+    # Build material → [cluster_ids] map for cluster_relations + shared_material_ids
+    mat_to_clusters: dict[str, list[str]] = defaultdict(list)
+
+    for c in clusters:
+        cluster_id = c.get("cluster_id", "")
+        if not cluster_id:
+            continue
+
+        slug = c.get("slug", "")
+        canonical_name = c.get("canonical_name", "")
+        aliases: list[str] = c.get("aliases") or []
+        source_concepts: list[dict] = c.get("source_concepts") or []
+        confidence = float(c.get("confidence", 0.0))
+
+        # Collect unique material_ids for this cluster
+        seen_mids: set[str] = set()
+        unique_mids: list[str] = []
+        for sc in source_concepts:
+            mid = sc.get("material_id", "")
+            if mid and mid not in seen_mids:
+                seen_mids.add(mid)
+                unique_mids.append(mid)
+
+        wiki_path = _concept_wiki_path(slug)
+        material_count = len(unique_mids)
+
+        # Full INSERT: concept_clusters (with bridge columns)
+        con.execute(
+            """INSERT OR REPLACE INTO concept_clusters
+               (cluster_id, canonical_name, slug, aliases, confidence, wiki_path, material_count)
+               VALUES (?,?,?,?,?,?,?)""",
+            (
+                cluster_id,
+                canonical_name,
+                slug,
+                json.dumps(aliases, ensure_ascii=False),
+                confidence,
+                wiki_path,
+                material_count,
+            ),
+        )
+
+        # Aliases
+        for alias in aliases:
+            if alias:
+                con.execute(
+                    "INSERT OR IGNORE INTO concept_cluster_aliases VALUES (?,?)",
+                    (cluster_id, alias),
+                )
+                n_aliases += 1
+
+        # Concept wiki page
+        con.execute(
+            """INSERT OR REPLACE INTO wiki_pages
+               (page_type, page_id, title, path, domain, collection)
+               VALUES (?,?,?,?,?,?)""",
+            ("concept", cluster_id, canonical_name, wiki_path, "shared", "concepts"),
+        )
+        n_concept_pages += 1
+
+        # cluster_materials rows (with bridge columns confidence + material_wiki_path)
+        for sc in source_concepts:
+            mid = sc.get("material_id", "")
+            if not mid:
+                continue
+            sc_confidence = float(sc.get("confidence", 0.0))
+            info = mat_info.get(mid, {})
+            mat_wiki_path = _material_wiki_path(
+                info.get("domain", ""), info.get("collection", ""), mid
+            )
+            con.execute(
+                """INSERT OR IGNORE INTO cluster_materials
+                   (cluster_id, material_id, relevance, source_pages, evidence_spans,
+                    confidence, material_wiki_path)
+                   VALUES (?,?,?,?,?,?,?)""",
+                (
+                    cluster_id,
+                    mid,
+                    sc.get("relevance", ""),
+                    json.dumps(sc.get("source_pages") or [], ensure_ascii=False),
+                    json.dumps(sc.get("evidence_spans") or [], ensure_ascii=False),
+                    sc_confidence,
+                    mat_wiki_path,
+                ),
+            )
+            n_cluster_material_links += 1
+            mat_to_clusters[mid].append(cluster_id)
+
+    # Derive cluster_relations from shared material membership (with shared_material_ids)
+    pair_mids: dict[tuple[str, str], list[str]] = defaultdict(list)
+    for mid, cluster_ids in mat_to_clusters.items():
+        unique = list(dict.fromkeys(cluster_ids))
+        for i, a in enumerate(unique):
+            for b in unique[i + 1:]:
+                pair_mids[(a, b)].append(mid)
+                pair_mids[(b, a)].append(mid)
+
+    for (a, b), mids in pair_mids.items():
+        con.execute(
+            """INSERT OR REPLACE INTO cluster_relations
+               (cluster_id, related_cluster_id, shared_material_count, shared_material_ids)
+               VALUES (?,?,?,?)""",
+            (a, b, len(mids), json.dumps(mids, ensure_ascii=False)),
+        )
+
+    # Rebuild FTS after inserting cluster data
+    con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('rebuild')")
+
+    # Material wiki pages
+    for mid, info in mat_info.items():
+        domain = (info.get("domain") or "practice").strip() or "practice"
+        collection = (info.get("collection") or "").strip() or "_general"
+        path = _material_wiki_path(domain, collection, mid)
+        title = info.get("title", "")
+        con.execute(
+            """INSERT OR REPLACE INTO wiki_pages
+               (page_type, page_id, title, path, domain, collection)
+               VALUES (?,?,?,?,?,?)""",
+            ("material", mid, title, path, domain, collection),
+        )
+        n_material_pages += 1
+
+    return {
+        "clusters": len(clusters),
+        "aliases": n_aliases,
+        "cluster_material_links": n_cluster_material_links,
+        "concept_pages": n_concept_pages,
+        "material_pages": n_material_pages,
+        "wiki_pages": n_concept_pages + n_material_pages,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Fingerprinting / stamp
+# ---------------------------------------------------------------------------
+
+def _fingerprint_file(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()[:16]
+
+
+def _read_stamp(stamp_path: Path) -> dict:
+    if not stamp_path.exists():
+        return {}
+    try:
+        return json.loads(stamp_path.read_text())
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _write_stamp(
+    stamp_path: Path,
+    clusters_fp: str,
+    manifest_fp: str,
+    counts: dict,
+) -> None:
+    stamp = {
+        "built_at": datetime.now(timezone.utc).isoformat(),
+        "clusters_fingerprint": clusters_fp,
+        "manifest_fingerprint": manifest_fp,
+        "counts": counts,
+    }
+    stamp_path.parent.mkdir(parents=True, exist_ok=True)
+    stamp_path.write_text(json.dumps(stamp, indent=2, ensure_ascii=False))
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def memory_rebuild(config: dict | None = None) -> dict:
+    """Rebuild memory bridge tables in search.sqlite.
+
+    Reads derived/concept_clusters.jsonl and the materials table, then:
+    - creates concept_cluster_aliases and wiki_pages rows
+    - updates bridge columns on concept_clusters, cluster_materials,
+      cluster_relations
+
+    Returns summary counts dict.
+    Raises FileNotFoundError if index or cluster file is missing.
+    """
+    if config is None:
+        config = load_config()
+
+    root = get_project_root()
+    index_path = get_index_path(config)
+    clusters_path = root / "derived" / "concept_clusters.jsonl"
+    manifest_path = root / "manifests" / "materials.jsonl"
+    stamp_path = root / "derived" / "memory_bridge_stamp.json"
+
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+    if not clusters_path.exists():
+        raise FileNotFoundError(
+            f"Cluster file not found at {clusters_path}. Run `arq cluster` first."
+        )
+
+    clusters: list[dict] = []
+    with open(clusters_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                clusters.append(json.loads(line))
+            except json.JSONDecodeError:
+                continue
+
+    con = sqlite3.connect(str(index_path))
+    con.row_factory = sqlite3.Row
+    try:
+        _ensure_bridge_schema(con)
+        counts = _build_bridge(con, clusters)
+        con.commit()
+    finally:
+        con.close()
+
+    clusters_fp = _fingerprint_file(clusters_path)
+    manifest_fp = _fingerprint_file(manifest_path)
+    _write_stamp(stamp_path, clusters_fp, manifest_fp, counts)
+
+    return counts
+
+
+def memory_ensure(config: dict | None = None) -> tuple[bool, dict]:
+    """Rebuild memory bridge only if stale.
+
+    Returns (rebuilt, counts_dict).
+    When up to date, counts_dict contains {"skipped": True}.
+    """
+    if config is None:
+        config = load_config()
+
+    root = get_project_root()
+    index_path = get_index_path(config)
+    clusters_path = root / "derived" / "concept_clusters.jsonl"
+    manifest_path = root / "manifests" / "materials.jsonl"
+    stamp_path = root / "derived" / "memory_bridge_stamp.json"
+
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+
+    clusters_fp = _fingerprint_file(clusters_path)
+    manifest_fp = _fingerprint_file(manifest_path)
+    stamp = _read_stamp(stamp_path)
+
+    if (
+        clusters_fp
+        and stamp.get("clusters_fingerprint") == clusters_fp
+        and stamp.get("manifest_fingerprint") == manifest_fp
+    ):
+        return False, {"skipped": True}
+
+    counts = memory_rebuild(config)
+    return True, counts

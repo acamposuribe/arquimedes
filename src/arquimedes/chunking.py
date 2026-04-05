@@ -23,14 +23,14 @@ def chunk_pages(
     Returns:
         List of Chunk objects with emphasis flags set.
     """
-    # Build normalized emphasized text spans from annotations, keyed by page
-    emphasized_spans: dict[int, list[str]] = {}
+    # Build normalized annotation spans from annotations, keyed by page: [(ann_id, normalized)]
+    ann_spans: dict[int, list[tuple[str, str]]] = {}
     if annotations:
         for ann in annotations:
             if ann.type in ("highlight", "underline") and ann.quoted_text:
                 normalized = _normalize_for_matching(ann.quoted_text)
                 if len(normalized) >= 10:  # skip very short fragments
-                    emphasized_spans.setdefault(ann.page, []).append(normalized)
+                    ann_spans.setdefault(ann.page, []).append((ann.annotation_id, normalized))
 
     chunks: list[Chunk] = []
     chunk_counter = 0
@@ -43,7 +43,7 @@ def chunk_pages(
 
         # Split into paragraphs first
         paragraphs = _split_paragraphs(text)
-        page_emphasized = emphasized_spans.get(page.page_number, [])
+        page_ann_spans = ann_spans.get(page.page_number, [])
 
         current_text = ""
         current_pages: list[int] = [page.page_number]
@@ -52,11 +52,13 @@ def chunk_pages(
             if len(current_text) + len(para) + 1 > char_limit and current_text:
                 # Emit current chunk
                 chunk_counter += 1
+                overlap_ids = _get_overlap_ids(current_text, page_ann_spans)
                 chunks.append(Chunk(
                     chunk_id=f"chk_{chunk_counter:05d}",
                     text=current_text.strip(),
                     source_pages=list(current_pages),
-                    emphasized=_is_emphasized(current_text, page_emphasized),
+                    emphasized=bool(overlap_ids),
+                    annotation_overlap_ids=overlap_ids,
                 ))
                 current_text = ""
                 current_pages = [page.page_number]
@@ -66,11 +68,13 @@ def chunk_pages(
         # Emit remaining text
         if current_text.strip():
             chunk_counter += 1
+            overlap_ids = _get_overlap_ids(current_text, page_ann_spans)
             chunks.append(Chunk(
                 chunk_id=f"chk_{chunk_counter:05d}",
                 text=current_text.strip(),
                 source_pages=list(current_pages),
-                emphasized=_is_emphasized(current_text, page_emphasized),
+                emphasized=bool(overlap_ids),
+                annotation_overlap_ids=overlap_ids,
             ))
 
     return chunks
@@ -101,6 +105,41 @@ def _normalize_for_matching(text: str) -> str:
     # Collapse whitespace again after artifact removal
     text = re.sub(r"\s+", " ", text)
     return text.strip().lower()
+
+
+def _get_overlap_ids(chunk_text: str, ann_spans: list[tuple[str, str]]) -> list[str]:
+    """Return IDs of annotations whose text overlaps with the chunk.
+
+    Uses two strategies:
+    1. Direct substring match on normalized text (fast, exact)
+    2. Word-sequence overlap (handles leading/trailing artifacts from PDF extraction)
+    """
+    if not ann_spans:
+        return []
+    chunk_normalized = _normalize_for_matching(chunk_text)
+    matched: list[str] = []
+
+    for ann_id, span in ann_spans:
+        # Strategy 1: direct substring
+        if span in chunk_normalized:
+            matched.append(ann_id)
+            continue
+
+        # Strategy 2: sliding word-sequence overlap
+        span_words = span.split()
+        if len(span_words) < 4:
+            continue
+
+        # Try to find a contiguous sequence of at least 4 words from the annotation
+        # in the chunk, allowing for leading/trailing garbage
+        window_size = min(len(span_words), 6)
+        for start in range(len(span_words) - window_size + 1):
+            window = " ".join(span_words[start:start + window_size])
+            if window in chunk_normalized:
+                matched.append(ann_id)
+                break
+
+    return matched
 
 
 def _is_emphasized(chunk_text: str, emphasized_spans: list[str]) -> bool:

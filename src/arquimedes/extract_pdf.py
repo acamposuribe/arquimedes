@@ -123,6 +123,54 @@ def _assign_section_boundaries(pages: list[Page], toc: list[dict]) -> None:
             page.section_boundaries = list(page.headings)
 
 
+def _clean_annotation_quote(text: str) -> str:
+    """Normalize quoted text extracted from PDF annotations.
+
+    PyMuPDF often returns highlight text with stray one-character lines from
+    ligatures / font encoding artifacts. We drop those noise lines, but preserve
+    a leading capital glyph when it is clearly part of the next word.
+    """
+    parts = [line.strip() for line in text.splitlines()]
+    cleaned_parts: list[str] = []
+    pending_prefix = ""
+
+    for i, part in enumerate(parts):
+        if not part:
+            continue
+
+        if len(part) <= 2:
+            if (
+                len(part) == 1
+                and part.isalpha()
+                and part.isupper()
+            ):
+                next_substantial = ""
+                for future in parts[i + 1:]:
+                    future = future.strip()
+                    if future:
+                        next_substantial = future
+                        break
+                if next_substantial and next_substantial[0].islower():
+                    pending_prefix = part
+            continue
+
+        if pending_prefix and part[0].islower():
+            part = pending_prefix + part
+            pending_prefix = ""
+        elif pending_prefix:
+            cleaned_parts.append(pending_prefix)
+            pending_prefix = ""
+
+        cleaned_parts.append(part)
+
+    if pending_prefix:
+        cleaned_parts.append(pending_prefix)
+
+    cleaned = " ".join(cleaned_parts)
+    cleaned = re.sub(r" {2,}", " ", cleaned).strip()
+    return cleaned
+
+
 def extract_annotations(pdf_path: Path) -> list[Annotation]:
     """Extract reader annotations (highlights, notes, marks) from a PDF."""
     doc = fitz.open(str(pdf_path))
@@ -160,13 +208,17 @@ def extract_annotations(pdf_path: Path) -> list[Annotation]:
                     for i in range(0, len(quads), 4):
                         if i + 3 < len(quads):
                             quad = fitz.Quad(quads[i], quads[i + 1], quads[i + 2], quads[i + 3])
-                            quoted_text += page.get_text("text", clip=quad.rect).strip() + " "
+                            clipped = page.get_text("text", clip=quad.rect).strip()
+                            if clipped:
+                                quoted_text += _clean_annotation_quote(clipped) + " "
                 except Exception:
                     pass
             elif annot.rect:
-                quoted_text = page.get_text("text", clip=annot.rect).strip()
+                quoted_text = _clean_annotation_quote(
+                    page.get_text("text", clip=annot.rect).strip()
+                )
 
-            quoted_text = quoted_text.strip()
+            quoted_text = _clean_annotation_quote(quoted_text.strip())
 
             # Get the annotation's comment/note text
             comment = annot.info.get("content", "") or ""

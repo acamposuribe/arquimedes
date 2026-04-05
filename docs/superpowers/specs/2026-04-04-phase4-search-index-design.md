@@ -164,6 +164,7 @@ The fast gate can miss in-place re-enrichment where mtime advances but material 
 ### Behavior
 
 - `arq index ensure` → runs fast gate, optionally hash verify, rebuilds if stale, prints whether rebuilt or skipped
+- On collaborator machines, `arq index ensure` should also run the deterministic Phase 5.5 `arq memory ensure` step after the index is current, so local canonical concept connections remain available without requiring `arq cluster` or `arq compile`
 - Exit code 0 always (staleness is not an error)
 - `arq index rebuild` → unconditional full rebuild, ignores staleness
 
@@ -459,3 +460,4 @@ search:
 - MCP tool wrappers (Phase 7)
 - Web UI search (Phase 8)
 - Auto-rebuild on sync (Phase 9 — `arq sync` calls `arq index ensure`)
+- In later phases, this collaborator sync path should restore both the evidence index and the memory bridge through `arq index ensure` → `arq memory ensure`

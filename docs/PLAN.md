@@ -1,8 +1,10 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phase 4 — Connection model gaps (in progress); Phase 5 next
+> **Status:** Phase 5.5 complete; Phase 6 next
 > **Last updated:** 2026-04-05
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
+> **Phase 5 spec:** [Wiki compiler design](superpowers/specs/2026-04-05-phase5-wiki-compiler-design.md)
+> **Phase 5.5 spec:** [Memory bridge design](superpowers/specs/2026-04-05-phase5-5-memory-bridge-design.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 
 ## Context
@@ -50,7 +52,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
   - [x] Page thumbnails
   - [x] Image files: OCR for scanned documents, pass-through for project/inspiration images
   - [x] Deterministic classification (TF-IDF keywords, rule-based document type)
-  - [ ] **(connection model)** `Chunk.annotation_overlap_ids: list[str]` — store explicit annotation IDs per chunk, not just the boolean emphasis flag (LOW — needed for Phase 5 annotation backlinks; see [connection model plan](superpowers/plans/2026-04-05-connection-model.md))
+  - [x] **(connection model)** `Chunk.annotation_overlap_ids: list[str]` — store explicit annotation IDs per chunk, not just the boolean emphasis flag (LOW — needed for Phase 5 annotation backlinks; see [connection model plan](superpowers/plans/2026-04-05-connection-model.md))
 
 ## Phase 3: LLM Enrichment
 
@@ -69,24 +71,38 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - [x] `arq search` — card-level lexical search
 - [x] `arq search --deep` — multi-layer retrieval (cards → chunks → full text)
 - [x] Faceted search support
-- [x] **(connection model C4.1)** `concepts` + `concepts_fts` table in index — read `concepts.jsonl` during rebuild; add to staleness scope; `IndexStats.concepts`
-- [x] **(connection model C4.2)** `ConceptHit` in search; concepts in content-first pass; concept boost in ranking; `--concept-limit` CLI option
-- [x] **(connection model C4.3)** `arq related <material_id>` — find related materials through shared concepts, keywords, facets, authors; scored and explained connections
-- [x] **(connection model C4.4)** `arq concepts` — list all concept candidates across the collection with material counts; Phase 5 uses this to decide which concept pages to compile
+- [x] **(connection model C4.1)** `concepts` table with `concept_key` normalization (case-fold, plural-strip) + provenance columns (`source_pages`, `evidence_spans`, `confidence`); `concepts_fts` for FTS; `material_keywords` + `material_authors` helper tables for relational joins; staleness scope
+- [x] **(connection model C4.2)** `ConceptHit` in search with provenance; concepts in content-first pass; concept boost in ranking; `--concept-limit` CLI option
+- [x] **(connection model C4.3)** `arq related <material_id>` — shared concepts via `concept_key` JOIN, keywords via `material_keywords` JOIN, authors via `material_authors` JOIN, facets via direct comparison; scored and explained
+- [x] **(connection model C4.4)** `arq concepts` — GROUP BY `concept_key` with counted relevance summary (e.g. "2×high"); Phase 5 uses this to decide which concept pages to compile
 - See [connection model plan](superpowers/plans/2026-04-05-connection-model.md) for full design
 
 ## Phase 5: Wiki Compiler
 
-- [ ] `arq compile` — generate material pages, concept pages, index pages
-- [ ] Incremental compilation (only affected pages)
-- [ ] Cross-referencing with standard markdown links
-- [ ] Wiki tree: practice/, research/, shared/concepts/
+- [x] **(concept clustering)** `arq cluster` — LLM pass over all concepts in the index (keys, titles, evidence); emit `derived/concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; see [Phase 5 spec](superpowers/specs/2026-04-05-phase5-wiki-compiler-design.md)
+- [x] `arq compile` — generate material pages, concept pages (one page per cluster), index pages
+- [x] Incremental compilation (per-material stamps for material pages; global `cluster_stamp` — when clusters change, rebuild **all** concept pages)
+- [x] Cross-referencing with standard markdown links
+- [x] Wiki tree: practice/, research/, shared/concepts/
 - [ ] Define the wiki structures the future server maintainer will own and keep current
+
+## Phase 5.5: Memory Bridge
+
+- [x] `arq memory rebuild` — project canonical concept clusters and wiki identities into SQLite
+- [x] `arq memory ensure` — rebuild bridge tables only when cluster/wiki graph inputs change
+- [x] Add canonical-cluster tables (`concept_clusters` extended, `concept_cluster_aliases`, `wiki_pages`) + bridge columns on `cluster_materials`, `cluster_relations`
+- [x] Make `arq search` query canonical clusters and aliases, not only raw per-material concepts
+- [x] Make `arq related` prefer canonical cluster membership as the strongest signal
+- [x] Ensure the semantic graph is queryable for agents, not only readable in markdown
+- [x] Make `arq compile` auto-run `arq memory rebuild`, so semantic publication updates wiki and machine-queryable memory together
+- [x] Make collaborator-side `arq index ensure` auto-run `arq memory ensure`, so pulled wiki/cluster artifacts regain their canonical connections locally without compile
+- [x] Keep semantic publication server-maintainer-only: collaborators rebuild deterministic local projections, but never re-cluster or re-compile the wiki
 
 ## Phase 6: Wiki Linting & Health Checks
 
+- [ ] **(cluster audit)** LLM review of `derived/concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals
 - [ ] Deterministic checks: broken links, orphaned materials, missing metadata, stale enrichment, index drift, duplicates
-- [ ] LLM-driven checks: inconsistent data, missing connections, concept candidates, impute missing facets, research questions, coverage gaps
+- [ ] LLM-driven checks: missing cross-references, contradictions across materials, under-connected materials, unanswered research questions from weakly connected clusters
 - [ ] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --report`, `arq lint --fix`
 - [ ] Provenance on every LLM suggestion
 - [ ] Define the health-check and maintenance behaviors the future server maintainer will run automatically
@@ -108,10 +124,12 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - [ ] `arq watch` — file watcher with configurable backend (fsevents | poll)
 - [ ] Debouncing + batching (10s window, single commit per batch)
 - [ ] `arq sync` — auto-pull daemon for collaborators with `arq index ensure` after pull
+- [ ] `arq sync` should inherit the memory bridge automatically via `arq index ensure` → `arq memory ensure`
 - [ ] `arq lint --quick` after each compile, `arq lint --full` on weekly schedule
 - [ ] launchd integration for both watch and sync
 - [ ] Auto-commit + push pipeline
 - [ ] Always-on maintainer flow: ingest → extract-raw → enrich → compile → lint/index → commit/push
+- [ ] **Material removal cascade**: when a raw file is deleted from iCloud, the watcher should remove the manifest entry, extracted artifacts, wiki pages, concept cluster references, and rebuild the index. The full pipeline must be reversible.
 
 ---
 
@@ -144,9 +162,9 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - [ ] Enrich: `arq enrich <id>` → meta.json gains summary/keywords/facets with provenance, chunks gain summaries
 - [ ] Search: `arq search "thermal mass"` → relevant cards with correct facets
 - [ ] Deep search: `arq search --deep "thermal mass"` → multi-layer drill to chunk text
-- [ ] Compile: `arq compile` → wiki pages with links and cross-references
+- [ ] Compile: `arq compile` → wiki pages with links and cross-references, plus memory bridge rebuilt
 - [ ] Watch: `arq watch` + drop file → auto-pipeline with debounced batch commit
-- [ ] Sync: second device `arq sync` → git pull + `arq index ensure` auto-rebuilds local index
+- [ ] Sync: second device `arq sync` → git pull + `arq index ensure` auto-rebuilds local index and local memory bridge
 - [ ] Web UI: `arq serve` → browse, search, view materials, open figures
 - [ ] MCP: agent connects → search and read tools work
 - [ ] Lint: `arq lint` → catches broken links, missing metadata

@@ -1,0 +1,383 @@
+# Arquimedes — Phase 5: Wiki Compiler Design
+
+> **Status:** Draft
+> **Date:** 2026-04-05
+> **Related specs:** [Full system design](2026-04-04-arquimedes-knowledge-system-design.md), [Connection model](2026-04-05-connection-model.md), [Phase 3 enrichment](2026-04-04-phase3-enrichment-design.md), [Phase 4 search index](2026-04-04-phase4-search-index-design.md)
+> **Plan:** [PLAN.md](../../PLAN.md)
+
+## Purpose
+
+Phase 5 turns Arquimedes from a searchable archive into an LLM-maintained wiki. It promotes the structural, semantic, and retrieval connections built in Phases 2–4 into durable, navigable markdown pages.
+
+There are two jobs:
+
+1. **Concept clustering** — one LLM pass to group per-material concept candidates into canonical cross-collection concepts
+2. **Page compilation** — deterministic rendering of wiki pages from enriched artifacts + cluster data
+
+The LLM is used once (clustering). Everything else is templates and data assembly.
+
+## Design Principles
+
+### One LLM call for clustering, zero for pages
+
+Concept clustering requires language understanding — "archival habitat" and "archive as architectural space" may describe overlapping ideas. This is genuine ambiguity. Use the LLM.
+
+Page generation is mechanical: slot enriched fields into templates, resolve links, write markdown. No LLM needed. Deterministic first.
+
+### The cluster file is the handoff point
+
+`derived/concept_clusters.jsonl` is the single artifact that connects clustering to compilation. Clustering writes it; compilation reads it; linting (Phase 6) audits it. Everything flows through this file.
+
+### Incremental by default
+
+The compiler tracks what changed and only rewrites affected pages. A new material triggers recompilation of its material page, any concept pages whose clusters it belongs to, and index pages. Unchanged materials and clusters are skipped.
+
+### Wiki is generated, not hand-edited
+
+The `wiki/` tree is fully owned by the compiler. Manual edits will be overwritten on the next compile. This matches the Karpathy pattern: "You read it; the LLM writes it."
+
+---
+
+## Part 1: Concept Clustering (`arq cluster`)
+
+### Input
+
+All concept candidates from all materials. Source: `concepts` table in the search index (already populated by Phase 4 from `meta.json` concept fields).
+
+```sql
+SELECT concept_name, concept_key, material_id, relevance,
+       source_pages, evidence_spans, confidence
+FROM concepts
+ORDER BY concept_key
+```
+
+With the current library (2 materials, 22 concepts), this is a small payload. At scale (hundreds of materials, thousands of concepts), batching or chunking may be needed — but design for the simple case first.
+
+### Algorithm
+
+1. **Load** all concept records from the index into a flat list
+2. **Pre-group** by exact `concept_key` match (free, deterministic — merge case/plural variants)
+3. **Build prompt** listing all unique concept keys with their material titles, relevance, and evidence spans. Ask the LLM to group semantically equivalent concepts into clusters, choose a canonical name, and assign a confidence. Evidence spans are critical — for scholarly material, concept names alone are often ambiguous; the quoted passages clarify whether two similarly-named concepts actually describe the same intellectual territory.
+4. **Parse** LLM response into cluster records
+5. **Write** `derived/concept_clusters.jsonl`
+
+### Prompt design
+
+The prompt must be efficient. Architecture concept lists are small relative to context windows. A single call should handle hundreds of concepts.
+
+System prompt:
+```
+You are an architecture research librarian. You are grouping concept
+candidates from multiple academic papers and practice documents into
+canonical concept clusters.
+
+Rules:
+- Group concepts that describe the same intellectual territory,
+  even if phrased differently
+- Choose the clearest, most specific canonical name for each cluster
+- Concepts that are genuinely distinct should remain separate clusters
+  (do not over-merge)
+- A concept appearing in only one material is still a valid cluster
+- Return valid JSON, no markdown fences
+```
+
+User message: the concept table formatted as a compact list, including for each concept: `concept_key`, material title, relevance, and a short evidence excerpt (first evidence span, truncated to ~100 chars). This keeps the prompt compact while giving the LLM enough semantic context to judge merges. Material IDs are included for provenance but carry no meaning for the LLM — material titles and evidence do the work.
+
+Output schema:
+```json
+[
+  {
+    "cluster_id": "concept_0001",
+    "canonical_name": "archive as architectural space",
+    "aliases": ["archive as architectural space", "archival habitat"],
+    "source_concepts": [
+      {"material_id": "bbf97c1aae06", "concept_name": "archival habitat"},
+      {"material_id": "b4f8dc3a028c", "concept_name": "Archive as architectural space"}
+    ],
+    "confidence": 0.85
+  }
+]
+```
+
+The `material_ids` field is derived from `source_concepts` — no need to ask the LLM to produce it redundantly.
+
+**On merge caution:** The examples in this spec intentionally cluster only concepts that are clearly about the same thing ("archival habitat" and "archive as architectural space" both describe the spatial/built dimension of archives). Adjacent but distinct concepts (e.g. "embodied archives and archivists as knowledge holders") should remain separate clusters even if thematically related. The system prompt reinforces this: "do not over-merge."
+
+### Staleness and re-clustering
+
+Clustering is re-run when:
+- A material is added, removed, or re-enriched (concepts changed)
+- Force flag is passed (`arq cluster --force`)
+
+Staleness is tracked via a fingerprint over everything the prompt consumes: concept keys, material IDs, material titles, relevance, evidence spans, and confidence. If the fingerprint matches the one stored in `derived/cluster_stamp.json`, clustering is skipped. This ensures that any change to the LLM's input — whether a new concept, changed evidence, or a corrected material title — triggers re-clustering.
+
+### Output: `derived/concept_clusters.jsonl`
+
+One JSON object per line:
+```json
+{"cluster_id": "concept_0001", "canonical_name": "archive as architectural space", "slug": "archive-as-architectural-space", "aliases": ["archive as architectural space", "archival habitat"], "material_ids": ["bbf97c1aae06", "b4f8dc3a028c"], "source_concepts": [{"material_id": "bbf97c1aae06", "concept_name": "archival habitat", "relevance": "high", "source_pages": [1, 3], "evidence_spans": ["the archive as a built environment..."], "confidence": 0.9}, {"material_id": "b4f8dc3a028c", "concept_name": "Archive as architectural space", "relevance": "high", "source_pages": [2, 5], "evidence_spans": ["the spatial dimension of archival practice..."], "confidence": 0.88}], "confidence": 0.85}
+```
+
+Fields:
+- `cluster_id` — sequential `concept_NNNN`
+- `canonical_name` — LLM-chosen display name
+- `slug` — stable page path, derived from `canonical_name` (lowercased, spaces to hyphens, non-alphanum stripped)
+- `aliases` — all concept names (including canonical) that map to this cluster
+- `material_ids` — derived from `source_concepts`
+- `source_concepts` — `[{material_id, concept_name, relevance, source_pages, evidence_spans, confidence}]` — full provenance from the concepts table, carried through so concept pages can render evidence without re-querying
+- `confidence` — LLM's confidence in the grouping (0.0–1.0)
+
+### `arq cluster` CLI
+
+```
+arq cluster [--force]
+```
+
+- Reads concepts from the search index
+- Runs LLM clustering pass
+- Writes `derived/concept_clusters.jsonl` + `derived/cluster_stamp.json`
+- Reports: N concepts → M clusters (K multi-material)
+
+---
+
+## Part 2: Wiki Compilation (`arq compile`)
+
+### Page types
+
+The compiler generates four kinds of pages:
+
+#### 1. Material pages
+
+Location: `wiki/{domain}/{collection}/{material_id}.md` (or `wiki/{domain}/_general/{material_id}.md` for uncollected materials)
+
+Content (in order):
+1. **Title** as H1
+2. **Metadata block** — authors, year, document_type, domain, collection
+3. **Summary** — from `meta.json` enriched summary
+4. **Key concepts** — list of concepts from this material, each linking to its concept page
+5. **Architecture facets** — non-empty facets as a definition list
+6. **Figures** — substantive figures with descriptions, thumbnails, visual_type
+7. **Reader annotations** — highlighted passages and user notes (from `annotations.jsonl`)
+8. **Related materials** — from `arq related` logic (shared concepts via clusters, shared keywords, shared authors, shared facets)
+9. **Source** — link to original file, page count, citation info
+
+#### 2. Concept pages
+
+Location: `wiki/shared/concepts/{slug}.md` where `slug` is stored in the cluster record (derived from `canonical_name`: lowercased, spaces to hyphens, non-alphanum stripped). Using `slug` from the cluster — not from any single `concept_key` — ensures stability when a cluster merges multiple keys under one LLM-chosen canonical name.
+
+Content (in order):
+1. **Canonical name** as H1
+2. **Aliases** — if any, listed below the title
+3. **Overview** — one sentence: "This concept appears in N materials."
+4. **By material** — for each entry in `source_concepts`:
+   - Material title (linking to material page)
+   - Relevance level from `source_concepts[].relevance`
+   - Evidence: `source_concepts[].evidence_spans` (quoted, with page refs from `source_concepts[].source_pages`)
+5. **Related concepts** — other clusters that share materials with this one
+
+All per-material evidence is read directly from the cluster file — no index query needed at compile time.
+
+#### 3. Index pages
+
+Location: `wiki/_index.md` (master), `wiki/{domain}/_index.md`, `wiki/{domain}/{collection}/_index.md`, `wiki/shared/concepts/_index.md`
+
+Content:
+- Page count, recent additions
+- Alphabetical listing of pages in that directory with one-line summaries
+- The master `_index.md` includes domain stats and concept count
+
+#### 4. Glossary stub
+
+Location: `wiki/shared/glossary/_index.md`
+
+A simple alphabetical listing of all canonical concept names linking to their concept pages. No definitions — those live on concept pages. This is a navigation aid.
+
+### Compilation algorithm
+
+```
+compile(force=False):
+    1. Load concept clusters from derived/concept_clusters.jsonl
+    2. Load all materials from extracted/*/meta.json
+    3. Determine which pages need recompilation:
+       a. If force: rebuild everything
+       b. Else: compare extracted_snapshot hashes per material
+          and cluster_stamp against last compile stamp
+    4. For each changed material: render material page
+    5. If cluster_stamp changed: render ALL concept pages
+       (global stamp — no per-cluster tracking)
+    6. Rebuild memory bridge from the compiled wiki / cluster graph
+    7. Render index pages (always, cheap)
+    8. Remove orphan pages (materials deleted from manifest)
+    9. Write compile stamp to derived/compile_stamp.json
+```
+
+### Incremental tracking
+
+`derived/compile_stamp.json` stores:
+```json
+{
+  "compiled_at": "2026-04-05T14:00:00Z",
+  "material_stamps": {
+    "bbf97c1aae06": "<hash of meta.json + chunks.jsonl + annotations.jsonl + figures/*>",
+    "b4f8dc3a028c": "<hash>"
+  },
+  "cluster_stamp": "<hash of concept_clusters.jsonl>"
+}
+```
+
+A material page is recompiled when its stamp changes. All concept pages are recompiled when `cluster_stamp` changes (global — per-cluster tracking is unnecessary at current scale and would add complexity without meaningful savings).
+
+### Related materials logic
+
+For the "Related materials" section on material pages, the compiler uses the same signals as `arq related` but reads from the index:
+
+1. **Shared clusters** — materials in the same concept cluster (strongest signal)
+2. **Shared keywords** — via `material_keywords` table
+3. **Shared authors** — via `material_authors` table
+4. **Shared facets** — matching non-empty facet values
+
+Each related material shows the connection reason. Limit: 10 related materials per page.
+
+### Link format
+
+Standard markdown links: `[Thermal Mass](../../shared/concepts/thermal-mass.md)`. Relative paths from the page's location.
+
+No Obsidian-specific syntax (`[[...]]`). Compatible with GitHub, web UI, and Obsidian.
+
+### Template approach
+
+Pages are rendered from Python string templates (f-strings or `str.format`). No Jinja dependency — these are simple, structured pages. If templates grow complex, Jinja can be added later.
+
+### Orphan removal
+
+If a material is no longer in the manifest, its wiki page is deleted. If a concept cluster is removed (no longer in `concept_clusters.jsonl`), its concept page is deleted. Orphan detection runs on every compile.
+
+---
+
+## Part 3: CLI
+
+### `arq cluster`
+
+```
+arq cluster [--force]
+```
+
+Runs concept clustering only. Writes `derived/concept_clusters.jsonl`.
+
+### `arq compile`
+
+```
+arq compile [--full] [--force-cluster]
+```
+
+- Default: incremental compile (skip unchanged materials/clusters)
+- `--full`: recompile everything
+- `--force-cluster`: re-run clustering before compiling (equivalent to `arq cluster --force && arq compile`)
+
+`arq compile` runs `arq cluster` implicitly if `derived/concept_clusters.jsonl` is missing or stale (same staleness check). It does not re-cluster if clusters are fresh.
+
+After successful page generation, `arq compile` should automatically run the deterministic Phase 5.5 memory projection so the machine-queryable graph stays synchronized with the published wiki. This adds no extra LLM work; it only rebuilds local bridge tables from cluster/wiki artifacts.
+
+### Output
+
+```
+$ arq compile
+Clustering: 22 concepts → 15 clusters (3 multi-material)
+Compiling:
+  2 material pages (2 new, 0 updated)
+  15 concept pages (15 new)
+  5 index pages
+Done. wiki/ updated.
+```
+
+---
+
+## Part 4: File Layout
+
+```
+derived/
+  concept_clusters.jsonl     # cluster output
+  cluster_stamp.json         # clustering staleness fingerprint
+  compile_stamp.json         # compilation staleness fingerprint
+
+wiki/
+  _index.md                  # master index
+  practice/
+    _index.md
+    regulations/
+      _index.md
+    materials/
+      _index.md
+    precedents/
+      _index.md
+    technical/
+      _index.md
+  research/
+    _index.md
+    papers/
+      _index.md
+      bbf97c1aae06.md       # material page
+    lectures/
+      _index.md
+    theory/
+      _index.md
+  shared/
+    concepts/
+      _index.md
+      archival-habitat.md    # concept page
+      ...
+    glossary/
+      _index.md
+```
+
+The `derived/` directory is committed (clusters are a shared artifact). The `wiki/` directory is committed (it's the whole point).
+
+---
+
+## Part 5: Implementation Order
+
+```
+C5.1  Cluster module + arq cluster CLI
+  ↓
+C5.2  Material page compiler
+  ↓
+C5.3  Concept page compiler
+  ↓
+C5.4  Index page compiler + glossary
+  ↓
+C5.5  arq compile CLI (orchestrator + incremental tracking)
+  ↓
+C5.6  Orphan removal
+```
+
+C5.1 is the only step that uses the LLM. The rest are deterministic.
+
+### Dependency: search index must exist
+
+`arq compile` requires the search index. If it's missing, it runs `arq index ensure` first. This keeps the compile command self-contained for the server agent flow: `arq ingest → arq extract → arq compile` (compile handles index + cluster + pages + memory projection).
+
+---
+
+## Part 6: Testing Strategy
+
+One test file: `tests/test_compile.py`. All tests use in-memory fixtures (fake `extracted/` trees and index data). No LLM calls in tests — the clustering LLM response is mocked.
+
+Test cases:
+
+1. **Cluster parsing** — mock LLM returns valid JSON → `concept_clusters.jsonl` written correctly
+2. **Material page rendering** — given enriched meta.json + chunks + annotations + figures → material page contains expected sections (title, summary, concepts, facets, annotations, related)
+3. **Concept page rendering** — given cluster with 2 materials → concept page lists both with evidence
+4. **Index pages** — master index lists correct material/concept counts
+5. **Incremental skip** — unchanged material → page not rewritten (mtime check)
+6. **Orphan removal** — material removed from manifest → wiki page deleted
+7. **Staleness** — cluster fingerprint changes → re-clustering triggered
+
+---
+
+## Part 7: What This Phase Does NOT Do
+
+- **No LLM for page prose.** Pages are assembled from existing enriched fields. The LLM wrote the summaries, keywords, and descriptions in Phase 3. Phase 5 just arranges them.
+- **No embedding-based clustering.** The clustering prompt receives all concepts as text. If scale demands it later, a pre-filtering step with embeddings can be added, but it's unnecessary for hundreds of concepts.
+- **No manual wiki editing support.** The compiler overwrites `wiki/`. If you want user-authored pages alongside generated ones, that's a future concern (a `wiki/custom/` directory excluded from compile, perhaps).
+- **No web UI.** That's Phase 8. The wiki is markdown files browsable in any editor, GitHub, or Obsidian.
+- **No cluster auditing.** That's Phase 6 (lint). Phase 5 trusts its own clustering output.

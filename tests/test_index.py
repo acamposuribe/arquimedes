@@ -14,6 +14,7 @@ from arquimedes.index import (
     _compute_extracted_snapshot,
     ensure_index,
     rebuild_index,
+    index_clusters,
 )
 
 
@@ -397,16 +398,23 @@ class TestConceptsIndexed:
         import sqlite3
         mat_dir = _add_material(repo)
         _write_concepts(mat_dir, [
-            {"concept_name": "archival habitat", "relevance": "high"},
+            {"concept_name": "archival habitat", "relevance": "high",
+             "provenance": {"source_pages": [2, 3], "evidence_spans": ["the archival habitat"], "confidence": 1.0}},
         ])
         rebuild_index()
         con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
-        rows = con.execute("SELECT concept_name, material_id, relevance FROM concepts").fetchall()
+        rows = con.execute(
+            "SELECT concept_name, material_id, concept_key, relevance, source_pages, evidence_spans, confidence FROM concepts"
+        ).fetchall()
         con.close()
         assert len(rows) == 1
         assert rows[0][0] == "archival habitat"
         assert rows[0][1] == "aabbcc112233"
-        assert rows[0][2] == "high"
+        assert rows[0][2] == "archival habitat"  # concept_key (normalized)
+        assert rows[0][3] == "high"
+        assert "[2, 3]" in rows[0][4]  # source_pages JSON
+        assert "the archival habitat" in rows[0][5]  # evidence_spans JSON
+        assert rows[0][6] == 1.0  # confidence
 
     def test_concepts_fts_searchable(self, repo):
         import sqlite3
@@ -431,7 +439,7 @@ class TestConceptsIndexed:
     def test_concept_deduplication_by_primary_key(self, repo):
         import sqlite3
         mat_dir = _add_material(repo)
-        # Same concept_name + material_id twice — INSERT OR REPLACE deduplicates
+        # Same concept_key (after normalization) + material_id — INSERT OR REPLACE deduplicates
         _write_concepts(mat_dir, [
             {"concept_name": "shared concept", "relevance": "high"},
             {"concept_name": "shared concept", "relevance": "medium"},
@@ -441,6 +449,58 @@ class TestConceptsIndexed:
         count = con.execute("SELECT COUNT(*) FROM concepts").fetchone()[0]
         con.close()
         assert count == 1
+
+    def test_concept_key_normalization_case(self, repo):
+        """Case variants map to same concept_key, so only one row per material."""
+        import sqlite3
+        mat_dir = _add_material(repo)
+        _write_concepts(mat_dir, [
+            {"concept_name": "Archival Habitat", "relevance": "high"},
+            {"concept_name": "archival habitat", "relevance": "medium"},
+        ])
+        rebuild_index()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        count = con.execute("SELECT COUNT(*) FROM concepts").fetchone()[0]
+        key = con.execute("SELECT concept_key FROM concepts").fetchone()[0]
+        con.close()
+        assert count == 1
+        assert key == "archival habitat"
+
+    def test_concept_key_normalization_plural(self, repo):
+        """Trailing plural on last word normalizes to same concept_key."""
+        import sqlite3
+        mat_dir = _add_material(repo)
+        _write_concepts(mat_dir, [
+            {"concept_name": "archival habitats", "relevance": "high"},
+            {"concept_name": "archival habitat", "relevance": "medium"},
+        ])
+        rebuild_index()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        count = con.execute("SELECT COUNT(*) FROM concepts").fetchone()[0]
+        con.close()
+        assert count == 1
+
+    def test_material_keywords_populated(self, repo):
+        import sqlite3
+        mat_dir = _add_material(repo)
+        rebuild_index()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        rows = con.execute("SELECT keyword FROM material_keywords WHERE material_id = 'aabbcc112233'").fetchall()
+        con.close()
+        keywords = {r[0] for r in rows}
+        # Default _add_material writes keywords=["test keyword"]
+        assert len(keywords) >= 1
+
+    def test_material_authors_populated(self, repo):
+        import sqlite3
+        mat_dir = _add_material(repo)
+        rebuild_index()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        rows = con.execute("SELECT author FROM material_authors WHERE material_id = 'aabbcc112233'").fetchall()
+        con.close()
+        # Default _add_material writes authors=["Author One"]
+        assert len(rows) >= 1
+        assert rows[0][0] == "author one"  # normalized to lowercase
 
     def test_staleness_when_concepts_changed(self, repo):
         mat_dir = _add_material(repo)
@@ -461,4 +521,235 @@ class TestConceptsIndexed:
         ])
         rebuilt, _ = ensure_index()
         assert rebuilt is True
+
+
+# ---------------------------------------------------------------------------
+# Cluster graph indexing
+# ---------------------------------------------------------------------------
+
+def _write_clusters(root: Path, clusters: list[dict]) -> None:
+    derived = root / "derived"
+    derived.mkdir(exist_ok=True)
+    lines = "\n".join(json.dumps(c) for c in clusters) + "\n"
+    (derived / "concept_clusters.jsonl").write_text(lines)
+
+
+_SAMPLE_CLUSTERS = [
+    {
+        "cluster_id": "concept_0001",
+        "canonical_name": "Archive as Architectural Space",
+        "slug": "archive-as-architectural-space",
+        "aliases": ["archival habitat", "archive as space"],
+        "material_ids": ["aabbcc112233", "ddeeff445566"],
+        "source_concepts": [
+            {
+                "material_id": "aabbcc112233",
+                "concept_name": "archival habitat",
+                "relevance": "high",
+                "source_pages": [2, 3],
+                "evidence_spans": ["the archive as built environment"],
+                "confidence": 0.95,
+            },
+            {
+                "material_id": "ddeeff445566",
+                "concept_name": "archive as space",
+                "relevance": "medium",
+                "source_pages": [1],
+                "evidence_spans": ["spatial dimension of archives"],
+                "confidence": 0.8,
+            },
+        ],
+        "confidence": 0.9,
+    },
+    {
+        "cluster_id": "concept_0002",
+        "canonical_name": "Memory and Place",
+        "slug": "memory-and-place",
+        "aliases": ["memory palace", "spatial memory"],
+        "material_ids": ["aabbcc112233"],
+        "source_concepts": [
+            {
+                "material_id": "aabbcc112233",
+                "concept_name": "memory palace",
+                "relevance": "medium",
+                "source_pages": [5],
+                "evidence_spans": ["structures of collective memory"],
+                "confidence": 0.7,
+            },
+        ],
+        "confidence": 0.85,
+    },
+]
+
+
+class TestClusterGraphIndexing:
+    """concept_clusters, cluster_materials, cluster_relations tables."""
+
+    def test_index_clusters_populates_tables(self, repo):
+        """index_clusters() writes all three cluster tables."""
+        import sqlite3
+        _add_material(repo, "aabbcc112233")
+        _add_material(repo, "ddeeff445566")
+        _write_manifest(repo, ["aabbcc112233", "ddeeff445566"])
+        rebuild_index()
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+
+        count = index_clusters()
+        assert count == 2
+
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        clusters = con.execute("SELECT cluster_id, canonical_name, slug FROM concept_clusters ORDER BY cluster_id").fetchall()
+        assert len(clusters) == 2
+        assert clusters[0][1] == "Archive as Architectural Space"
+        assert clusters[0][2] == "archive-as-architectural-space"
+
+        members = con.execute("SELECT cluster_id, material_id, relevance FROM cluster_materials ORDER BY cluster_id, material_id").fetchall()
+        assert len(members) == 3  # concept_0001 has 2, concept_0002 has 1
+        assert ("concept_0001", "aabbcc112233", "high") in members
+        assert ("concept_0001", "ddeeff445566", "medium") in members
+        assert ("concept_0002", "aabbcc112233", "medium") in members
+        con.close()
+
+    def test_cluster_relations_derived_from_shared_material(self, repo):
+        """Clusters sharing a material get mutual cluster_relations rows."""
+        import sqlite3
+        _add_material(repo)
+        rebuild_index()
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        index_clusters()
+
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        rels = con.execute(
+            "SELECT cluster_id, related_cluster_id, shared_material_count FROM cluster_relations"
+        ).fetchall()
+        con.close()
+
+        # concept_0001 and concept_0002 share aabbcc112233 → 2 symmetric rows
+        assert len(rels) == 2
+        assert ("concept_0001", "concept_0002", 1) in rels
+        assert ("concept_0002", "concept_0001", 1) in rels
+
+    def test_cluster_fts_searchable(self, repo):
+        """concept_clusters_fts returns matches on canonical_name and aliases."""
+        import sqlite3
+        _add_material(repo)
+        rebuild_index()
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        index_clusters()
+
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        # Search by canonical name
+        rows = con.execute(
+            "SELECT cluster_id FROM concept_clusters_fts WHERE concept_clusters_fts MATCH 'architectural'"
+        ).fetchall()
+        assert any(r[0] == "concept_0001" for r in rows)
+
+        # Search by alias
+        rows = con.execute(
+            "SELECT cluster_id FROM concept_clusters_fts WHERE concept_clusters_fts MATCH 'memory'"
+        ).fetchall()
+        assert any(r[0] == "concept_0002" for r in rows)
+        con.close()
+
+    def test_index_clusters_idempotent(self, repo):
+        """Calling index_clusters() twice leaves exactly the expected rows."""
+        import sqlite3
+        _add_material(repo)
+        rebuild_index()
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        index_clusters()
+        index_clusters()  # second call should replace, not duplicate
+
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        count = con.execute("SELECT COUNT(*) FROM concept_clusters").fetchone()[0]
+        con.close()
+        assert count == 2
+
+    def test_rebuild_index_includes_clusters(self, repo):
+        """rebuild_index() auto-populates clusters if derived/concept_clusters.jsonl exists."""
+        import sqlite3
+        _add_material(repo)
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        rebuild_index()
+
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        count = con.execute("SELECT COUNT(*) FROM concept_clusters").fetchone()[0]
+        con.close()
+        assert count == 2
+
+    def test_staleness_when_clusters_changed(self, repo):
+        """ensure_index() rebuilds when concept_clusters.jsonl changes."""
+        import sqlite3
+        _add_material(repo)
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        ensure_index()
+
+        # Backdate index
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        con.execute("UPDATE index_state SET built_at = '2020-01-01T00:00:00+00:00' WHERE id = 1")
+        con.commit()
+        con.close()
+
+        # Write different clusters
+        _write_clusters(repo, [_SAMPLE_CLUSTERS[0]])  # remove one cluster
+        rebuilt, _ = ensure_index()
+        assert rebuilt is True
+
+
+class TestEnsureIndexAndMemory:
+    """ensure_index_and_memory() is the collaborator recovery path."""
+
+    def test_returns_four_values(self, repo):
+        _add_material(repo)
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        from arquimedes.index import ensure_index_and_memory
+        result = ensure_index_and_memory()
+        assert len(result) == 4
+
+    def test_index_rebuilt_when_stale(self, repo):
+        from arquimedes.index import ensure_index_and_memory
+        _add_material(repo)
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        index_rebuilt, stats, _mb, _mc = ensure_index_and_memory()
+        assert index_rebuilt is True
+        assert stats is not None
+        assert stats.materials == 1
+
+    def test_memory_rebuilt_on_first_run(self, repo):
+        from arquimedes.index import ensure_index_and_memory
+        _add_material(repo)
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        _index_rebuilt, _stats, memory_rebuilt, memory_counts = ensure_index_and_memory()
+        assert memory_rebuilt is True
+        assert memory_counts["clusters"] == 2
+
+    def test_memory_skipped_when_current(self, repo):
+        from arquimedes.index import ensure_index_and_memory, rebuild_index
+        _add_material(repo)
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        rebuild_index()
+        # First ensure writes the memory stamp
+        ensure_index_and_memory()
+        # Second call: index current, memory current
+        _index_rebuilt, _stats, memory_rebuilt, memory_counts = ensure_index_and_memory()
+        assert memory_rebuilt is False
+        assert memory_counts.get("skipped") is True
+
+    def test_no_cluster_file_does_not_raise(self, repo):
+        """Collaborator without cluster file — index rebuilds, memory bridge skips gracefully."""
+        from arquimedes.index import ensure_index_and_memory
+        _add_material(repo)
+        # No cluster file — memory_ensure raises FileNotFoundError internally, handled
+        _index_rebuilt, _stats, memory_rebuilt, memory_counts = ensure_index_and_memory()
+        assert memory_rebuilt is False
+
+    def test_no_lllm_call_required(self, repo, monkeypatch):
+        """Collaborator path must work without any LLM call."""
+        from arquimedes.index import ensure_index_and_memory
+        import arquimedes.enrich_llm as llm_mod
+        monkeypatch.setattr(llm_mod, "make_cli_llm_fn", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("LLM called")))
+        _add_material(repo)
+        _write_clusters(repo, _SAMPLE_CLUSTERS)
+        # Must not raise
+        ensure_index_and_memory()
 

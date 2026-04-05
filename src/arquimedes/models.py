@@ -324,6 +324,7 @@ class Chunk:
     text: str
     source_pages: list[int] = field(default_factory=list)
     emphasized: bool = False  # true if chunk overlaps annotated/highlighted spans
+    annotation_overlap_ids: list[str] = field(default_factory=list)  # IDs of overlapping annotations
 
     # Enriched (added by enrich step)
     summary: EnrichedField | None = None
@@ -336,6 +337,7 @@ class Chunk:
             "text": self.text,
             "source_pages": self.source_pages,
             "emphasized": self.emphasized,
+            "annotation_overlap_ids": self.annotation_overlap_ids,
         }
         if self.summary is not None:
             result["summary"] = self.summary.to_dict()
@@ -352,6 +354,7 @@ class Chunk:
             text=data["text"],
             source_pages=data.get("source_pages", []),
             emphasized=data.get("emphasized", False),
+            annotation_overlap_ids=data.get("annotation_overlap_ids", []),
         )
         if "summary" in data:
             chunk.summary = EnrichedField.from_dict(data["summary"])

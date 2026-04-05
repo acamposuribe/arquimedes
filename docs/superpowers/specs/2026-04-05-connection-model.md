@@ -16,12 +16,28 @@ Connections should **not** appear for the first time at lint.
 
 Instead:
 - **Phase 2** creates structural anchors
-- **Phase 3** creates semantic hooks
-- **Phase 4** creates retrieval-time associative links
-- **Phase 5** materializes selected links into durable wiki structure
-- **Phase 6** audits, strengthens, and expands the network
+- **Phase 3** creates semantic hooks (local concept candidates per material)
+- **Phase 4** creates retrieval-time associative links (deterministic, inspectable, cheap)
+- **Phase 5** clusters concept candidates into canonical concepts and materializes pages
+- **Phase 6** audits, splits, merges, and expands those clusters
 
 Lint is a health-check and improvement pass over a graph that already exists in weaker form. It is not the origin of the graph.
+
+### Phase 4 determinism boundary
+
+Phase 4 stays **deterministic, cheap, and inspectable**. It connects materials through structural signals — shared normalized keywords, shared facets, shared authors, and normalized concept-key matches (case/plural variants of exactly the same phrase). It does not synthesize semantic equivalences across different phrasings.
+
+Two papers may both discuss "the archive as built space" in very different words. Phase 4 cannot find that connection. Phase 5 can.
+
+This boundary is intentional. An `arq index rebuild` must mean "deterministic local rebuild from existing artifacts." It must never trigger an LLM call.
+
+### On concept clustering
+
+The LLM enrichment pipeline (Phase 3) emits concept candidates independently per material. Different materials describing the same intellectual territory will use different phrasings. Exact- and normalized-string matching cannot bridge this gap.
+
+Semantic concept clustering — inferring equivalences across phrasings, choosing canonical names, assigning aliases, grouping contributing materials — is compile-shaped work, not index-shaped. It belongs in Phase 5.
+
+The target artifact is `derived/concept_clusters.jsonl`. `arq cluster` writes it (first-class command, see [Phase 5 spec](2026-04-05-phase5-wiki-compiler-design.md)); `arq compile` consumes it for concept pages; Phase 6 lint audits and refines it. Each cluster record carries a `slug` (for stable page paths), full `source_concepts` provenance (relevance, evidence spans, confidence per material), and LLM grouping confidence.
 
 ## Connection Types
 
@@ -161,6 +177,37 @@ Examples:
 
 Phase 3 should avoid overstating cross-material relationships as facts. It should emit rich local metadata and candidates, but not yet formalize them as wiki structure.
 
+### Concept name normalization
+
+Different materials may emit the same concept with surface variation: `Archival Habitat`, `archival habitat`, `archival habitats`. If these are stored and grouped by raw name, the connection graph fragments into false singletons.
+
+**Strategy:** At index time, each concept_name is normalized to a `concept_key` (lowercased, whitespace-collapsed, basic English plural removal on the final word). The display name (`concept_name`) is preserved as-is. All grouping, joining, and deduplication uses `concept_key`, not `concept_name`.
+
+The normalizer handles:
+- case folding (`Archival Habitat` → `archival habitat`)
+- whitespace collapse
+- trailing-s plurals (`habitats` → `habitat`, `archives` → `archive`)
+- -ies plurals (`categories` → `category`)
+- -ses/-xes/-zes/-ches/-shes plurals (`processes` → `process`)
+
+It intentionally does **not** attempt stemming, lemmatization, or synonym resolution. If those become necessary later, they belong in Phase 6 lint (LLM-assisted concept merging) or a dedicated alias table.
+
+### Concept provenance
+
+Each concept in `concepts.jsonl` already carries rich provenance: `source_pages`, `evidence_spans`, `confidence`. This provenance must be preserved through indexing so that Phase 5 concept pages and "connected because…" explanations can cite grounded evidence.
+
+The concepts table stores these fields alongside `concept_key`, `concept_name`, `relevance`, and `material_id`.
+
+### Keyword and author normalization for relational queries
+
+Keywords and authors are stored in `meta.json` as JSON arrays and indexed as text in the materials table (for FTS). But cross-material queries like "find materials sharing keywords with X" need proper relational joins, not JSON parsing at query time.
+
+**Strategy:** At index time, two helper tables are populated:
+- `material_keywords(material_id, keyword)` — one row per keyword, normalized to lowercase
+- `material_authors(material_id, author)` — one row per author, normalized to lowercase
+
+`arq related` uses these tables for efficient SQL JOINs instead of scanning all materials and parsing JSON.
+
 ## Phase 4: Retrieval Connections
 
 Phase 4 should turn latent hooks into usable, queryable relationships. This is the point where Arquimedes starts to behave like memory rather than storage.
@@ -215,9 +262,42 @@ This is essential if the system is to feel like a connected memory rather than a
 
 Phase 5 will promote selected strong connections into durable structure.
 
-Examples:
-- related material sections
-- concept pages
+### Concept clustering (Phase 5 core responsibility)
+
+Phase 3 emits local concept candidates. Phase 5 clusters them into canonical concepts across the collection.
+
+The clustering pass:
+1. Reads all `concept_name` values from all `concepts.jsonl` artifacts
+2. Groups semantically equivalent concepts regardless of phrasing
+3. Chooses a canonical name for each cluster
+4. Records aliases, contributing materials, and source evidence
+5. Writes `derived/concept_clusters.jsonl`
+
+**Cluster artifact schema:**
+```json
+{
+  "cluster_id": "concept_0001",
+  "canonical_name": "archival habitat",
+  "aliases": [
+    "archive as architectural space",
+    "archival habitat",
+    "embodied archives"
+  ],
+  "material_ids": ["bbf97c1aae06", "b4f8dc3a028c"],
+  "source_concepts": [
+    {"material_id": "bbf97c1aae06", "concept_name": "archival habitat"},
+    {"material_id": "b4f8dc3a028c", "concept_name": "archive as architectural space"}
+  ],
+  "confidence": 0.82
+}
+```
+
+This file is the single handoff point between Phase 5 clustering and all downstream consumers: concept page generation, semantic `arq related`, Phase 6 auditing.
+
+### Other Phase 5 materialized connections
+
+- related material sections on wiki pages (using cluster membership + structural signals)
+- concept pages (one per cluster with `canonical_name`, aliases, contributing materials, evidence)
 - glossary pages
 - backlinks
 - master indexes and topic maps
@@ -233,7 +313,7 @@ But compile should be using earlier connection layers, not inventing everything 
 
 ## What Linting Will Add Later
 
-Phase 6 should inspect and improve the connection network.
+Phase 6 should inspect and improve the connection network. By Phase 6, `derived/concept_clusters.jsonl` already exists. Lint audits the quality of what compile produced.
 
 ### Deterministic lint
 
@@ -244,11 +324,13 @@ Phase 6 should inspect and improve the connection network.
 
 ### LLM-assisted lint
 
+- **cluster quality:** over-merged concepts that should be split; missed equivalences that should be merged; weak or orphaned clusters with only one material
+- **cluster expansion:** materials that belong in a cluster but were not captured by compile
+- **cluster naming:** canonical names that are too generic, too narrow, or poorly worded
 - missing concept pages
 - missing cross-references
 - contradictions across materials
 - under-connected materials
-- over-isolated clusters
 - unanswered research questions suggested by weakly connected areas
 
 Lint should be understood as a graph-audit and graph-improvement layer, not the origin of the graph.

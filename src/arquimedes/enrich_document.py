@@ -199,6 +199,21 @@ def enrich_document_stage(
             meta_out["facets"] = facets.to_dict()
             enriched_count["facets"] = sum(1 for v in facets.to_dict().values() if v)
 
+        # bibliography: stored as-is (plain dict of optional strings) plus provenance metadata
+        bibliography_data = parsed.get("bibliography")
+        if bibliography_data and isinstance(bibliography_data, dict):
+            # Strip schema-metadata keys from the actual bib fields; keep everything else
+            bib = {
+                k: v for k, v in bibliography_data.items()
+                if v not in (None, "", []) and k not in ("source_pages", "confidence")
+            }
+            if bib:
+                bib["_source_pages"] = bibliography_data.get("source_pages", [])
+                bib["_confidence"] = float(bibliography_data.get("confidence", 0.0))
+                bib["_model"] = actual_model
+                bib["_prompt_version"] = prompt_version
+                meta_out["bibliography"] = bib
+
         concepts_data = parsed.get("concepts", [])
         if not isinstance(concepts_data, list):
             concepts_data = []

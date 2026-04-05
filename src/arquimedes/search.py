@@ -26,14 +26,24 @@ from arquimedes.index import get_index_path
 class ConceptHit:
     concept_name: str
     relevance: str
+    source_pages: list[int] = field(default_factory=list)
+    evidence_spans: list[str] = field(default_factory=list)
+    confidence: float = 0.0
     rank: int = 0
 
     def to_dict(self) -> dict:
-        return {
+        d: dict[str, Any] = {
             "concept_name": self.concept_name,
             "relevance": self.relevance,
             "rank": self.rank,
         }
+        if self.source_pages:
+            d["source_pages"] = self.source_pages
+        if self.evidence_spans:
+            d["evidence_spans"] = self.evidence_spans
+        if self.confidence:
+            d["confidence"] = self.confidence
+        return d
 
 
 @dataclass
@@ -99,6 +109,29 @@ class ChunkHit:
 
 
 @dataclass
+class CanonicalClusterHit:
+    cluster_id: str
+    canonical_name: str
+    slug: str
+    aliases: list[str]
+    material_count: int
+    wiki_path: str
+
+    def to_dict(self) -> dict:
+        d: dict[str, Any] = {
+            "cluster_id": self.cluster_id,
+            "canonical_name": self.canonical_name,
+            "slug": self.slug,
+            "material_count": self.material_count,
+        }
+        if self.aliases:
+            d["aliases"] = self.aliases
+        if self.wiki_path:
+            d["wiki_path"] = self.wiki_path
+        return d
+
+
+@dataclass
 class MaterialCard:
     material_id: str
     title: str
@@ -145,14 +178,18 @@ class SearchResult:
     depth: int
     total: int
     results: list[MaterialCard]
+    canonical_clusters: list[CanonicalClusterHit] = field(default_factory=list)
 
     def to_dict(self) -> dict:
-        return {
+        d: dict[str, Any] = {
             "query": self.query,
             "depth": self.depth,
             "total": self.total,
             "results": [r.to_dict() for r in self.results],
         }
+        if self.canonical_clusters:
+            d["canonical_clusters"] = [c.to_dict() for c in self.canonical_clusters]
+        return d
 
     def to_json(self, indent: int | None = 2) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
@@ -414,7 +451,16 @@ def _do_search(
         for i, card in enumerate(cards, 1):
             card.rank = i
 
-    return SearchResult(query=query, depth=depth, total=len(cards), results=cards)
+    # Always query canonical concept clusters — useful at all depths
+    canonical_clusters = _search_canonical_clusters(con, query)
+
+    return SearchResult(
+        query=query,
+        depth=depth,
+        total=len(cards),
+        results=cards,
+        canonical_clusters=canonical_clusters,
+    )
 
 
 def _search_chunks(
@@ -519,7 +565,7 @@ def _search_concepts(
     limit: int,
 ) -> list[ConceptHit]:
     sql = """
-        SELECT co.concept_name, co.relevance
+        SELECT co.concept_name, co.relevance, co.source_pages, co.evidence_spans, co.confidence
         FROM concepts_fts
         JOIN concepts co ON concepts_fts.rowid = co.rowid
         WHERE concepts_fts MATCH ? AND co.material_id = ?
@@ -527,14 +573,63 @@ def _search_concepts(
         LIMIT ?
     """
     rows = con.execute(sql, [query, material_id, limit]).fetchall()
-    return [
-        ConceptHit(
+    hits: list[ConceptHit] = []
+    for i, row in enumerate(rows, 1):
+        try:
+            source_pages = json.loads(row["source_pages"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            source_pages = []
+        try:
+            evidence_spans = json.loads(row["evidence_spans"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            evidence_spans = []
+        hits.append(ConceptHit(
             concept_name=row["concept_name"],
             relevance=row["relevance"],
+            source_pages=source_pages,
+            evidence_spans=evidence_spans,
+            confidence=row["confidence"] or 0.0,
             rank=i,
-        )
-        for i, row in enumerate(rows, 1)
-    ]
+        ))
+    return hits
+
+
+def _search_canonical_clusters(
+    con: sqlite3.Connection,
+    query: str,
+    limit: int = 5,
+) -> list[CanonicalClusterHit]:
+    """Return canonical concept clusters matching query via concept_clusters_fts."""
+    # Gracefully skip if the FTS table is absent (pre-memory-rebuild indexes)
+    try:
+        rows = con.execute(
+            """SELECT cc.cluster_id, cc.canonical_name, cc.slug,
+                      cc.aliases, cc.material_count, cc.wiki_path
+               FROM concept_clusters_fts
+               JOIN concept_clusters cc ON concept_clusters_fts.rowid = cc.rowid
+               WHERE concept_clusters_fts MATCH ?
+               ORDER BY concept_clusters_fts.rank
+               LIMIT ?""",
+            [query, limit],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+    hits: list[CanonicalClusterHit] = []
+    for row in rows:
+        try:
+            aliases = json.loads(row["aliases"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            aliases = []
+        hits.append(CanonicalClusterHit(
+            cluster_id=row["cluster_id"],
+            canonical_name=row["canonical_name"],
+            slug=row["slug"],
+            aliases=aliases,
+            material_count=row["material_count"] or 0,
+            wiki_path=row["wiki_path"] or "",
+        ))
+    return hits
 
 
 # --- Human-readable formatting ---
@@ -599,6 +694,13 @@ def format_human(result: SearchResult) -> str:
                 lines.append("    Concepts:")
                 for con_hit in card.concepts:
                     lines.append(f"      [{con_hit.relevance}] {con_hit.concept_name}")
+
+        if result.canonical_clusters:
+            lines.append("")
+            lines.append("Canonical concept clusters:")
+            for cl in result.canonical_clusters:
+                alias_str = f"  (aliases: {', '.join(cl.aliases[:3])})" if cl.aliases else ""
+                lines.append(f"  • {cl.canonical_name}{alias_str}  [{cl.material_count} material(s)]")
 
         lines.append("")
         lines.append(f'{result.total} result(s) for "{result.query}" (depth {result.depth})')
@@ -695,87 +797,61 @@ def _do_find_related(
         scores[mid] = scores.get(mid, 0.0) + conn.weight
         connections.setdefault(mid, []).append(conn)
 
-    # Shared concepts (weight 1.0 each — LLM-identified meaning, strongest signal)
+    # Shared canonical cluster membership (weight 2.0) — strongest signal
+    try:
+        cluster_rows = con.execute(
+            """SELECT cm2.material_id, cc.canonical_name
+               FROM cluster_materials cm1
+               JOIN cluster_materials cm2 ON cm1.cluster_id = cm2.cluster_id
+               JOIN concept_clusters cc ON cm1.cluster_id = cc.cluster_id
+               WHERE cm1.material_id = ? AND cm2.material_id != ?""",
+            [material_id, material_id],
+        ).fetchall()
+        for row in cluster_rows:
+            _add(row["material_id"], Connection(
+                type="shared_cluster", value=row["canonical_name"], weight=2.0
+            ))
+    except sqlite3.OperationalError:
+        pass  # cluster tables absent (pre-clustering index)
+
+    # Shared concepts via concept_key (weight 1.0 each — normalized matching)
     rows = con.execute(
-        "SELECT concept_name FROM concepts WHERE material_id = ?", [material_id]
+        """SELECT c2.material_id, c1.concept_name
+           FROM concepts c1
+           JOIN concepts c2 ON c1.concept_key = c2.concept_key
+           WHERE c1.material_id = ? AND c2.material_id != ?""",
+        [material_id, material_id],
     ).fetchall()
     for row in rows:
-        concept_name = row["concept_name"]
-        peers = con.execute(
-            "SELECT material_id FROM concepts WHERE concept_name = ? AND material_id != ?",
-            [concept_name, material_id],
-        ).fetchall()
-        for p in peers:
-            _add(p["material_id"], Connection(
-                type="shared_concept", value=concept_name, weight=1.0
-            ))
+        _add(row["material_id"], Connection(
+            type="shared_concept", value=row["concept_name"], weight=1.0
+        ))
 
-    # Shared enriched keywords (weight 0.3 each)
-    kw_row = con.execute(
-        "SELECT keywords FROM materials WHERE material_id = ?", [material_id]
-    ).fetchone()
-    source_keywords: list[str] = []
-    if kw_row:
-        try:
-            source_keywords = json.loads(kw_row["keywords"] or "[]")
-            if not isinstance(source_keywords, list):
-                source_keywords = []
-        except (json.JSONDecodeError, TypeError):
-            source_keywords = []
+    # Shared enriched keywords via helper table (weight 0.3 each)
+    kw_rows = con.execute(
+        """SELECT mk2.material_id, mk1.keyword
+           FROM material_keywords mk1
+           JOIN material_keywords mk2 ON mk1.keyword = mk2.keyword
+           WHERE mk1.material_id = ? AND mk2.material_id != ?""",
+        [material_id, material_id],
+    ).fetchall()
+    for row in kw_rows:
+        _add(row["material_id"], Connection(
+            type="shared_keyword", value=row["keyword"], weight=0.3
+        ))
 
-    if source_keywords:
-        all_others = con.execute(
-            "SELECT material_id, keywords FROM materials WHERE material_id != ?",
-            [material_id],
-        ).fetchall()
-        for other in all_others:
-            try:
-                other_kws = json.loads(other["keywords"] or "[]")
-                if not isinstance(other_kws, list):
-                    continue
-            except (json.JSONDecodeError, TypeError):
-                continue
-            # Normalize for comparison
-            src_set = {k.lower().strip() for k in source_keywords if k}
-            other_set = {k.lower().strip() for k in other_kws if k}
-            shared = src_set & other_set
-            for kw in shared:
-                _add(other["material_id"], Connection(
-                    type="shared_keyword", value=kw, weight=0.3
-                ))
-
-    # Shared authors (weight 0.8 each)
-    auth_row = con.execute(
-        "SELECT authors FROM materials WHERE material_id = ?", [material_id]
-    ).fetchone()
-    source_authors: list[str] = []
-    if auth_row:
-        try:
-            source_authors = json.loads(auth_row["authors"] or "[]")
-            if not isinstance(source_authors, list):
-                source_authors = []
-        except (json.JSONDecodeError, TypeError):
-            source_authors = []
-
-    if source_authors:
-        all_others = con.execute(
-            "SELECT material_id, authors FROM materials WHERE material_id != ?",
-            [material_id],
-        ).fetchall()
-        for other in all_others:
-            try:
-                other_authors = json.loads(other["authors"] or "[]")
-                if not isinstance(other_authors, list):
-                    continue
-            except (json.JSONDecodeError, TypeError):
-                continue
-            src_set = {a.lower().strip() for a in source_authors if a}
-            other_set = {a.lower().strip() for a in other_authors if a}
-            shared = src_set & other_set
-            for author in shared:
-                _add(other["material_id"], Connection(
-                    type="shared_author", value=author, weight=0.8
-                ))
+    # Shared authors via helper table (weight 0.8 each)
+    auth_rows = con.execute(
+        """SELECT ma2.material_id, ma1.author
+           FROM material_authors ma1
+           JOIN material_authors ma2 ON ma1.author = ma2.author
+           WHERE ma1.material_id = ? AND ma2.material_id != ?""",
+        [material_id, material_id],
+    ).fetchall()
+    for row in auth_rows:
+        _add(row["material_id"], Connection(
+            type="shared_author", value=row["author"], weight=0.8
+        ))
 
     # Shared facet values (weight 0.5 each, skip empty values)
     facet_row = con.execute(
@@ -833,7 +909,8 @@ def format_related_human(material_id: str, related: list[RelatedMaterial]) -> st
         lines.append(f"  {i:>2}. {r.title[:60]} ({r.material_id})  score={r.score:.2f}")
         for conn in r.connections[:5]:
             facet_label = f" [{conn.facet}]" if conn.facet else ""
-            lines.append(f"        {conn.type}{facet_label}: {conn.value}")
+            prefix = "★ " if conn.type == "shared_cluster" else "  "
+            lines.append(f"      {prefix}{conn.type}{facet_label}: {conn.value}")
     return "\n".join(lines)
 
 
@@ -844,7 +921,7 @@ class ConceptEntry:
     concept_name: str
     material_count: int
     material_ids: list[str]
-    relevance_summary: str   # most common relevance value
+    relevance_summary: str   # e.g. "2×high, 1×medium"
 
     def to_dict(self) -> dict:
         return {
@@ -855,13 +932,28 @@ class ConceptEntry:
         }
 
 
+def _build_relevance_summary(csv: str) -> str:
+    """Turn a comma-separated relevance list into a counted summary like '2×high, 1×medium'."""
+    if not csv:
+        return ""
+    values = [v.strip() for v in csv.split(",") if v.strip()]
+    counts: dict[str, int] = {}
+    for v in values:
+        counts[v] = counts.get(v, 0) + 1
+    # Order by count descending, then alphabetically
+    ranked = sorted(counts.items(), key=lambda kv: (-kv[1], kv[0]))
+    if len(ranked) == 1 and ranked[0][1] == 1:
+        return ranked[0][0]
+    return ", ".join(f"{c}×{r}" if c > 1 else r for r, c in ranked)
+
+
 def list_concepts(
     config: dict | None = None,
     *,
     min_materials: int = 1,
     limit: int = 100,
 ) -> list[ConceptEntry]:
-    """List all concept candidates across the collection, grouped by concept name."""
+    """List all concept candidates across the collection, grouped by normalized concept_key."""
     if config is None:
         config = load_config()
 
@@ -876,14 +968,15 @@ def list_concepts(
     try:
         rows = con.execute(
             """
-            SELECT concept_name,
+            SELECT concept_key,
+                   MAX(concept_name) AS display_name,
                    COUNT(DISTINCT material_id) AS material_count,
-                   GROUP_CONCAT(material_id, ',') AS material_ids_csv,
-                   MAX(relevance) AS relevance_summary
+                   GROUP_CONCAT(DISTINCT material_id) AS material_ids_csv,
+                   GROUP_CONCAT(relevance) AS relevance_values
             FROM concepts
-            GROUP BY concept_name
+            GROUP BY concept_key
             HAVING COUNT(DISTINCT material_id) >= ?
-            ORDER BY material_count DESC, concept_name
+            ORDER BY material_count DESC, concept_key
             LIMIT ?
             """,
             [min_materials, limit],
@@ -895,10 +988,10 @@ def list_concepts(
     for row in rows:
         mids = [m.strip() for m in (row["material_ids_csv"] or "").split(",") if m.strip()]
         entries.append(ConceptEntry(
-            concept_name=row["concept_name"],
+            concept_name=row["display_name"] or row["concept_key"],
             material_count=row["material_count"],
             material_ids=mids,
-            relevance_summary=row["relevance_summary"] or "",
+            relevance_summary=_build_relevance_summary(row["relevance_values"] or ""),
         ))
     return entries
 

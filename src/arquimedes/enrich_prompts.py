@@ -143,6 +143,21 @@ _DOCUMENT_SCHEMA = """\
   "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "document_type": {"value": "one of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+  "bibliography": {
+    "journal_name": "...",
+    "volume": "...",
+    "issue": "...",
+    "start_page": "...",
+    "end_page": "...",
+    "doi": "...",
+    "book_title": "...",
+    "editors": ["..."],
+    "publisher": "...",
+    "place": "...",
+    "edition": "...",
+    "source_pages": [...],
+    "confidence": 0.0-1.0
+  },
   "facets": {
     "building_type": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
     "scale": {"value": "one of: detail|building|urban|territorial", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
@@ -157,7 +172,7 @@ _DOCUMENT_SCHEMA = """\
     "studio_project": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
   },
   "concepts": [
-    {"concept_name": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}
+    {"concept_name": "...", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
   ]
 }\
 """
@@ -179,6 +194,9 @@ be weighted as priority context for summaries, keywords, and facets. \
 
 Analyze this architecture document and return a single JSON object matching the schema below. \
 Only include facets where you are confident (omit fields you cannot determine). \
+For "bibliography": extract journal name, volume, issue, page range, DOI, publisher, place, \
+book title, and editors as they appear on the title page, header, footer, or references — \
+omit any sub-field you cannot find. \
 Return ONLY valid JSON, no markdown fences, no explanations.
 
 {schema}\
@@ -321,6 +339,21 @@ _COMBINED_SCHEMA = """\
     "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
     "document_type": {"value": "one of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
     "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+    "bibliography": {
+      "journal_name": "...",
+      "volume": "...",
+      "issue": "...",
+      "start_page": "...",
+      "end_page": "...",
+      "doi": "...",
+      "book_title": "...",
+      "editors": ["..."],
+      "publisher": "...",
+      "place": "...",
+      "edition": "...",
+      "source_pages": [...],
+      "confidence": 0.0-1.0
+    },
     "facets": {
       "building_type": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
       "scale": {"value": "one of: detail|building|urban|territorial", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
@@ -335,7 +368,7 @@ _COMBINED_SCHEMA = """\
       "studio_project": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
     },
     "concepts": [
-      {"concept_name": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}
+      {"concept_name": "...", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
     ]
   },
   "chunks": [
@@ -367,7 +400,8 @@ Analyze this architecture document and return a single JSON object with two top-
 "document" and "chunks".
 
 For "document": provide summary, document_type, keywords, facets (only where confident — omit \
-fields you cannot determine), and concepts.
+fields you cannot determine), concepts, and bibliography (journal/book publication details \
+extracted from title page, header, or references — omit sub-fields you cannot find).
 
 For "chunks": provide a list entry for each chunk_id listed above with a one-line summary and \
 keywords specific to that chunk's content.

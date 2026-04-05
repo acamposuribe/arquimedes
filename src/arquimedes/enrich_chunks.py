@@ -7,6 +7,8 @@ Uses batched LLM calls. All-or-nothing: if any batch fails, no writes occur.
 from __future__ import annotations
 
 import json
+import os
+import sys
 from pathlib import Path
 
 from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
@@ -37,6 +39,16 @@ def _load_json(path: Path, default=None):
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _debug_enabled() -> bool:
+    value = os.getenv("ARQ_LLM_DEBUG", "")
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _debug(message: str) -> None:
+    if _debug_enabled():
+        print(f"[chunk-debug] {message}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -231,8 +243,20 @@ def enrich_chunks_stage(
         chunks_path = output_dir / "chunks.jsonl"
         stamps_path = output_dir / "chunk_enrichment_stamps.json"
 
+        if _debug_enabled():
+            _debug(
+                f"material={output_dir.name} stale_chunks={len(stale_chunks)} "
+                f"batch_target={batch_target} avg_chunk_tokens={avg_chunk_tokens} "
+                f"batch_token_budget={batch_token_budget} batches={n_batches}"
+            )
+
         for batch_idx, batch in enumerate(batches):
             try:
+                if _debug_enabled():
+                    batch_ids = ",".join(c.get("chunk_id", "") for c in batch)
+                    _debug(
+                        f"batch={batch_idx + 1}/{n_batches} size={len(batch)} chunk_ids={batch_ids}"
+                    )
                 system, messages = enrich_prompts.build_chunk_batch_prompt(
                     batch, doc_context_str, annotations
                 )

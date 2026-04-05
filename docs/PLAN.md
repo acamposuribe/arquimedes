@@ -64,6 +64,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
   - [x] Chunk-level: one-line summaries, keywords
   - [x] Figure-level: visual_type, descriptions, captions
   - [x] Concept candidates for wiki compiler
+  - [x] Copilot enrichment routes use a shared no-tools custom agent with programmatic prompt mode
 - [x] `arq extract` convenience command (extract-raw + enrich)
 
 ## Phase 4: Search Index

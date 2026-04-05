@@ -39,6 +39,13 @@ class TestParseJsonOrRepair:
         assert parse_json_or_repair(llm_fn, '  \n```\n{"ok": true}\n```\n  ', "s") == {"ok": True}
         llm_fn.assert_not_called()
 
+    def test_trailing_non_json_text_is_ignored_without_llm_call(self):
+        llm_fn = _make_llm_fn([])
+        text = '{"k": 1}\n\nI\'m sorry, but I cannot assist with that request.'
+
+        assert parse_json_or_repair(llm_fn, text, "s") == {"k": 1}
+        llm_fn.assert_not_called()
+
     def test_invalid_json_triggers_repair(self):
         llm_fn = _make_llm_fn([json.dumps({"fixed": True})])
         data = parse_json_or_repair(llm_fn, "not json", "my schema")
@@ -117,7 +124,7 @@ class TestGetAgentModelName:
         assert get_agent_model_name(["codex", "exec", "-m", "gpt-5.4-mini"]) == "codex:gpt-5.4-mini"
 
     def test_copilot_with_model(self):
-        assert get_agent_model_name(["copilot", "--model", "gpt-5-mini"]) == "copilot:gpt-5-mini"
+        assert get_agent_model_name(["copilot", "--model", "gpt-4.1"]) == "copilot:gpt-4.1"
 
     def test_other_agent(self):
         assert get_agent_model_name(["myagent", "run"]) == "myagent"
@@ -220,22 +227,35 @@ class TestBuildAgentCmd:
 
 
 class TestBuildStageRequest:
-    def test_copilot_uses_prompt_flag_and_allows_tools(self):
+    def test_copilot_uses_prompt_flag_without_broad_tools(self):
         cmd, stdin_text, fast_fail = _build_stage_request(
             ["copilot"],
             "copilot",
             "system",
             "user prompt",
-            model="gpt-5-mini",
+            model="gpt-4.1",
             effort="high",
+            route={
+                "agent": "copilot-no-tools-json",
+                "silent": True,
+                "no_ask_user": True,
+                "no_auto_update": True,
+                "no_custom_instructions": True,
+                "allow_all": False,
+            },
         )
         assert stdin_text == ""
         assert fast_fail is True
+        assert "--agent" in cmd
+        assert cmd[cmd.index("--agent") + 1] == "copilot-no-tools-json"
         assert "--prompt" in cmd
         assert "--silent" in cmd
-        assert "--allow-all" in cmd
+        assert "--allow-all" not in cmd
+        assert "--allow-all-tools" not in cmd
+        assert "--no-ask-user" in cmd
+        assert "--no-auto-update" in cmd
         assert "--no-custom-instructions" in cmd
-        assert cmd[cmd.index("--model") + 1] == "gpt-5-mini"
+        assert cmd[cmd.index("--model") + 1] == "gpt-4.1"
         assert cmd[cmd.index("--effort") + 1] == "high"
 
     def test_codex_uses_stdin_and_model_flag(self):
@@ -317,7 +337,7 @@ class TestMakeCliLlmFn:
                 "llm_routes": {
                     "document": [
                         {"provider": "codex", "command": "codex exec", "model": "gpt-5.4-mini", "effort": "high"},
-                        {"provider": "copilot", "command": "copilot", "model": "gpt-5-mini", "effort": "high"},
+                        {"provider": "copilot", "command": "copilot", "model": "gpt-4.1", "effort": "high"},
                     ]
                 },
             }
@@ -329,20 +349,59 @@ class TestMakeCliLlmFn:
         assert "--prompt" in args
         assert "--silent" in args
         assert "--allow-all" in args
-        assert "--model" in args and args[args.index("--model") + 1] == "gpt-5-mini"
+        assert "--no-ask-user" in args
+        assert "--no-auto-update" in args
+        assert "--no-custom-instructions" in args
+        assert "--model" in args and args[args.index("--model") + 1] == "gpt-4.1"
         assert "--effort" in args and args[args.index("--effort") + 1] == "high"
+
+    def test_stage_route_timeout_seconds_is_honored(self, tmp_path, monkeypatch):
+        hanging = tmp_path / "sleep-agent"
+        hanging.write_text(
+            '#!/bin/bash\n'
+            'cat - > /dev/null\n'
+            'sleep 300\n'
+        )
+        hanging.chmod(0o755)
+
+        monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+
+        config = {
+            "enrichment": {
+                "max_retries": 1,
+                "llm_routes": {
+                    "chunk": [
+                        {
+                            "provider": "codex",
+                            "command": "sleep-agent",
+                            "model": "gpt-5.4-mini",
+                            "timeout_seconds": 1,
+                        }
+                    ]
+                },
+            }
+        }
+        fn = make_cli_llm_fn(config, "chunk")
+
+        import time
+
+        t0 = time.monotonic()
+        with pytest.raises(EnrichmentError, match="timed out after 1s"):
+            fn("system", [{"role": "user", "content": "hi"}])
+        elapsed = time.monotonic() - t0
+        assert elapsed < 15, f"Timeout took too long: {elapsed:.1f}s"
 
     def test_stage_route_model_id_includes_stage_signature(self):
         config = {
             "enrichment": {
                 "llm_routes": {
                     "chunk": [
-                        {"provider": "copilot", "command": "copilot", "model": "gpt-5-mini"},
+                        {"provider": "copilot", "command": "copilot", "model": "gpt-4.1"},
                     ]
                 }
             }
         }
-        assert get_model_id(config, "chunk").startswith("copilot:gpt-5-mini")
+        assert get_model_id(config, "chunk").startswith("copilot:gpt-4.1")
 
     def test_raises_on_all_agents_failing(self, tmp_path):
         failing = tmp_path / "failing-agent"

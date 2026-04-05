@@ -160,14 +160,29 @@ enrichment:
         command: "codex exec"
         model: gpt-5.4-mini
         effort: high
+      - provider: claude
+        command: "claude --print"
+        model: sonnet
+        effort: medium
       - provider: copilot
         command: "copilot"
-        model: gpt-5-mini
-        effort: high
+        agent: copilot-no-tools-json
+        model: gpt-4.1
+        silent: true
+        no_ask_user: true
+        no_auto_update: true
+        no_custom_instructions: true
+        allow_all: false
     chunk:
       - provider: copilot
         command: "copilot"
-        model: gpt-5-mini
+        agent: copilot-no-tools-json
+        model: gpt-4.1
+        silent: true
+        no_ask_user: true
+        no_auto_update: true
+        no_custom_instructions: true
+        allow_all: false
     figure:
       - provider: codex
         command: "codex exec"
@@ -175,7 +190,13 @@ enrichment:
         effort: medium
       - provider: copilot
         command: "copilot"
+        agent: copilot-no-tools-json
         model: gpt-4o
+        silent: true
+        no_ask_user: true
+        no_auto_update: true
+        no_custom_instructions: true
+        allow_all: false
     cluster:
       - provider: claude
         command: "claude --print"
@@ -187,7 +208,13 @@ enrichment:
         effort: high
       - provider: copilot
         command: "copilot"
-        model: gpt-5-mini
+        agent: copilot-no-tools-json
+        model: gpt-4.1
+        silent: true
+        no_ask_user: true
+        no_auto_update: true
+        no_custom_instructions: true
+        allow_all: false
 extraction:
   chunk_size: 500            # tokens per chunk
   generate_thumbnails: true

@@ -39,12 +39,23 @@ library_root: "~/Arquimedes-Library"
 #         effort: high
 #       - provider: copilot
 #         command: "copilot"
-#         model: gpt-5-mini
-#         effort: high
+#         agent: copilot-no-tools-json
+#         model: gpt-4.1
+#         silent: true
+#         no_ask_user: true
+#         no_auto_update: true
+#         no_custom_instructions: true
+#         allow_all: false
 #     chunk:
 #       - provider: copilot
 #         command: "copilot"
-#         model: gpt-5-mini
+#         agent: copilot-no-tools-json
+#         model: gpt-4.1
+#         silent: true
+#         no_ask_user: true
+#         no_auto_update: true
+#         no_custom_instructions: true
+#         allow_all: false
 #     figure:
 #       - provider: codex
 #         command: "codex exec"
@@ -53,6 +64,12 @@ library_root: "~/Arquimedes-Library"
 #       - provider: copilot
 #         command: "copilot"
 #         model: gpt-4o
+#         agent: copilot-no-tools-json
+#         silent: true
+#         no_ask_user: true
+#         no_auto_update: true
+#         no_custom_instructions: true
+#         allow_all: false
 #     cluster:
 #       - provider: claude
 #         command: "claude --print"
@@ -64,7 +81,13 @@ library_root: "~/Arquimedes-Library"
 #         effort: high
 #       - provider: copilot
 #         command: "copilot"
-#         model: gpt-5-mini
+#         agent: copilot-no-tools-json
+#         model: gpt-4.1
+#         silent: true
+#         no_ask_user: true
+#         no_auto_update: true
+#         no_custom_instructions: true
+#         allow_all: false
 # Watch daemon settings (server mode)
 # watch:
 #   backend: fsevents          # fsevents (macOS) or poll (fallback)

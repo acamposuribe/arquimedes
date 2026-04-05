@@ -26,6 +26,7 @@ import shutil
 import signal
 import subprocess
 import threading
+import sys
 from typing import Callable
 
 # ---------------------------------------------------------------------------
@@ -34,6 +35,31 @@ from typing import Callable
 
 LlmFn = Callable[[str, list[dict]], str]
 """(system_prompt, messages) -> response_text"""
+
+
+def _llm_debug_enabled() -> bool:
+    value = os.getenv("ARQ_LLM_DEBUG", "")
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
+
+def _llm_debug_preview(text: str, limit: int = 240) -> str:
+    flat = text.replace("\n", "\\n")
+    return flat[:limit] + ("..." if len(flat) > limit else "")
+
+
+def _llm_debug(message: str) -> None:
+    if _llm_debug_enabled():
+        print(f"[llm-debug] {message}", file=sys.stderr)
+
+
+def _coerce_timeout_seconds(value, default: int | None = None) -> int | None:
+    try:
+        timeout_seconds = int(value)
+    except (TypeError, ValueError):
+        timeout_seconds = default
+    if timeout_seconds is None:
+        return None
+    return max(timeout_seconds, 1)
 
 # ---------------------------------------------------------------------------
 # Custom exception
@@ -57,6 +83,21 @@ def _strip_fences(text: str) -> str:
     return m.group(1).strip() if m else text.strip()
 
 
+def _parse_json_prefix(text: str):
+    """Parse the first JSON value in *text*, ignoring trailing noise."""
+    decoder = json.JSONDecoder()
+    stripped = text.lstrip()
+    if not stripped:
+        raise json.JSONDecodeError("Empty input", text, 0)
+    value, end_index = decoder.raw_decode(stripped)
+    trailing = stripped[end_index:].strip()
+    if trailing:
+        _llm_debug(
+            f"json prefix parsed with trailing noise ignored; trailing_chars={len(trailing)} preview={_llm_debug_preview(trailing)}"
+        )
+    return value
+
+
 def parse_json_or_repair(
     llm_fn: LlmFn,
     text: str,
@@ -74,16 +115,27 @@ def parse_json_or_repair(
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        pass
+        _llm_debug(
+            f"initial JSON parse failed; text_chars={len(text)} preview={_llm_debug_preview(text)}"
+        )
 
     # Step 2: strip fences and retry
     stripped = _strip_fences(text)
     try:
         return json.loads(stripped)
     except json.JSONDecodeError:
+        if stripped != text:
+            _llm_debug(
+                f"fence-stripped JSON parse failed; text_chars={len(stripped)} preview={_llm_debug_preview(stripped)}"
+            )
+
+    # Step 3: salvage a valid JSON prefix before asking the LLM to repair.
+    try:
+        return _parse_json_prefix(stripped)
+    except json.JSONDecodeError:
         pass
 
-    # Step 3: one-shot LLM schema repair
+    # Step 4: one-shot LLM schema repair
     repair_response = llm_fn(
         "You are a JSON repair assistant. Return ONLY valid JSON, no markdown fences.",
         [
@@ -97,9 +149,14 @@ def parse_json_or_repair(
         ],
     )
 
+    _llm_debug(
+        f"schema repair response_chars={len(repair_response)} preview={_llm_debug_preview(repair_response)}"
+    )
+
     try:
         return json.loads(repair_response)
     except json.JSONDecodeError:
+        _llm_debug("schema repair failed to produce valid JSON")
         raise EnrichmentError("Schema repair failed")
 
 
@@ -213,9 +270,18 @@ def _stage_route_config(config: dict, stage: str | None) -> list[dict]:
             "command_parts": parts,
             "model": entry.get("model"),
             "effort": entry.get("effort"),
+            "agent": entry.get("agent"),
+            "timeout_seconds": entry.get("timeout_seconds"),
             "prompt_mode": entry.get("prompt_mode"),
             "silent": entry.get("silent"),
             "allow_all": entry.get("allow_all"),
+            "allow_all_tools": entry.get("allow_all_tools"),
+            "allow_all_paths": entry.get("allow_all_paths"),
+            "allow_all_urls": entry.get("allow_all_urls"),
+            "available_tools": entry.get("available_tools"),
+            "excluded_tools": entry.get("excluded_tools"),
+            "no_ask_user": entry.get("no_ask_user"),
+            "no_auto_update": entry.get("no_auto_update"),
             "no_custom_instructions": entry.get("no_custom_instructions"),
             "fast_fail": entry.get("fast_fail"),
         })
@@ -239,6 +305,13 @@ def _route_signature(route: dict) -> str:
     return ":".join(bits)
 
 
+def _route_flag(route: dict, key: str, default: bool) -> bool:
+    value = route.get(key)
+    if value is None:
+        return default
+    return bool(value)
+
+
 # ---------------------------------------------------------------------------
 # Agent CLI adapter (default — shells out to configurable agent command)
 # ---------------------------------------------------------------------------
@@ -255,7 +328,7 @@ _FAST_FAIL_RE = re.compile(
 def _run_agent_subprocess(
     cmd: list[str],
     stdin_text: str,
-    timeout: int,
+    timeout: int | None,
     fast_fail: bool = True,
 ) -> subprocess.CompletedProcess[str]:
     """Run an agent CLI with optional fast-fail stderr monitoring.
@@ -446,8 +519,10 @@ def _build_stage_request(
     *,
     model: str | None = None,
     effort: str | None = None,
+    route: dict | None = None,
 ) -> tuple[list[str], str, bool]:
     """Return (cmd, stdin_text, fast_fail) for a provider-specific attempt."""
+    route = route or {}
     provider = provider.lower()
     if provider == "claude":
         cmd = _build_agent_cmd(base_parts, system, effort=effort, model_override=model)
@@ -469,11 +544,41 @@ def _build_stage_request(
 
     if provider == "copilot":
         cmd = list(base_parts)
-        if "--silent" not in cmd:
+        agent_name = route.get("agent")
+        if agent_name:
+            if "--agent" not in cmd:
+                cmd.extend(["--agent", str(agent_name)])
+            else:
+                idx = cmd.index("--agent")
+                if idx + 1 < len(cmd):
+                    cmd[idx + 1] = str(agent_name)
+        if _route_flag(route, "silent", True) and "--silent" not in cmd:
             cmd.append("--silent")
-        if "--allow-all" not in cmd and "--allow-all-tools" not in cmd:
-            cmd.append("--allow-all")
-        if "--no-custom-instructions" not in cmd:
+        if _route_flag(route, "no_ask_user", True) and "--no-ask-user" not in cmd:
+            cmd.append("--no-ask-user")
+        if _route_flag(route, "no_auto_update", True) and "--no-auto-update" not in cmd:
+            cmd.append("--no-auto-update")
+        if _route_flag(route, "allow_all", True):
+            if "--allow-all" not in cmd:
+                cmd.append("--allow-all")
+        elif route.get("allow_all_tools"):
+            if "--allow-all-tools" not in cmd:
+                cmd.append("--allow-all-tools")
+        if _route_flag(route, "allow_all_paths", True) and "--allow-all-paths" not in cmd:
+            cmd.append("--allow-all-paths")
+        if _route_flag(route, "allow_all_urls", True) and "--allow-all-urls" not in cmd:
+            cmd.append("--allow-all-urls")
+        available_tools = route.get("available_tools")
+        if isinstance(available_tools, list) and available_tools:
+            tools_arg = ",".join(str(tool) for tool in available_tools if str(tool).strip())
+            if tools_arg:
+                cmd.extend(["--available-tools", tools_arg])
+        excluded_tools = route.get("excluded_tools")
+        if isinstance(excluded_tools, list) and excluded_tools:
+            tools_arg = ",".join(str(tool) for tool in excluded_tools if str(tool).strip())
+            if tools_arg:
+                cmd.extend(["--excluded-tools", tools_arg])
+        if _route_flag(route, "no_custom_instructions", True) and "--no-custom-instructions" not in cmd:
             cmd.append("--no-custom-instructions")
         if model and "--model" not in cmd:
             cmd.extend(["--model", model])
@@ -550,10 +655,13 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
                 f"Install one or set llm.agent_cmd in config.yaml."
             )
 
-    max_retries: int = config.get("enrichment", {}).get("max_retries", 3)
+    enrichment_config = config.get("enrichment", {})
+    max_retries: int = enrichment_config.get("max_retries", 3)
+    default_timeout_seconds = _coerce_timeout_seconds(enrichment_config.get("llm_timeout_seconds"))
 
     def llm_fn(system: str, messages: list[dict]) -> str:
         system_prompt, user_prompt = _build_prompt_text(system, messages)
+        debug_enabled = _llm_debug_enabled()
 
         for attempt_cfg in resolved:
             base_parts = attempt_cfg["command_parts"]
@@ -562,6 +670,10 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
             if use_stage_routes:
                 model = attempt_cfg.get("model")
                 effort_value = attempt_cfg.get("effort")
+                timeout_seconds = _coerce_timeout_seconds(
+                    attempt_cfg.get("timeout_seconds"),
+                    default_timeout_seconds,
+                )
                 prompt_mode = attempt_cfg.get("prompt_mode")
                 if prompt_mode == "stdin":
                     cmd = _build_agent_cmd(
@@ -582,13 +694,28 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
                         user_prompt,
                         model=model,
                         effort=effort_value,
+                        route=attempt_cfg,
                     )
             else:
+                timeout_seconds = default_timeout_seconds
                 cmd, stdin_text, fast_fail = _build_stage_request(
                     base_parts,
                     provider,
                     system_prompt,
                     user_prompt,
+                    route=attempt_cfg,
+                )
+
+            if debug_enabled:
+                _llm_debug(
+                    "attempt "
+                    f"stage={stage or 'fallback'} provider={provider} "
+                    f"cmd={shlex.join(cmd)} "
+                    f"system_chars={len(system_prompt)} user_chars={len(user_prompt)} "
+                    f"stdin_chars={len(stdin_text)} fast_fail={bool(fast_fail)} "
+                    f"timeout_seconds={timeout_seconds} "
+                    f"system_preview={_llm_debug_preview(system_prompt)} "
+                    f"user_preview={_llm_debug_preview(user_prompt)}"
                 )
 
             last_exc: Exception | None = None
@@ -598,27 +725,44 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
                     result = _run_agent_subprocess(
                         cmd,
                         stdin_text,
-                        timeout=300,
+                        timeout=timeout_seconds,
                         fast_fail=bool(fast_fail),
                     )
                     if result.returncode != 0:
                         detail = result.stderr.strip() or result.stdout.strip()
+                        if debug_enabled:
+                            _llm_debug(
+                                f"provider={provider} exit={result.returncode} "
+                                f"stdout_chars={len(result.stdout)} stderr_chars={len(result.stderr)} "
+                                f"detail_preview={_llm_debug_preview(detail, 200)}"
+                            )
                         last_exc = EnrichmentError(
                             f"{provider} failed (exit {result.returncode}): {detail[:500]}"
                         )
                         break
+                    if debug_enabled:
+                        _llm_debug(
+                            f"provider={provider} succeeded stdout_chars={len(result.stdout)} "
+                            f"stderr_chars={len(result.stderr)} model={get_agent_model_name(cmd)} "
+                            f"stdout_preview={_llm_debug_preview(result.stdout)}"
+                        )
                     llm_fn.last_model = get_agent_model_name(cmd)
                     return result.stdout
                 except subprocess.TimeoutExpired:
+                    if debug_enabled:
+                        _llm_debug(
+                            f"provider={provider} timed out after {timeout_seconds}s attempt={attempt + 1}/{max_retries}"
+                        )
                     last_exc = EnrichmentError(
-                        f"{provider} timed out after 300s (attempt {attempt + 1}/{max_retries})"
+                        f"{provider} timed out after {timeout_seconds}s (attempt {attempt + 1}/{max_retries})"
                     )
                 except FileNotFoundError:
+                    if debug_enabled:
+                        _llm_debug(f"provider CLI missing: {provider}")
                     last_exc = EnrichmentError(f"Agent CLI not found: {provider!r}")
                     break
 
             if len(resolved) > 1:
-                import sys
                 print(f"  [{provider}] {last_exc} — trying next agent", file=sys.stderr)
                 continue
 

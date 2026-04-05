@@ -27,6 +27,27 @@ This keeps Phase 6 disciplined:
 - reflective synthesis second
 - memory update last
 
+## Implementation Priority
+
+Phase 6 is broad, so implementation should be staged.
+
+Priority order:
+1. deterministic lint core
+2. cluster audit
+3. concept-page reflection
+4. collection-page reflection
+5. memory projection of accepted reflections
+6. global graph reflection
+
+This keeps the phase realistic.
+
+The most valuable early wins are:
+- better concept pages
+- better collection pages
+- reflective memory records that agents can query
+
+Global graph reflection is important, but it should come after the page-level reflective loop is working.
+
 ## Scope
 
 Phase 6 owns 3 kinds of work:
@@ -63,6 +84,10 @@ Output:
 
 `arq lint --full` runs deterministic checks first, then these reflective passes.
 
+All expensive passes should be dirty-set driven.
+
+Do not rerun every reflection on every lint pass.
+
 ### 1. Cluster Audit
 
 Review `derived/concept_clusters.jsonl` and current concept pages.
@@ -86,6 +111,11 @@ Each record should include:
 - `affected_concept_names`
 - `evidence`
 
+Eligibility:
+- clusters with `material_count >= 2` should always be eligible when stale
+- single-material clusters may be audited more lightly
+- unchanged clusters should be skipped
+
 ### 2. Concept Page Reflection
 
 For each concept page, synthesize what the connected materials jointly say.
@@ -102,6 +132,13 @@ These are not generic summaries.
 
 They are cross-material reflective synthesis grounded in the cluster members and their evidence.
 
+This pass should focus on clusters that are actually worth synthesis.
+
+Eligibility:
+- default: only clusters with `material_count >= 2`
+- skip unchanged clusters
+- optionally skip very weak clusters below a configurable evidence threshold
+
 Output artifact:
 - `derived/lint/concept_reflections.jsonl`
 
@@ -111,6 +148,7 @@ Each record should include:
 - `main_takeaways[]`
 - `main_tensions[]`
 - `open_questions[]`
+- `why_this_concept_matters`
 - `supporting_material_ids[]`
 - `supporting_evidence[]`
 
@@ -126,6 +164,10 @@ Examples:
 - what the database currently knows from this collection
 
 This extends Phase 5 deterministic collection pages with real learning value.
+
+Eligibility:
+- default: only collections with at least 2 materials
+- skip unchanged collections
 
 Output artifact:
 - `derived/lint/collection_reflections.jsonl`
@@ -154,6 +196,10 @@ Tasks:
 
 Output artifact:
 - `derived/lint/graph_findings.jsonl`
+
+This pass is intentionally advisory-first.
+
+Unlike concept and collection reflections, graph reflection should initially produce filed findings rather than broad automatic page rewrites.
 
 ## Materialization
 
@@ -189,6 +235,11 @@ Recommended split:
 - reflective page updates may apply through `--fix` only when accepted or configured as safe
 - graph findings and suggested future questions/sources may remain filed for later review
 
+The default safety model should be:
+- `--quick`: deterministic only
+- `--full`: generate reflective artifacts, no broad page mutation by default
+- `--fix`: deterministic fixes + explicitly safe or approved reflective page updates
+
 ## Memory Integration
 
 This is the key architectural move.
@@ -208,6 +259,10 @@ Minimum indexed reflection types:
 - collection takeaways
 - collection tensions
 - collection open questions
+
+These should be added as reflection-oriented tables or record types, not overloaded into existing cluster topology tables.
+
+Topology and reflection should stay distinct.
 
 The exact table design can be finalized in implementation, but the result must be:
 - queryable by agents
@@ -239,6 +294,10 @@ Graph reflection is stale when:
 - clusters changed
 - memory bridge changed
 - wiki changed materially
+
+Because graph reflection is the most expensive and least localized pass, it should also support a coarse schedule gate such as:
+- minimum elapsed time since last full graph review
+- or minimum number of changed clusters/materials
 
 ## Commands
 

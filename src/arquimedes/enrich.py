@@ -440,19 +440,14 @@ def enrich(
         if s not in _ALL_STAGES:
             raise ValueError(f"Unknown stage: {s!r}. Valid stages: {_ALL_STAGES}")
 
-    # Defer llm_fn construction until we know something is stale (agent CLIs are slow)
-    import threading
-    _llm_fn_lock = threading.Lock()
-    _stage_llm_cache: dict[str, object] = {}
-
     def _get_llm_fn(stage: str):
         if llm_fn is not None:
             return llm_fn
-        with _llm_fn_lock:
-            if stage not in _stage_llm_cache:
-                from arquimedes.enrich_llm import make_cli_llm_fn
-                _stage_llm_cache[stage] = make_cli_llm_fn(config, stage)
-            return _stage_llm_cache[stage]
+        # Return a fresh adapter per material/thread. Stage adapters carry
+        # mutable runtime state like ``last_model``, so sharing one instance
+        # across parallel material workers can serialize or race agent calls.
+        from arquimedes.enrich_llm import make_cli_llm_fn
+        return make_cli_llm_fn(config, stage)
 
     # Determine which materials to process
     if material_id:

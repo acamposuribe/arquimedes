@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
@@ -60,6 +61,46 @@ def test_bridge_prompt_includes_material_packets():
     assert 'material="Archival Landscapes" [m2]' in prompt
     assert "bridge candidate" in prompt or "bridge_candidates" in prompt
     assert "Bridge clusters must connect at least two materials." in prompt
+
+
+def test_local_cluster_prompt_requests_file_write():
+    from arquimedes.cluster import _LOCAL_SYSTEM_PROMPT, _build_prompt, _cluster_output_path
+
+    prompt = _build_prompt(
+        [
+            (
+                "archival habitat",
+                "archival habitat",
+                "m1",
+                "high",
+                "[1]",
+                '["Archives are spatial infrastructures."]',
+                0.9,
+                "local",
+            )
+        ],
+        {"m1": "Archival Habitat"},
+    )
+    assert "Write the output JSON directly to" not in prompt
+    assert "Do not emit singleton clusters" in _LOCAL_SYSTEM_PROMPT
+    assert _cluster_output_path(Path("/tmp"), "local").name == "local_clusters.json"
+
+
+def test_bridge_cluster_prompt_requests_file_write():
+    prompt = _build_bridge_prompt(
+        [
+            {
+                "material_id": "m1",
+                "title": "Archival Habitat",
+                "summary": "A material about archival space.",
+                "keywords": ["archive", "space"],
+                "local_concepts": [{"concept_name": "archival habitat", "relevance": "high"}],
+                "bridge_candidates": [{"concept_name": "archival spatiality", "relevance": "high"}],
+                "evidence_snippets": ["Archives are spatial infrastructures."],
+            }
+        ]
+    )
+    assert "Write the output JSON directly to" not in prompt
 
 
 def test_bridge_clustering_skips_without_candidates(tmp_path, monkeypatch):

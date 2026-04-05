@@ -270,6 +270,8 @@ def _stage_route_config(config: dict, stage: str | None) -> list[dict]:
             "command_parts": parts,
             "model": entry.get("model"),
             "effort": entry.get("effort"),
+            "tools": entry.get("tools"),
+            "permission_mode": entry.get("permission_mode"),
             "agent": entry.get("agent"),
             "timeout_seconds": entry.get("timeout_seconds"),
             "prompt_mode": entry.get("prompt_mode"),
@@ -311,6 +313,18 @@ def _route_flag(route: dict, key: str, default: bool) -> bool:
     if value is None:
         return default
     return bool(value)
+
+
+def _tools_arg(tools) -> str | None:
+    if tools is None:
+        return None
+    if isinstance(tools, str):
+        value = tools.strip()
+        return value if value else ""
+    if isinstance(tools, list):
+        cleaned = [str(tool).strip() for tool in tools if str(tool).strip()]
+        return ",".join(cleaned)
+    return None
 
 
 def _is_exhaustion_signal(text: str) -> bool:
@@ -486,6 +500,8 @@ def _build_agent_cmd(
     *,
     effort: str | None = None,
     model_override: str | None = None,
+    tools=None,
+    permission_mode: str | None = None,
     bare: bool = False,
 ) -> list[str]:
     """Build the full command for an agent CLI, adding speed optimizations.
@@ -513,9 +529,12 @@ def _build_agent_cmd(
             cmd.append("--no-session-persistence")
         if "--disable-slash-commands" not in cmd:
             cmd.append("--disable-slash-commands")
-        # Disable all built-in tools — we only want a text response
-        if "--tools" not in cmd:
-            cmd.extend(["--tools", ""])
+        tools_value = _tools_arg(tools)
+        if "--tools" not in cmd and "--allowedTools" not in cmd and "--allowed-tools" not in cmd:
+            if tools_value is None:
+                cmd.extend(["--tools", ""])
+            else:
+                cmd.extend(["--tools", tools_value])
         # Model: per-stage override takes precedence, then default to sonnet
         if "--model" not in cmd:
             cmd.extend(["--model", model_override or "sonnet"])
@@ -526,6 +545,8 @@ def _build_agent_cmd(
         # Control thinking budget — lower = cheaper + faster
         if "--effort" not in cmd and effort:
             cmd.extend(["--effort", effort])
+        if permission_mode and "--permission-mode" not in cmd:
+            cmd.extend(["--permission-mode", permission_mode])
         cmd.extend(["--system-prompt", system])
         return cmd
     if exe == "codex":
@@ -559,6 +580,8 @@ def _build_stage_request(
             system,
             effort=effort,
             model_override=model,
+            tools=route.get("tools"),
+            permission_mode=route.get("permission_mode"),
             bare=_route_flag(route, "bare", False),
         )
         return cmd, user_prompt, True
@@ -725,6 +748,8 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                         system_prompt,
                         effort=effort_value,
                         model_override=model,
+                        tools=attempt_cfg.get("tools"),
+                        permission_mode=attempt_cfg.get("permission_mode"),
                         bare=_route_flag(attempt_cfg, "bare", False),
                     )
                     stdin_text = f"[SYSTEM]\n{system_prompt}\n\n{user_prompt}"

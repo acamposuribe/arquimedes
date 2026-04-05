@@ -346,6 +346,10 @@ Output schema (JSON array):
     )
 
 
+def _cluster_output_path(root: Path, kind: str) -> Path:
+    return root / "derived" / "tmp" / f"{kind}_clusters.json"
+
+
 _BRIDGE_SYSTEM_PROMPT = """\
 You are an architecture research librarian. You are clustering bridge candidate concepts \
 from material packets into broad cross-material umbrella concepts.
@@ -745,8 +749,20 @@ def cluster_concepts(
     if llm_fn is None:
         llm_fn = make_cli_llm_fn(config, "cluster", state=llm_state)
 
-    user_msg = _build_prompt(concept_rows, material_titles)
+    output_path = _cluster_output_path(root, "local")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        output_path.unlink()
+
+    user_msg = (
+        _build_prompt(concept_rows, material_titles)
+        + f"\n\nWrite the output JSON directly to {output_path} using the Write tool."
+        + "\nDo not stream JSON into the response."
+        + "\nConfirm with a single line when done."
+    )
     raw_response = llm_fn(_LOCAL_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
+    if output_path.exists() and output_path.stat().st_size > 0:
+        raw_response = output_path.read_text(encoding="utf-8")
 
     schema_desc = (
         'JSON array of cluster objects with keys: cluster_id, canonical_name, '
@@ -934,8 +950,20 @@ def cluster_bridge_concepts(
     if llm_fn is None:
         llm_fn = make_cli_llm_fn(config, "cluster", state=llm_state)
 
-    user_msg = _build_bridge_prompt(material_packets)
+    output_path = _cluster_output_path(root, "bridge")
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    if output_path.exists():
+        output_path.unlink()
+
+    user_msg = (
+        _build_bridge_prompt(material_packets)
+        + f"\n\nWrite the output JSON directly to {output_path} using the Write tool."
+        + "\nDo not stream JSON into the response."
+        + "\nConfirm with a single line when done."
+    )
     raw_response = llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
+    if output_path.exists() and output_path.stat().st_size > 0:
+        raw_response = output_path.read_text(encoding="utf-8")
 
     schema_desc = (
         'JSON array of bridge cluster objects with keys: cluster_id, canonical_name, '

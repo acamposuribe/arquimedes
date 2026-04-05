@@ -1,6 +1,6 @@
 # Phase 5: Wiki Compiler — Implementation Plan
 
-> **Status:** Ready to implement
+> **Status:** Complete
 > **Date:** 2026-04-05
 > **Spec:** [Phase 5 wiki compiler design](../specs/2026-04-05-phase5-wiki-compiler-design.md)
 

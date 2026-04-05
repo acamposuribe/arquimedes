@@ -1,6 +1,6 @@
 # Phase 5 Addendum: Collection Pages — Design Spec
 
-> **Status:** Draft
+> **Status:** Complete
 > **Date:** 2026-04-05
 > **Parent spec:** [Phase 5 wiki compiler design](2026-04-05-phase5-wiki-compiler-design.md)
 > **Plan:** [Collection pages implementation plan](../plans/2026-04-05-phase5-collection-pages.md)

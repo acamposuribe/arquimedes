@@ -1,8 +1,8 @@
 # Arquimedes — Connection Model
 
-> **Status:** Working design note
+> **Status:** Complete
 > **Date:** 2026-04-05
-> **Related specs:** [Full system design](2026-04-04-arquimedes-knowledge-system-design.md), [Phase 3 enrichment](2026-04-04-phase3-enrichment-design.md), [Phase 4 search index](2026-04-04-phase4-search-index-design.md)
+> **Related specs:** [Full system design](../../specs/2026-04-04-arquimedes-knowledge-system-design.md), [Phase 3 enrichment](2026-04-04-phase3-enrichment-design.md), [Phase 4 search index](2026-04-04-phase4-search-index-design.md)
 
 ## Purpose
 

@@ -1,9 +1,9 @@
 # Arquimedes — Phase 5: Wiki Compiler Design
 
-> **Status:** Draft
+> **Status:** Complete
 > **Date:** 2026-04-05
-> **Related specs:** [Full system design](2026-04-04-arquimedes-knowledge-system-design.md), [Connection model](2026-04-05-connection-model.md), [Phase 3 enrichment](2026-04-04-phase3-enrichment-design.md), [Phase 4 search index](2026-04-04-phase4-search-index-design.md), [Phase 5 collection pages addendum](2026-04-05-phase5-collection-pages-design.md)
-> **Plan:** [PLAN.md](../../PLAN.md)
+> **Related specs:** [Full system design](../../specs/2026-04-04-arquimedes-knowledge-system-design.md), [Connection model](2026-04-05-connection-model.md), [Phase 3 enrichment](2026-04-04-phase3-enrichment-design.md), [Phase 4 search index](2026-04-04-phase4-search-index-design.md), [Phase 5 collection pages addendum](2026-04-05-phase5-collection-pages-design.md)
+> **Plan:** [PLAN.md](../../../PLAN.md)
 
 ## Purpose
 

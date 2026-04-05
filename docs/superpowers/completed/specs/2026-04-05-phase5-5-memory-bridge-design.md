@@ -1,9 +1,9 @@
 # Arquimedes — Phase 5.5: Memory Bridge Design
 
-> **Status:** Draft
+> **Status:** Complete
 > **Date:** 2026-04-05
-> **Related specs:** [Full system design](2026-04-04-arquimedes-knowledge-system-design.md), [Connection model](2026-04-05-connection-model.md), [Phase 5 wiki compiler](2026-04-05-phase5-wiki-compiler-design.md)
-> **Plan:** [PLAN.md](../../PLAN.md)
+> **Related specs:** [Full system design](../../specs/2026-04-04-arquimedes-knowledge-system-design.md), [Connection model](2026-04-05-connection-model.md), [Phase 5 wiki compiler](2026-04-05-phase5-wiki-compiler-design.md)
+> **Plan:** [PLAN.md](../../../PLAN.md)
 
 ## Purpose
 

@@ -1,13 +1,14 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phase 5.5 complete; Phase 6 next
+> **Status:** Phases 1-5.5 complete; Phase 6 next
 > **Last updated:** 2026-04-05
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
-> **Phase 5 spec:** [Wiki compiler design](superpowers/specs/2026-04-05-phase5-wiki-compiler-design.md)
-> **Phase 5.5 spec:** [Memory bridge design](superpowers/specs/2026-04-05-phase5-5-memory-bridge-design.md)
+> **Phase 5 spec:** [Wiki compiler design](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
+> **Phase 5.5 spec:** [Memory bridge design](superpowers/completed/specs/2026-04-05-phase5-5-memory-bridge-design.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 > **Pipeline:** [Operational pipeline](PIPELINE.md)
-> **Phase 5 addendum:** [Collection pages spec](superpowers/specs/2026-04-05-phase5-collection-pages-design.md)
+> **Phase 5 addendum:** [Collection pages spec](superpowers/completed/specs/2026-04-05-phase5-collection-pages-design.md)
+> **Completed phase docs:** `docs/superpowers/completed/`
 
 ## Context
 
@@ -54,7 +55,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
   - [x] Page thumbnails
   - [x] Image files: OCR for scanned documents, pass-through for project/inspiration images
   - [x] Deterministic classification (TF-IDF keywords, rule-based document type)
-  - [x] **(connection model)** `Chunk.annotation_overlap_ids: list[str]` — store explicit annotation IDs per chunk, not just the boolean emphasis flag (LOW — needed for Phase 5 annotation backlinks; see [connection model plan](superpowers/plans/2026-04-05-connection-model.md))
+  - [x] **(connection model)** `Chunk.annotation_overlap_ids: list[str]` — store explicit annotation IDs per chunk, not just the boolean emphasis flag (LOW — needed for Phase 5 annotation backlinks; see [connection model plan](superpowers/completed/plans/2026-04-05-connection-model.md))
 
 ## Phase 3: LLM Enrichment
 
@@ -78,13 +79,13 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - [x] **(connection model C4.2)** `ConceptHit` in search with provenance; concepts in content-first pass; concept boost in ranking; `--concept-limit` CLI option
 - [x] **(connection model C4.3)** `arq related <material_id>` — shared concepts via `concept_key` JOIN, keywords via `material_keywords` JOIN, authors via `material_authors` JOIN, facets via direct comparison; scored and explained
 - [x] **(connection model C4.4)** `arq concepts` — GROUP BY `concept_key` with counted relevance summary (e.g. "2×high"); Phase 5 uses this to decide which concept pages to compile
-- See [connection model plan](superpowers/plans/2026-04-05-connection-model.md) for full design
+- See [connection model plan](superpowers/completed/plans/2026-04-05-connection-model.md) for full design
 
 ## Phase 5: Wiki Compiler
 
-- [x] **(concept clustering)** `arq cluster` — LLM pass over all concepts in the index (keys, titles, evidence); emit `derived/concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments; see [Phase 5 spec](superpowers/specs/2026-04-05-phase5-wiki-compiler-design.md)
+- [x] **(concept clustering)** `arq cluster` — LLM pass over all concepts in the index (keys, titles, evidence); emit `derived/concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] `arq compile` — generate material pages, concept pages (one page per cluster), index pages
-- [x] **(collection pages addendum)** Extend `arq compile` so `wiki/{domain}/{collection}/_index.md` becomes a first-class deterministic collection page; see [collection pages spec](superpowers/specs/2026-04-05-phase5-collection-pages-design.md)
+- [x] **(collection pages addendum)** Extend `arq compile` so `wiki/{domain}/{collection}/_index.md` becomes a first-class deterministic collection page; see [collection pages spec](superpowers/completed/specs/2026-04-05-phase5-collection-pages-design.md)
 - [x] Collection pages should include: overview, recent additions, material list, top canonical concepts by recurrence, top facets by frequency
 - [x] Incremental compilation (per-material stamps for material pages; global `cluster_stamp` — when clusters change, rebuild **all** concept pages)
 - [x] Cross-referencing with standard markdown links

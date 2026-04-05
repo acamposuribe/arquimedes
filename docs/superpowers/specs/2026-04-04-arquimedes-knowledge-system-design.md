@@ -15,9 +15,9 @@ For the practical end-to-end operating flow, including what happens when a colla
 
 For the original conceptual pattern, see `docs/llm-wiki.md`. That file is the local reference for the source idea. This spec defines how Arquimedes instantiates and extends that pattern for architecture practice and research, with explicit provenance, deterministic extraction, multimodal materials, collaboration, and a future server-maintainer daemon.
 
-For how Arquimedes should evolve from a searchable archive into a connected memory system before the wiki compiler exists, see `docs/superpowers/specs/2026-04-05-connection-model.md`. That note explains how structural, semantic, retrieval, attention, and materialized connections should emerge across phases.
+For how Arquimedes should evolve from a searchable archive into a connected memory system before the wiki compiler exists, see `docs/superpowers/completed/specs/2026-04-05-connection-model.md`. That note explains how structural, semantic, retrieval, attention, and materialized connections should emerge across phases.
 
-For the post-compile bridge that makes the wiki graph queryable for agents, see `docs/superpowers/specs/2026-04-05-phase5-5-memory-bridge-design.md`. That phase turns the readable semantic graph into a machine-queryable memory layer inside SQLite.
+For the post-compile bridge that makes the wiki graph queryable for agents, see `docs/superpowers/completed/specs/2026-04-05-phase5-5-memory-bridge-design.md`. That phase turns the readable semantic graph into a machine-queryable memory layer inside SQLite.
 
 The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer. It is responsible for ingesting new sources, enriching them, compiling and updating wiki pages, running health checks, and keeping indexes current. Semantic publication belongs to that server-maintainer path: clustering and wiki compilation are not collaborator responsibilities. Collaborator machines rebuild only deterministic local query layers from already-committed outputs. This maintainer role is assembled progressively:
 - **Wiki compilation** defines what the maintainer writes and updates
@@ -449,7 +449,7 @@ Standard markdown links: `[Thermal Mass](../shared/concepts/thermal-mass.md)`. N
 - **Broken links**: wiki pages referencing materials, concepts, or files that don't exist
 - **Orphaned materials**: extracted materials with no wiki page
 - **Missing metadata**: materials lacking required facets (domain, document_type, etc.)
-- **Stale enrichment**: materials where any enrichment stage stamp differs from current config (prompt_version, model, enrichment_schema_version) or where input_fingerprint has changed since last enrichment (see [Phase 3 enrichment spec](2026-04-04-phase3-enrichment-design.md))
+- **Stale enrichment**: materials where any enrichment stage stamp differs from current config (prompt_version, model, enrichment_schema_version) or where input_fingerprint has changed since last enrichment (see [Phase 3 enrichment spec](../completed/specs/2026-04-04-phase3-enrichment-design.md))
 - **Index drift**: search index out of sync with extracted data
 - **Duplicate materials**: different manifest entries pointing to the same content hash
 

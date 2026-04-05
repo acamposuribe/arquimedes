@@ -1,6 +1,6 @@
 # Phase 4: Search Index & Retrieval — Design Spec
 
-> **Status:** Approved design
+> **Status:** Complete
 > **Date:** 2026-04-04
 > **Parent spec:** [Full system design](2026-04-04-arquimedes-knowledge-system-design.md)
 

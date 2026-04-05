@@ -101,7 +101,7 @@ def test_bridge_clustering_skips_without_candidates(tmp_path, monkeypatch):
     assert bridge_path.read_text(encoding="utf-8") == ""
 
 
-def test_cluster_cli_defaults_to_local_only(tmp_path, monkeypatch):
+def test_cluster_cli_defaults_to_both_passes(tmp_path, monkeypatch):
     import arquimedes.cli as cli_mod
     import arquimedes.cluster as cluster_mod
     import arquimedes.config as config_mod
@@ -122,6 +122,34 @@ def test_cluster_cli_defaults_to_local_only(tmp_path, monkeypatch):
 
     runner = CliRunner()
     result = runner.invoke(cli_mod.cli, ["cluster"])
+
+    assert result.exit_code == 0
+    assert calls == [("local", False, True), ("bridge", False, True)]
+    assert "Local:" in result.output
+    assert "Bridge:" in result.output
+
+
+def test_cluster_cli_local_only_skips_bridge(tmp_path, monkeypatch):
+    import arquimedes.cli as cli_mod
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.config as config_mod
+
+    calls = []
+
+    def mock_local(config, *, force=False, llm_fn=None, llm_state=None):
+        calls.append(("local", force, llm_state is not None))
+        return {"total_concepts": 1, "clusters": 1, "multi_material": 0}
+
+    def mock_bridge(config, *, force=False, llm_fn=None, llm_state=None):
+        calls.append(("bridge", force, llm_state is not None))
+        return {"bridge_concepts": 0, "clusters": 0, "multi_material": 0}
+
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", mock_local)
+    monkeypatch.setattr(cluster_mod, "cluster_bridge_concepts", mock_bridge)
+
+    runner = CliRunner()
+    result = runner.invoke(cli_mod.cli, ["cluster", "--local-only"])
 
     assert result.exit_code == 0
     assert calls == [("local", False, True)]

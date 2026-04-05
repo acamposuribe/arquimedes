@@ -436,7 +436,7 @@ def render_concept_page(
     """Render a concept wiki page as markdown.
 
     Args:
-        cluster: cluster dict from concept_clusters.jsonl
+        cluster: cluster dict from bridge_concept_clusters.jsonl
         material_titles: mapping of material_id → title
         related_concepts: pre-computed list of {canonical_name, slug}
         material_paths: mapping of material_id → wiki-relative path (e.g. wiki/research/_general/abc.md)

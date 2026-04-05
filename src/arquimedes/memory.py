@@ -1,7 +1,7 @@
 """Memory bridge — project canonical concept graph into SQLite for agent access.
 
-Reads derived/concept_clusters.jsonl and derived/bridge_concept_clusters.jsonl
-(produced by arq cluster) and materialises graph structures into search.sqlite
+Reads derived/bridge_concept_clusters.jsonl (produced by arq cluster) and
+materialises graph structures into search.sqlite
 so agents can traverse them without opening wiki markdown.
 
 Phase 5.5 is deterministic: no new LLM calls. It is a projection layer.
@@ -516,7 +516,6 @@ def _fingerprint_file(path: Path) -> str:
 
 
 def _cluster_fingerprint(root: Path) -> str:
-    local_path = root / "derived" / "concept_clusters.jsonl"
     bridge_path = root / "derived" / "bridge_concept_clusters.jsonl"
     lint_dir = root / "derived" / "lint"
     lint_paths = [
@@ -525,11 +524,9 @@ def _cluster_fingerprint(root: Path) -> str:
         lint_dir / "collection_reflections.jsonl",
         lint_dir / "graph_findings.jsonl",
     ]
-    if not local_path.exists() and not bridge_path.exists() and not any(path.exists() for path in lint_paths):
+    if not bridge_path.exists() and not any(path.exists() for path in lint_paths):
         return ""
     hasher = hashlib.sha256()
-    if local_path.exists():
-        hasher.update(local_path.read_bytes())
     if bridge_path.exists():
         hasher.update(bridge_path.read_bytes())
     for path in lint_paths:
@@ -586,7 +583,6 @@ def memory_rebuild(config: dict | None = None) -> dict:
     manifest_path = root / "manifests" / "materials.jsonl"
     stamp_path = root / "derived" / "memory_bridge_stamp.json"
     cluster_paths = [
-        root / "derived" / "concept_clusters.jsonl",
         root / "derived" / "bridge_concept_clusters.jsonl",
     ]
 
@@ -596,12 +592,12 @@ def memory_rebuild(config: dict | None = None) -> dict:
         )
     if not any(path.exists() for path in cluster_paths):
         raise FileNotFoundError(
-            f"Cluster file not found at {cluster_paths[0]} or {cluster_paths[1]}. Run `arq cluster` first."
+            f"Cluster file not found at {cluster_paths[0]}. Run `arq cluster` first."
         )
 
-    from arquimedes.cluster import load_bridge_clusters, load_clusters
+    from arquimedes.cluster import load_bridge_clusters
 
-    clusters = load_clusters(root) + load_bridge_clusters(root)
+    clusters = load_bridge_clusters(root)
 
     con = sqlite3.connect(str(index_path))
     con.row_factory = sqlite3.Row

@@ -70,7 +70,7 @@ def _write_clusters(root: Path, clusters: list[dict]) -> None:
     derived = root / "derived"
     derived.mkdir(exist_ok=True)
     lines = "\n".join(json.dumps(c) for c in clusters) + "\n"
-    (derived / "concept_clusters.jsonl").write_text(lines)
+    (derived / "bridge_concept_clusters.jsonl").write_text(lines)
 
 
 def _write_bridge_clusters(root: Path, clusters: list[dict]) -> None:

@@ -544,7 +544,7 @@ def _write_clusters(root: Path, clusters: list[dict]) -> None:
     derived = root / "derived"
     derived.mkdir(exist_ok=True)
     lines = "\n".join(json.dumps(c) for c in clusters) + "\n"
-    (derived / "concept_clusters.jsonl").write_text(lines)
+    (derived / "bridge_concept_clusters.jsonl").write_text(lines)
 
 
 def _write_bridge_clusters(root: Path, clusters: list[dict]) -> None:
@@ -739,7 +739,7 @@ class TestClusterGraphIndexing:
         assert count == 2
 
     def test_rebuild_index_includes_clusters(self, repo):
-        """rebuild_index() auto-populates clusters if derived/concept_clusters.jsonl exists."""
+        """rebuild_index() auto-populates clusters if derived/bridge_concept_clusters.jsonl exists."""
         import sqlite3
         _add_material(repo)
         _write_clusters(repo, _SAMPLE_CLUSTERS)
@@ -751,7 +751,7 @@ class TestClusterGraphIndexing:
         assert count == 2
 
     def test_staleness_when_clusters_changed(self, repo):
-        """ensure_index() rebuilds when concept_clusters.jsonl changes."""
+        """ensure_index() rebuilds when bridge_concept_clusters.jsonl changes."""
         import sqlite3
         _add_material(repo)
         _write_clusters(repo, _SAMPLE_CLUSTERS)

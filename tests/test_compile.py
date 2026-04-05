@@ -9,13 +9,9 @@ from pathlib import Path
 import pytest
 
 from arquimedes.cluster import (
-    _normalize_concept_name,
+    bridge_cluster_fingerprint,
     _validate_bridge_and_attach_provenance,
-    _validate_and_attach_provenance,
-    cluster_fingerprint,
-    is_clustering_stale,
-    load_clusters,
-    slugify,
+    load_bridge_clusters,
 )
 from arquimedes.compile_pages import (
     _concept_wiki_path,
@@ -151,36 +147,6 @@ def _make_meta(material_id: str = "mat_aaa", title: str = "Test") -> dict:
     }
 
 
-def test_validate_splits_single_material_umbrella_cluster():
-    """A local cluster that over-merges one material should be split to singletons."""
-    raw_clusters = [{
-        "cluster_id": "concept_0001",
-        "canonical_name": "archive theory umbrella",
-        "aliases": ["archival habitat", "memory palace"],
-        "source_concepts": [
-            {"material_id": "mat_aaa", "concept_name": "archival habitat"},
-            {"material_id": "mat_aaa", "concept_name": "memory palace"},
-        ],
-        "confidence": 0.4,
-    }]
-
-    rows = [CONCEPT_ROWS[0], CONCEPT_ROWS[2]]
-    validated = _validate_and_attach_provenance(
-        raw_clusters,
-        _concept_index_from_rows(rows),
-        dict(MATERIAL_ROWS),
-    )
-
-    assert len(validated) == 2
-    assert {cluster["canonical_name"] for cluster in validated} == {
-        "archival habitat",
-        "memory palace",
-    }
-    for cluster in validated:
-        assert len(cluster["source_concepts"]) == 1
-        assert len(cluster["material_ids"]) == 1
-
-
 def test_validate_bridge_allows_multiple_concepts_from_same_material():
     """Bridge clusters can preserve multiple concepts from one material when they support one umbrella."""
     raw_clusters = [{
@@ -208,35 +174,12 @@ def test_validate_bridge_allows_multiple_concepts_from_same_material():
     assert set(validated[0]["material_ids"]) == {"mat_aaa", "mat_bbb"}
 
 
-def test_validate_resolves_truncated_concept_name():
-    """Minor LLM truncation should still resolve to the indexed concept row."""
-    raw_clusters = [{
-        "cluster_id": "concept_0001",
-        "canonical_name": "archive as architectural space",
-        "aliases": ["archive as space"],
-        "source_concepts": [
-            {"material_id": "mat_bbb", "concept_name": "archive as spac"},
-        ],
-        "confidence": 0.85,
-    }]
-
-    rows = [CONCEPT_ROWS[1]]
-    validated = _validate_and_attach_provenance(
-        raw_clusters,
-        _concept_index_from_rows(rows),
-        dict(MATERIAL_ROWS),
-    )
-
-    assert len(validated) == 1
-    assert validated[0]["source_concepts"][0]["concept_name"] == "archive as space"
-
-
 # ---------------------------------------------------------------------------
 # Test 1: cluster parse and write
 # ---------------------------------------------------------------------------
 
-def test_cluster_parse_and_write(tmp_path, monkeypatch):
-    """Mock LLM returns valid JSON → concept_clusters.jsonl written with correct fields."""
+def test_bridge_cluster_parse_and_write(tmp_path, monkeypatch):
+    """Mock LLM returns valid JSON → bridge_concept_clusters.jsonl written with correct fields."""
     import arquimedes.cluster as cluster_mod
     import arquimedes.config as config_mod
 
@@ -258,14 +201,14 @@ def test_cluster_parse_and_write(tmp_path, monkeypatch):
         return json.dumps(RAW_LLM_CLUSTERS)
 
     config = {"llm": {"agent_cmd": "echo"}}
-    clusters = cluster_mod.cluster_concepts(config, llm_fn=mock_llm, force=True)
+    clusters = cluster_mod.cluster_bridge_concepts(config, llm_fn=mock_llm, force=True)
 
-    assert clusters["clusters"] == 2
-    assert clusters["total_concepts"] == 3
-    assert clusters["multi_material"] == 1  # only first cluster has 2 materials
+    assert clusters["clusters"] == 1
+    assert clusters["bridge_concepts"] == 3
+    assert clusters["multi_material"] == 1  # only first cluster survives validation
 
-    written = load_clusters(tmp_path)
-    assert len(written) == 2
+    written = load_bridge_clusters(tmp_path)
+    assert len(written) == 1
 
     c0 = written[0]
     assert c0["canonical_name"] == "archive as architectural space"
@@ -285,8 +228,8 @@ def test_cluster_parse_and_write(tmp_path, monkeypatch):
 # Test 2: cluster staleness skip
 # ---------------------------------------------------------------------------
 
-def test_cluster_staleness_skip(tmp_path, monkeypatch):
-    """Unchanged concept fingerprint → clustering skipped, no LLM call."""
+def test_bridge_cluster_staleness_skip(tmp_path, monkeypatch):
+    """Unchanged bridge fingerprint → clustering skipped, no LLM call."""
     import arquimedes.cluster as cluster_mod
     import arquimedes.config as config_mod
 
@@ -302,28 +245,19 @@ def test_cluster_staleness_skip(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(cluster_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cluster_mod, "is_bridge_clustering_stale", lambda config=None, force=False: False)
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [{"material_ids": ["mat_aaa", "mat_bbb"], "source_concepts": []}])
 
     config = {"llm": {"agent_cmd": "echo"}}
 
     # Write a fake cluster file and stamp matching current fingerprint
-    fp = cluster_mod.cluster_fingerprint(config)
-    (derived_dir / "cluster_stamp.json").write_text(
-        json.dumps({"fingerprint": fp}), encoding="utf-8"
-    )
-    (derived_dir / "concept_clusters.jsonl").write_text(
-        json.dumps({"cluster_id": "concept_0001", "canonical_name": "test", "slug": "test",
-                    "aliases": [], "material_ids": [], "source_concepts": [], "confidence": 1.0})
-        + "\n",
-        encoding="utf-8",
-    )
-
     llm_called = []
 
     def mock_llm(system, messages):
         llm_called.append(True)
         return "[]"
 
-    result = cluster_mod.cluster_concepts(config, llm_fn=mock_llm, force=False)
+    result = cluster_mod.cluster_bridge_concepts(config, llm_fn=mock_llm, force=False)
     assert result.get("skipped") is True
     assert not llm_called
 
@@ -510,7 +444,7 @@ def test_incremental_skip(tmp_path, monkeypatch):
         "confidence": 0.85,
     }]
     clusters_text = "\n".join(json.dumps(c) for c in clusters_data) + "\n"
-    (derived_dir / "concept_clusters.jsonl").write_text(clusters_text, encoding="utf-8")
+    (derived_dir / "bridge_concept_clusters.jsonl").write_text(clusters_text, encoding="utf-8")
 
     cluster_stamp = compile_mod._cluster_file_stamp(tmp_path)
     mat_stamp = compile_mod._material_stamp(extracted_dir)
@@ -527,22 +461,15 @@ def test_incremental_skip(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
 
-    # Patch cluster_concepts to return "skipped"
-    monkeypatch.setattr(
-        cluster_mod, "cluster_concepts",
-        lambda config, llm_fn=None, force=False: {
-            "total_concepts": 3, "clusters": 1, "multi_material": 0, "skipped": True
-        },
-    )
-    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: clusters_data)
+    # Patch bridge clustering to return "skipped"
     monkeypatch.setattr(
         cluster_mod,
         "cluster_bridge_concepts",
         lambda config, llm_fn=None, force=False: {
-            "bridge_concepts": 0, "clusters": 0, "multi_material": 0, "skipped": True
+            "bridge_concepts": 3, "clusters": 1, "multi_material": 0, "skipped": True
         },
     )
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: clusters_data)
 
     result = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=False)
 
@@ -748,7 +675,7 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
             "confidence": 0.88,
         }],
     }
-    (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+    (derived / "bridge_concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
     (derived / "lint").mkdir(parents=True, exist_ok=True)
     (derived / "lint" / "concept_reflections.jsonl").write_text(
         json.dumps({
@@ -809,16 +736,6 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     monkeypatch.setattr(index_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(
-        cluster_mod, "cluster_concepts",
-        lambda config, llm_fn=None, force=False: {
-            "total_concepts": 1, "clusters": 1, "multi_material": 0, "skipped": True
-        },
-    )
-    monkeypatch.setattr(
-        cluster_mod, "load_clusters",
-        lambda root=None: [cluster],
-    )
-    monkeypatch.setattr(
         cluster_mod,
         "cluster_bridge_concepts",
         lambda config, llm_fn=None, force=False: {
@@ -853,14 +770,15 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
         "SELECT path FROM wiki_pages WHERE page_type='material'"
     ).fetchall()
     aliases = con.execute(
-        "SELECT alias FROM concept_cluster_aliases WHERE cluster_id='c_001'"
+        "SELECT alias FROM concept_cluster_aliases WHERE cluster_id=?",
+        (bridge_cluster["cluster_id"],),
     ).fetchall()
     con.close()
 
     assert any("shared/concepts/_index.md" in r[0] for r in concept_index), "local concept index not in wiki_pages"
     assert any("bridge-concepts/archive-space-framework" in r[0] for r in concept_pages), "bridge concept page not in wiki_pages"
     assert any(mid in r[0] for r in material_pages), "material page not in wiki_pages"
-    assert {r[0] for r in aliases} == {"archival space", "archive as space"}
+    assert {r[0] for r in aliases} == {"archival space framework"}
 
 
 # ---------------------------------------------------------------------------
@@ -959,22 +877,17 @@ def test_compile_writes_collection_pages(tmp_path, monkeypatch):
             "evidence_spans": [], "confidence": 0.9,
         }],
     }
-    (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+    (derived / "bridge_concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
 
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(
-        cluster_mod, "cluster_concepts",
-        lambda config, llm_fn=None, force=False: {"skipped": True},
-    )
-    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: [cluster])
-    monkeypatch.setattr(
         cluster_mod,
         "cluster_bridge_concepts",
         lambda config, llm_fn=None, force=False: {"skipped": True},
     )
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [cluster])
 
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
 
@@ -1023,8 +936,6 @@ def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
-    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: [])
     monkeypatch.setattr(cluster_mod, "cluster_bridge_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
     monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
 
@@ -1079,7 +990,7 @@ def test_compile_runs_quick_lint_after_compile(tmp_path, monkeypatch):
             "evidence_spans": [], "confidence": 0.9,
         }],
     }
-    (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+    (derived / "bridge_concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
 
     lint_calls: list[dict] = []
 
@@ -1102,10 +1013,8 @@ def test_compile_runs_quick_lint_after_compile(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
-    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: [cluster])
     monkeypatch.setattr(cluster_mod, "cluster_bridge_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [cluster])
     monkeypatch.setattr("arquimedes.lint.run_lint", fake_run_lint)
 
     result = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
@@ -1194,7 +1103,7 @@ def test_compile_recompile_pages_rerenders_without_reclustering(tmp_path, monkey
                 "confidence": 1.0,
             }],
         }
-    (derived / "concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+    (derived / "bridge_concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
     (derived / "lint").mkdir(parents=True, exist_ok=True)
     (derived / "lint" / "concept_reflections.jsonl").write_text(
         json.dumps({
@@ -1221,12 +1130,6 @@ def test_compile_recompile_pages_rerenders_without_reclustering(tmp_path, monkey
     monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(
         cluster_mod,
-        "cluster_concepts",
-        lambda config, llm_fn=None, force=False: calls.append(force) or {"skipped": True},
-    )
-    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: [cluster])
-    monkeypatch.setattr(
-        cluster_mod,
         "cluster_bridge_concepts",
         lambda config, llm_fn=None, force=False: calls.append(force) or {"skipped": True},
     )
@@ -1234,7 +1137,7 @@ def test_compile_recompile_pages_rerenders_without_reclustering(tmp_path, monkey
 
     summary = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, recompile_pages=True)
 
-    assert calls == [False, False]
+    assert calls == [False]
     assert summary["concept_pages"] == 1
     page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "recompile-concept.md").read_text()
     assert "Reflection text from artifacts." in page

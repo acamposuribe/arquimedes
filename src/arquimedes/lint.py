@@ -29,10 +29,8 @@ from typing import Any
 
 from arquimedes.cluster import (
     is_bridge_clustering_stale,
-    is_clustering_stale,
     bridge_cluster_fingerprint,
     load_bridge_clusters,
-    load_clusters,
     slugify,
 )
 from arquimedes.compile import compile_wiki
@@ -777,7 +775,7 @@ def _material_titles_from_metas(metas: dict[str, dict]) -> dict[str, str]:
 
 
 def _current_concepts(root: Path) -> list[dict]:
-    return load_clusters(root) + load_bridge_clusters(root)
+    return load_bridge_clusters(root)
 
 
 # ---------------------------------------------------------------------------
@@ -834,7 +832,6 @@ def _memory_state_stale(root: Path) -> tuple[bool, str]:
 
     stamp = _load_json(stamp_path, {}) or {}
     clusters_fp = canonical_hash(
-        _read_text(root / "derived" / "concept_clusters.jsonl"),
         _read_text(root / "derived" / "bridge_concept_clusters.jsonl"),
         _read_text(root / "derived" / "lint" / "cluster_reviews.jsonl"),
         _read_text(root / "derived" / "lint" / "concept_reflections.jsonl"),
@@ -1283,7 +1280,7 @@ def render_lint_report(report: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _compile_is_safe(root: Path) -> bool:
-    return not is_clustering_stale(None) and not is_bridge_clustering_stale(None)
+    return not is_bridge_clustering_stale(None)
 
 
 def _apply_deterministic_fixes(report: dict, config: dict) -> dict:

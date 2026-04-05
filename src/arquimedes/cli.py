@@ -282,35 +282,20 @@ def figures(material_id: str):
 
 @cli.command("cluster")
 @click.option("--force", is_flag=True, help="Re-cluster even if input is unchanged.")
-@click.option("--local-only", is_flag=True, help="Skip bridge clustering and run local clustering only.")
-def cluster_cmd(force: bool, local_only: bool):
-    """Cluster concept candidates across materials into canonical concepts."""
-    from arquimedes.cluster import cluster_concepts, cluster_bridge_concepts
+def cluster_cmd(force: bool):
+    """Cluster bridge concepts across materials into canonical concepts."""
+    from arquimedes.cluster import cluster_bridge_concepts
     from arquimedes.enrich_llm import EnrichmentError
     from arquimedes.config import load_config
 
     llm_state: dict = {}
 
     try:
-        local_summary = cluster_concepts(load_config(), force=force, llm_state=llm_state)
-        bridge_summary = None
-        if not local_only:
-            bridge_summary = cluster_bridge_concepts(load_config(), force=force, llm_state=llm_state)
+        bridge_summary = cluster_bridge_concepts(load_config(), force=force, llm_state=llm_state)
     except EnrichmentError as e:
         raise click.ClickException(str(e))
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
-
-    if local_summary.get("skipped"):
-        click.echo("Local clustering is up to date — skipped.")
-    else:
-        total = local_summary["total_concepts"]
-        n_clusters = local_summary["clusters"]
-        multi = local_summary["multi_material"]
-        click.echo(f"Local: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
-
-    if local_only:
-        return
 
     if bridge_summary and bridge_summary.get("skipped"):
         click.echo("Bridge clustering is up to date — skipped.")

@@ -138,17 +138,14 @@ Current clustering sees too little of each material’s conceptual world. It sho
 
 ### Required changes
 
-#### B1. Split clustering into two passes
+#### B1. Bridge clustering only
 
-1. **Exact / local clustering**
-- cluster `concepts_local`
-- preserve precise wiki concepts
+Bridge clustering should consume the cleaned local concept signals and produce broader cross-material connections.
 
-2. **Bridge clustering**
 - cluster `concepts_bridge_candidates`
-- produce broader cross-material connections
+- preserve precise local concepts in SQL/search only
+- publish only bridge concepts as wiki pages
 
-These are separate outputs, not one blended pass.
 This is the main ambitious change.
 
 #### B2. Material-aware bridge input
@@ -173,10 +170,7 @@ Token discipline:
 
 #### B3. Distinct cluster outputs
 
-Write two derived files:
-
-- `derived/concept_clusters.jsonl`
-  - precise/local canonical clusters
+Write one derived file:
 
 - `derived/bridge_concept_clusters.jsonl`
   - broader associative clusters
@@ -188,9 +182,6 @@ Bridge clusters should require:
 
 #### B4. Different validation rules
 
-For local clusters:
-- keep current strict provenance-oriented validation
-
 For bridge clusters:
 - still require valid source concept references
 - allow multiple source concepts from one material
@@ -200,11 +191,8 @@ For bridge clusters:
 
 ### Wiki
 
-Local concept pages remain first-class.
-
-Add a second wiki surface later:
-- bridge concepts
-- or bridge sections inside concept pages
+Local concepts remain searchable in SQL and the deterministic local concept index.
+Bridge concepts become the first-class wiki surface.
 
 ### Search / relatedness
 
@@ -216,9 +204,7 @@ Use bridge clusters to strengthen:
 
 ### Memory bridge
 
-Phase 5.5 should eventually mirror both layers into SQLite:
-- precise concept graph
-- bridge concept graph
+Phase 5.5 mirrors the bridge concept graph into SQLite.
 
 ## Migration Strategy
 
@@ -228,11 +214,11 @@ Phase 5.5 should eventually mirror both layers into SQLite:
 - start writing `concept_type`
 
 ### Step 2
-- keep existing local clustering working
 - add separate bridge clustering path
+- keep local concepts searchable in SQL
 
 ### Step 3
-- update compile/search/memory to consume both layers
+- update compile/search/memory to consume bridge layers and local concept index
 
 ## Success Criteria
 

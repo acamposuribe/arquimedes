@@ -165,10 +165,8 @@ def _write_compile_stamp(
 
 
 def _cluster_file_stamp(project_root: Path) -> str:
-    local_path = project_root / "derived" / "concept_clusters.jsonl"
     bridge_path = project_root / "derived" / "bridge_concept_clusters.jsonl"
     return enrich_stamps.canonical_hash(
-        local_path.read_text(encoding="utf-8") if local_path.exists() else "",
         bridge_path.read_text(encoding="utf-8") if bridge_path.exists() else "",
     )
 
@@ -356,15 +354,11 @@ def compile_wiki(
         ensure_index(config)
 
     # 2. Run clustering if stale or forced
-    local_cluster_summary = cluster_mod.cluster_concepts(
-        config, llm_fn=llm_fn, force=force or force_cluster
-    )
     bridge_cluster_summary = cluster_mod.cluster_bridge_concepts(
         config, llm_fn=llm_fn, force=force or force_cluster
     )
 
     # 3. Load clusters
-    _local_clusters = cluster_mod.load_clusters(root)
     bridge_clusters = cluster_mod.load_bridge_clusters(root)
     material_titles: dict[str, str] = {}
     if db_path.exists():
@@ -581,7 +575,6 @@ def compile_wiki(
         "orphans_removed": len(orphans),
         "quick_lint": quick_lint_summary,
         "clustering": {
-            "local": local_cluster_summary,
             "bridge": bridge_cluster_summary,
         },
     }

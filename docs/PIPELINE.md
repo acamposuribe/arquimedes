@@ -93,9 +93,9 @@ When a collaborator adds a file to the shared library root:
 - No LLM
 
 5. **`arq cluster`**
-- Reads all concept candidates across the collection
-- Groups semantically equivalent concepts into canonical cross-material clusters
-- Writes `derived/concept_clusters.jsonl`
+- Reads bridge candidate packets and existing bridge concept memory
+- Groups cross-material concepts into canonical bridge clusters
+- Writes `derived/bridge_concept_clusters.jsonl`
 - Uses the stage-specific route list for `cluster` when configured, with the same legacy fallback behavior
 - **LLM required**
 

@@ -8,18 +8,19 @@
 
 Improve concept quality and cross-material connections by:
 - extracting two concept layers in Phase 3
-- adding a second, bridge-oriented clustering pass in Phase 5
+- keeping local concepts as raw searchable signals
+- adding a bridge-oriented clustering pass in Phase 5
 
 ## Files
 
 | File | Action | Purpose |
 |---|---|---|
-| `src/arquimedes/enrich_prompts.py` | Modify | Keep local concept prompt close to current behavior; add `concepts_bridge_candidates` instructions/schema |
+| `src/arquimedes/enrich_prompts.py` | Modify | Keep local concept output close to current behavior; add `concepts_bridge_candidates` instructions/schema |
 | `src/arquimedes/enrich_document.py` | Modify | Parse and persist local concepts + bridge candidates |
 | `src/arquimedes/models.py` | Modify | Add `concept_type` support if needed in concept model |
 | `src/arquimedes/index.py` | Modify | Index concept type and support separate local vs bridge candidate queries |
-| `src/arquimedes/cluster.py` | Refactor | Split current clustering into local clustering + bridge clustering |
-| `src/arquimedes/compile.py` | Modify later | Consume both cluster files |
+| `src/arquimedes/cluster.py` | Refactor | Bridge clustering over compact packets and existing bridge memory |
+| `src/arquimedes/compile.py` | Modify later | Consume bridge clusters and local concept index |
 | `tests/test_enrich_document.py` | Modify | Cover dual concept output parsing and persistence |
 | `tests/test_index.py` | Modify | Cover concept type indexing |
 | `tests/test_cluster.py` | Expand | Cover local vs bridge clustering prompts and validation |
@@ -109,9 +110,8 @@ Do not wire everything at once.
 Order:
 1. extraction
 2. indexing
-3. local clustering
-4. bridge clustering
-5. later: compile/search/memory consumption
+3. bridge clustering
+4. later: compile/search/memory consumption
 
 ## Short-Term Priority
 

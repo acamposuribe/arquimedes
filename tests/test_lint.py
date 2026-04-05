@@ -125,7 +125,7 @@ def _setup_repo(tmp_path: Path) -> tuple[Path, dict]:
 
     derived = tmp_path / "derived"
     _write_jsonl(
-        derived / "concept_clusters.jsonl",
+        derived / "bridge_concept_clusters.jsonl",
         [
             {
                 "cluster_id": "concept_001",
@@ -203,7 +203,7 @@ def _write_cluster_data(root: Path) -> list[dict]:
             ],
         },
     ]
-    _write_jsonl(root / "derived" / "concept_clusters.jsonl", clusters)
+    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", clusters)
     _write_json(root / "wiki" / "shared" / "bridge-concepts" / "archive-and-space.md", {"body": "Concept page."})
     _write_json(root / "wiki" / "shared" / "bridge-concepts" / "memory-and-place.md", {"body": "Concept page."})
     return clusters
@@ -238,7 +238,6 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
     clusters = _write_cluster_data(root)
-    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [])
 
     (root / "manifests" / "materials.jsonl").write_text(
         "\n".join(
@@ -329,7 +328,6 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
     _write_cluster_data(root)
-    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [])
 
     (root / "manifests" / "materials.jsonl").write_text(
         "\n".join(
@@ -384,7 +382,7 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
     _write_json(root / "wiki" / "shared" / "concepts" / "archive-and-space.md", {"body": "Concept page."})
     _write_json(root / "wiki" / "shared" / "concepts" / "memory-and-place.md", {"body": "Concept page."})
 
-    clusters = json.loads((root / "derived" / "concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "concept_clusters.jsonl").read_text().splitlines()[1])
+    clusters = json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[1])
     material_info = _build_material_info(root, [
         {"material_id": "mat_001"},
         {"material_id": "mat_002"},
@@ -471,7 +469,7 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
     _write_json(root / "wiki" / "research" / "papers" / "_index.md", {"body": "Collection home."})
     _write_json(root / "wiki" / "shared" / "concepts" / "archive-and-space.md", {"body": "Concept page."})
     _write_json(root / "wiki" / "shared" / "concepts" / "memory-and-place.md", {"body": "Concept page."})
-    _write_jsonl(root / "derived" / "concept_clusters.jsonl", [
+    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [
         {
             "cluster_id": "concept_001",
             "canonical_name": "Archive and Space",
@@ -513,7 +511,6 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
             ],
         },
     ])
-    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [])
 
     calls: list[str] = []
 
@@ -542,7 +539,7 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
             material_info["mat_002"] | {"material_id": "mat_002"},
         ]
     }
-    clusters = json.loads((root / "derived" / "concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "concept_clusters.jsonl").read_text().splitlines()[1])
+    clusters = json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[1])
 
     first = _run_collection_reflections(root, groups, list(clusters), llm_factory)
     assert len(first) == 1
@@ -559,7 +556,6 @@ def test_graph_reflection_writes_schema_and_skips_unchanged(tmp_path, monkeypatc
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
     _write_cluster_data(root)
-    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [])
     _write_json(root / "wiki" / "research" / "papers" / "_index.md", {"body": "Collection home."})
 
     deterministic_report = {
@@ -770,6 +766,7 @@ def test_bridge_cluster_maintenance_merges_reviewed_duplicates(tmp_path, monkeyp
 def test_reflection_index_tool_supports_read_only_search_and_open_record(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
+    _write_cluster_data(root)
     rebuild_index(config)
 
     with ReflectionIndexTool(root) as tool:
@@ -791,7 +788,6 @@ def test_concept_reflection_includes_prior_reflection_and_rich_evidence(tmp_path
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
     _write_cluster_data(root)
-    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [])
     rebuild_index(config)
 
     concept_page = root / "wiki" / "shared" / "concepts" / "archive-and-space.md"
@@ -824,7 +820,7 @@ def test_concept_reflection_includes_prior_reflection_and_rich_evidence(tmp_path
         {"material_id": "mat_001"},
         {"material_id": "mat_002"},
     ])
-    clusters = json.loads((root / "derived" / "concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "concept_clusters.jsonl").read_text().splitlines()[1])
+    clusters = json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[1])
 
     with ReflectionIndexTool(root) as tool:
         first = _run_concept_reflections(root, list(clusters), material_info, llm_factory, tool)
@@ -840,7 +836,6 @@ def test_collection_reflection_can_request_extra_context_via_tool(tmp_path, monk
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
     _write_cluster_data(root)
-    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [])
     _write_jsonl(
         root / "manifests" / "materials.jsonl",
         [
@@ -930,7 +925,7 @@ def test_collection_reflection_can_request_extra_context_via_tool(tmp_path, monk
             material_info["mat_002"] | {"material_id": "mat_002"},
         ]
     }
-    clusters = json.loads((root / "derived" / "concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "concept_clusters.jsonl").read_text().splitlines()[1])
+    clusters = json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[1])
 
     with ReflectionIndexTool(root) as tool:
         first = _run_collection_reflections(root, groups, list(clusters), llm_factory, tool)

@@ -1,8 +1,8 @@
-"""Concept clustering — Phase 5.
+"""Bridge concept clustering — Phase 5.
 
-Single LLM pass over all concept candidates from the search index.
-Groups semantically equivalent concepts across materials into canonical clusters.
-Writes derived/concept_clusters.jsonl and derived/cluster_stamp.json.
+Single LLM pass over bridge candidate packets.
+Groups cross-material concepts into canonical bridge clusters.
+Writes derived/bridge_concept_clusters.jsonl and derived/bridge_cluster_stamp.json.
 """
 
 from __future__ import annotations
@@ -134,42 +134,90 @@ def _write_json(path: Path, payload: object) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
-def _stage_local_cluster_input(
+def _stage_bridge_packet_input(
     root: Path,
     concept_rows: list[tuple],
-    material_titles: dict[str, str],
+    material_rows: list[tuple],
 ) -> Path:
-    """Write the local clustering input file."""
-    payload = {
-        "kind": "local",
-        "concept_count": len(concept_rows),
-        "materials": material_titles,
-        "concepts": [],
-    }
+    """Write the compact bridge clustering packets used by the LLM."""
+    material_info: dict[str, dict] = {}
+    for mid, title, summary, keywords_json in material_rows:
+        try:
+            keywords = json.loads(keywords_json or "[]")
+            if not isinstance(keywords, list):
+                keywords = []
+        except json.JSONDecodeError:
+            keywords = []
+        material_info[mid] = {
+            "title": title,
+            "summary": summary or "",
+            "keywords": [str(k) for k in keywords if str(k).strip()],
+        }
+
+    grouped: dict[str, dict] = {}
     for row in concept_rows:
-        if len(row) == 8:
-            concept_name, concept_key, material_id, relevance, source_pages_json, evidence_spans_json, confidence, _concept_type = row
-        else:
-            concept_name, concept_key, material_id, relevance, source_pages_json, evidence_spans_json, confidence = row
-        try:
-            source_pages = json.loads(source_pages_json or "[]")
-        except json.JSONDecodeError:
-            source_pages = []
-        try:
-            evidence_spans = json.loads(evidence_spans_json or "[]")
-        except json.JSONDecodeError:
-            evidence_spans = []
-        payload["concepts"].append({
+        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
+        item = grouped.setdefault(material_id, {
+            "material_id": material_id,
+            "title": material_info.get(material_id, {}).get("title", material_id),
+            "summary": material_info.get(material_id, {}).get("summary", ""),
+            "keywords": material_info.get(material_id, {}).get("keywords", []),
+            "local_concepts": [],
+            "bridge_candidates": [],
+            "evidence_snippets": [],
+        })
+        concept = {
             "concept_name": concept_name,
             "concept_key": concept_key,
-            "material_id": material_id,
-            "material_title": material_titles.get(material_id, material_id),
             "relevance": relevance,
             "source_pages": source_pages,
             "evidence_spans": evidence_spans,
             "confidence": confidence,
+        }
+        if concept_type == "bridge_candidate":
+            item["bridge_candidates"].append(concept)
+        else:
+            item["local_concepts"].append(concept)
+        try:
+            spans = json.loads(evidence_spans or "[]")
+        except json.JSONDecodeError:
+            spans = []
+        for span in spans[:2]:
+            if isinstance(span, str) and span.strip():
+                item["evidence_snippets"].append(span.strip())
+
+    material_packets = []
+    for packet in grouped.values():
+        local_sorted = sorted(
+            packet["local_concepts"],
+            key=lambda c: (0 if c.get("relevance") == "high" else 1 if c.get("relevance") == "medium" else 2, c.get("concept_name", "")),
+        )[:8]
+        bridge_sorted = sorted(
+            packet["bridge_candidates"],
+            key=lambda c: (0 if c.get("relevance") == "high" else 1 if c.get("relevance") == "medium" else 2, c.get("concept_name", "")),
+        )[:8]
+        snippets = []
+        seen_snippets: set[str] = set()
+        for snippet in packet["evidence_snippets"]:
+            if snippet not in seen_snippets:
+                seen_snippets.add(snippet)
+                snippets.append(snippet)
+        material_packets.append({
+            "material_id": packet["material_id"],
+            "title": packet["title"],
+            "summary": packet["summary"],
+            "keywords": packet["keywords"],
+            "local_concepts": local_sorted,
+            "bridge_candidates": bridge_sorted,
+            "evidence_snippets": snippets[:5],
         })
-    path = _cluster_input_path(root, "local")
+
+    payload = {
+        "kind": "bridge_packets",
+        "material_packet_count": len(material_packets),
+        "material_packets": material_packets,
+    }
+    path = _cluster_input_path(root, "bridge")
     _write_json(path, payload)
     return path
 
@@ -228,12 +276,8 @@ def _load_material_rows(con: sqlite3.Connection) -> list[tuple]:
     return list(rows)
 
 
-# ---------------------------------------------------------------------------
-# Fingerprint / staleness
-# ---------------------------------------------------------------------------
-
-def cluster_fingerprint(config: dict | None = None) -> str:
-    """SHA256 over local clustering inputs: local concept rows + material titles."""
+def bridge_cluster_fingerprint(config: dict | None = None) -> str:
+    """SHA256 over bridge clustering inputs: concept packets + bridge clusters."""
     if config is None:
         config = load_config()
     root = get_project_root()
@@ -243,49 +287,13 @@ def cluster_fingerprint(config: dict | None = None) -> str:
 
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
     try:
-        concepts = _load_concept_rows(con, concept_type="local")
-        materials = con.execute(
-            "SELECT material_id, title FROM materials ORDER BY material_id"
-        ).fetchall()
+        concepts = _load_concept_rows(con)
+        materials = _load_material_rows(con)
     finally:
         con.close()
 
-    return enrich_stamps.canonical_hash(list(concepts), list(materials))
-
-
-def bridge_cluster_fingerprint(config: dict | None = None) -> str:
-    """SHA256 over bridge clustering inputs: local + bridge clusters."""
-    if config is None:
-        config = load_config()
-    root = get_project_root()
-    local_clusters = load_clusters(root)
     root_bridge_clusters = load_bridge_clusters(root)
-    return enrich_stamps.canonical_hash(list(local_clusters), list(root_bridge_clusters))
-
-
-def is_clustering_stale(config: dict | None = None, *, force: bool = False) -> bool:
-    """Return True if clustering output is missing, stale, force=True, or empty."""
-    if force:
-        return True
-    if config is None:
-        config = load_config()
-    root = get_project_root()
-    stamp_path = root / "derived" / "cluster_stamp.json"
-    if not stamp_path.exists():
-        return True
-    clusters_path = root / "derived" / "concept_clusters.jsonl"
-    if not clusters_path.exists():
-        return True
-    try:
-        stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return True
-    # Treat a stamp that recorded 0 clusters (but had concepts) as stale —
-    # it means the previous run produced an empty output and must be retried.
-    if stamp.get("total_concepts", 0) > 0 and stamp.get("clusters", 0) == 0:
-        return True
-    current = cluster_fingerprint(config)
-    return stamp.get("fingerprint") != current
+    return enrich_stamps.canonical_hash(list(concepts), list(materials), list(root_bridge_clusters))
 
 
 def is_bridge_clustering_stale(config: dict | None = None, *, force: bool = False) -> bool:
@@ -311,63 +319,6 @@ def is_bridge_clustering_stale(config: dict | None = None, *, force: bool = Fals
     return stamp.get("fingerprint") != current
 
 
-# ---------------------------------------------------------------------------
-# Prompt
-# ---------------------------------------------------------------------------
-
-_LOCAL_SYSTEM_PROMPT = """\
-You are an architecture research librarian. You are grouping local concept candidates \
-from multiple academic papers and practice documents into canonical concept clusters.
-
-Rules:
-- Group only concepts that are semantically equivalent or clearly the same framework phrased differently
-- Choose the clearest, most specific canonical name for each cluster
-- Concepts that are genuinely distinct should remain separate clusters; do not over-merge
-- Prefer canonical names that are specific, reusable concept phrases rather than generic topic words
-- Use evidence excerpts to judge meaning; do not merge concepts just because they share one broad term
-- Keep adjacent but distinct theoretical positions separate when the evidence suggests different claims
-- Avoid clusters built around vague labels like "space", "history", "power", or "memory" unless the phrase is sharply qualified
-- Do not create umbrella clusters, chapter themes, or document-level topic summaries
-- A cluster should usually have at most one source concept per material
-- If unsure whether two concepts are equivalent, keep them separate
-- Do not emit singleton clusters; only return clusters that connect at least two materials
-- Single-material concepts will be backfilled deterministically by the code
-- Return valid JSON array, no markdown fences"""
-
-
-def _build_prompt(
-    input_path: Path,
-    concept_count: int,
-) -> str:
-    """Build the strict local-clustering prompt."""
-    schema_desc = """\
-Output schema (JSON array):
-[
-  {
-    "cluster_id": "concept_0001",
-    "canonical_name": "...",
-    "aliases": ["...", "..."],
-    "source_concepts": [
-      {"material_id": "...", "concept_name": "..."}
-    ],
-    "confidence": 0.85
-  }
-]"""
-
-    return (
-        f"Read the local clustering input JSON from {input_path}.\n"
-        f"The file contains {concept_count} local concept candidates and their source materials.\n"
-        "Treat the file as the source of truth; do not rely on memory or prior turns.\n"
-        "Group the following concept candidates into canonical clusters.\n"
-        "Merge only when the concepts are semantically equivalent or clearly the same framework stated differently.\n"
-        "Do not over-merge neighboring but distinct ideas.\n"
-        f"The total number of source_concepts across all output clusters must also be {concept_count}.\n"
-        "Use the exact material_id and exact concept_name strings from the input.\n"
-        "Do not group multiple distinct concepts from the same material into one umbrella cluster.\n\n"
-        + schema_desc
-    )
-
-
 def _cluster_output_path(root: Path, kind: str) -> Path:
     return root / "derived" / "tmp" / f"{kind}_clusters.json"
 
@@ -389,7 +340,7 @@ Rules:
 
 
 def _build_bridge_prompt(
-    local_clusters_path: Path,
+    bridge_packets_path: Path,
     bridge_clusters_path: Path,
     output_path: Path,
 ) -> str:
@@ -408,10 +359,10 @@ Output schema (JSON array):
 ]"""
 
     return (
-        f"Read the local cluster file from {local_clusters_path}.\n"
+        f"Read the bridge packet file from {bridge_packets_path}.\n"
         f"Read the current bridge memory file from {bridge_clusters_path}.\n"
         "Treat those files as the source of truth; preserve the existing bridge concepts unless strong evidence demands a merge, split, or rename.\n"
-        "Use the cleaned local clusters as the input signal for bridge clustering.\n"
+        "Use the per-material packets as the input signal for bridge clustering.\n"
         "Bridge clusters must connect at least two materials.\n"
         "Do not create single-material bridge clusters.\n"
         f"Write the updated bridge clusters to {output_path} using the Write tool.\n"
@@ -683,134 +634,6 @@ def _validate_bridge_and_attach_provenance(
 # Main clustering function
 # ---------------------------------------------------------------------------
 
-def cluster_concepts(
-    config: dict | None = None,
-    *,
-    llm_fn: LlmFn | None = None,
-    llm_state: dict | None = None,
-    force: bool = False,
-) -> dict:
-    """Run concept clustering, write derived artifacts, return summary.
-
-    Returns: {"total_concepts": N, "clusters": M, "multi_material": K}
-    """
-    if config is None:
-        config = load_config()
-    root = get_project_root()
-    db_path = root / "indexes" / "search.sqlite"
-
-    if not db_path.exists():
-        raise EnrichmentError("Search index not found. Run `arq index` first.")
-
-    if not is_clustering_stale(config, force=force):
-        logger.info("Clustering is up to date — skipped.")
-        # Return counts from existing clusters
-        clusters = load_clusters(root)
-        multi = sum(1 for c in clusters if len(c.get("material_ids", [])) > 1)
-        total = sum(len(c.get("source_concepts", [])) for c in clusters)
-        return {"total_concepts": total, "clusters": len(clusters), "multi_material": multi, "skipped": True}
-
-    # --- Load from index ---
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
-        concept_rows = _load_concept_rows(con, concept_type="local")
-        material_rows = con.execute(
-            "SELECT material_id, title FROM materials ORDER BY material_id"
-        ).fetchall()
-    finally:
-        con.close()
-
-    if not concept_rows:
-        raise EnrichmentError("No concepts in index. Run `arq enrich` on materials first.")
-
-    material_titles: dict[str, str] = {mid: title for mid, title in material_rows}
-    input_path = _stage_local_cluster_input(root, concept_rows, material_titles)
-
-    # Build lookup index: (material_id, concept_key) → row dict
-    concept_index: dict[tuple[str, str], dict] = {}
-    for row in concept_rows:
-        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
-        concept_index[(material_id, concept_key)] = {
-            "concept_name": concept_name,
-            "concept_key": concept_key,
-            "material_id": material_id,
-            "concept_type": concept_type,
-            "relevance": relevance,
-            "source_pages": source_pages,
-            "evidence_spans": evidence_spans,
-            "confidence": confidence,
-        }
-
-    # --- Build prompt and call LLM ---
-    if llm_fn is None:
-        llm_fn = make_cli_llm_fn(config, "cluster", state=llm_state)
-
-    output_path = _cluster_output_path(root, "local")
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    if output_path.exists():
-        output_path.unlink()
-
-    user_msg = (
-        _build_prompt(input_path, len(concept_rows))
-        + f"\n\nWrite the output JSON directly to {output_path} using the Write tool."
-        + "\nDo not stream JSON into the response."
-        + "\nConfirm with a single line when done."
-    )
-    raw_response = llm_fn(_LOCAL_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
-    if output_path.exists() and output_path.stat().st_size > 0:
-        raw_response = output_path.read_text(encoding="utf-8")
-
-    schema_desc = (
-        'JSON array of cluster objects with keys: cluster_id, canonical_name, '
-        'aliases (list), source_concepts (list of {material_id, concept_name}), confidence (float)'
-    )
-    raw_clusters = parse_json_or_repair(llm_fn, raw_response, schema_desc)
-    if not isinstance(raw_clusters, list):
-        raise EnrichmentError(f"LLM returned non-list clusters: {type(raw_clusters)}")
-
-    # --- Validate + attach provenance ---
-    clusters = _validate_and_attach_provenance(raw_clusters, concept_index, material_titles)
-
-    # Guard: if validation dropped everything, the LLM output was unusable.
-    # Refuse to write an empty artifact — this preserves the previous valid state
-    # and ensures is_clustering_stale() keeps returning True until a good run succeeds.
-    if not clusters and concept_rows:
-        raise EnrichmentError(
-            f"Clustering produced 0 valid clusters from {len(concept_rows)} concepts — "
-            "all LLM-generated references failed validation. Check the LLM output and "
-            "run `arq cluster --force` to retry."
-        )
-
-    # --- Write derived/ ---
-    derived_dir = root / "derived"
-    derived_dir.mkdir(exist_ok=True)
-
-    clusters_path = derived_dir / "concept_clusters.jsonl"
-    with clusters_path.open("w", encoding="utf-8") as f:
-        for c in clusters:
-            f.write(json.dumps(c, ensure_ascii=False) + "\n")
-
-    fingerprint = cluster_fingerprint(config)
-    stamp_path = derived_dir / "cluster_stamp.json"
-    stamp_path.write_text(
-        json.dumps({
-            "clustered_at": datetime.now(timezone.utc).isoformat(),
-            "fingerprint": fingerprint,
-            "total_concepts": len(concept_rows),
-            "clusters": len(clusters),
-        }, indent=2),
-        encoding="utf-8",
-    )
-
-    multi = sum(1 for c in clusters if len(c.get("material_ids", [])) > 1)
-    return {
-        "total_concepts": len(concept_rows),
-        "clusters": len(clusters),
-        "multi_material": multi,
-        "skipped": False,
-    }
-
-
 def cluster_bridge_concepts(
     config: dict | None = None,
     *,
@@ -830,12 +653,18 @@ def cluster_bridge_concepts(
         total = sum(len(c.get("source_concepts", [])) for c in clusters)
         return {"bridge_concepts": total, "clusters": len(clusters), "multi_material": multi, "skipped": True}
 
-    local_clusters = load_clusters(root)
-    existing_bridge_clusters = load_bridge_clusters(root)
-    if not local_clusters:
-        raise EnrichmentError("No local clusters found. Run `arq cluster` first.")
+    con = sqlite3.connect(f"file:{root / 'indexes' / 'search.sqlite'}?mode=ro", uri=True)
+    try:
+        concept_rows = _load_concept_rows(con)
+        material_rows = _load_material_rows(con)
+    finally:
+        con.close()
 
-    bridge_concept_count = sum(len(cluster.get("source_concepts", [])) for cluster in local_clusters)
+    if not concept_rows:
+        raise EnrichmentError("No concepts in index. Run `arq enrich` on materials first.")
+
+    existing_bridge_clusters = load_bridge_clusters(root)
+    bridge_concept_count = len(concept_rows)
     if bridge_concept_count == 0:
         derived_dir = root / "derived"
         derived_dir.mkdir(exist_ok=True)
@@ -870,10 +699,10 @@ def cluster_bridge_concepts(
     if output_path.exists():
         output_path.unlink()
 
-    local_clusters_path = root / "derived" / "concept_clusters.jsonl"
+    bridge_packets_path = _stage_bridge_packet_input(root, concept_rows, material_rows)
     bridge_clusters_path = root / "derived" / "bridge_concept_clusters.jsonl"
     user_msg = (
-        _build_bridge_prompt(local_clusters_path, bridge_clusters_path, output_path)
+        _build_bridge_prompt(bridge_packets_path, bridge_clusters_path, output_path)
     )
     raw_response = llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
     if output_path.exists() and output_path.stat().st_size > 0:
@@ -888,23 +717,18 @@ def cluster_bridge_concepts(
         raise EnrichmentError(f"LLM returned non-list bridge clusters: {type(raw_clusters)}")
 
     concept_index: dict[tuple[str, str], dict] = {}
-    for cluster in local_clusters:
-        for source in cluster.get("source_concepts", []):
-            mid = str(source.get("material_id", "")).strip()
-            cname = str(source.get("concept_name", "")).strip()
-            if not mid or not cname:
-                continue
-            ckey = _normalize_concept_name(cname)
-            concept_index[(mid, ckey)] = {
-                "concept_name": cname,
-                "concept_key": ckey,
-                "material_id": mid,
-                "concept_type": "local",
-                "relevance": source.get("relevance", "medium"),
-                "source_pages": json.dumps(source.get("source_pages", []), ensure_ascii=False),
-                "evidence_spans": json.dumps(source.get("evidence_spans", []), ensure_ascii=False),
-                "confidence": source.get("confidence", 1.0),
-            }
+    for row in concept_rows:
+        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
+        concept_index[(material_id, concept_key)] = {
+            "concept_name": concept_name,
+            "concept_key": concept_key,
+            "material_id": material_id,
+            "concept_type": concept_type,
+            "relevance": relevance,
+            "source_pages": source_pages,
+            "evidence_spans": evidence_spans,
+            "confidence": confidence,
+        }
 
     clusters = _validate_bridge_and_attach_provenance(raw_clusters, concept_index, {})
 
@@ -951,24 +775,6 @@ def cluster_bridge_concepts(
 # ---------------------------------------------------------------------------
 # Load utility
 # ---------------------------------------------------------------------------
-
-def load_clusters(project_root: Path | None = None) -> list[dict]:
-    """Read derived/concept_clusters.jsonl, return list of cluster dicts."""
-    if project_root is None:
-        project_root = get_project_root()
-    path = project_root / "derived" / "concept_clusters.jsonl"
-    if not path.exists():
-        return []
-    clusters = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            cluster = json.loads(line)
-            slug = cluster.get("slug", "")
-            cluster["wiki_path"] = f"wiki/shared/concepts/{slug}.md" if slug else ""
-            clusters.append(cluster)
-    return clusters
-
 
 def load_bridge_clusters(project_root: Path | None = None) -> list[dict]:
     """Read derived/bridge_concept_clusters.jsonl, return list of bridge cluster dicts."""

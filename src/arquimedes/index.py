@@ -586,7 +586,7 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
         con.execute("INSERT INTO annotations_fts(annotations_fts) VALUES ('rebuild')")
         con.execute("INSERT INTO concepts_fts(concepts_fts) VALUES ('rebuild')")
 
-        # Populate cluster graph tables (no-op if derived/concept_clusters.jsonl absent)
+        # Populate cluster graph tables (no-op if derived/bridge_concept_clusters.jsonl absent)
         _populate_clusters(con, root)
 
         # Write index_state
@@ -628,9 +628,9 @@ def _populate_clusters(con: sqlite3.Connection, project_root: Path) -> int:
     # Rebuild FTS for clusters
     con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('delete-all')")
 
-    from arquimedes.cluster import load_bridge_clusters, load_clusters
+    from arquimedes.cluster import load_bridge_clusters
 
-    clusters = load_clusters(project_root) + load_bridge_clusters(project_root)
+    clusters = load_bridge_clusters(project_root)
     if not clusters:
         return 0
 
@@ -703,7 +703,7 @@ def _populate_clusters(con: sqlite3.Connection, project_root: Path) -> int:
 def index_clusters(config: dict | None = None) -> int:
     """Update the cluster graph tables in an existing search index.
 
-    Reads derived/concept_clusters.jsonl and replaces the three cluster tables
+    Reads derived/bridge_concept_clusters.jsonl and replaces the three cluster tables
     (concept_clusters, cluster_materials, cluster_relations) in the live index.
     No-op if the index does not yet exist (full rebuild will populate clusters).
 
@@ -914,8 +914,8 @@ def _compute_manifest_hash(manifest_path: Path) -> str:
 def _compute_extracted_snapshot(extracted_dir: Path, material_ids: list[str], root: Path | None = None) -> str:
     """Hash of all index-input file contents across all materials, sorted for determinism.
 
-    Includes the concept_clusters.jsonl hash so staleness is detected when
-    clustering changes without any material metadata changing.
+    Includes the bridge_concept_clusters.jsonl hash so staleness is detected when
+    bridge clustering changes without any material metadata changing.
     """
     parts: list[str] = []
     for mid in sorted(material_ids):
@@ -949,13 +949,10 @@ def _compute_extracted_snapshot(extracted_dir: Path, material_ids: list[str], ro
 
 def _clusters_hash(root: Path) -> str:
     """Hash of bridge cluster JSONL files for staleness detection."""
-    local_path = root / "derived" / "concept_clusters.jsonl"
     bridge_path = root / "derived" / "bridge_concept_clusters.jsonl"
-    if not local_path.exists() and not bridge_path.exists():
+    if not bridge_path.exists():
         return ""
     hasher = hashlib.sha256()
-    if local_path.exists():
-        hasher.update(local_path.read_bytes())
     if bridge_path.exists():
         hasher.update(bridge_path.read_bytes())
     return hasher.hexdigest()[:16]

@@ -598,15 +598,43 @@ def render_index_page(title: str, entries: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def render_grouped_index_page(title: str, entries: list[dict], group_key: str, group_title: str) -> str:
+    """Render an index page grouped by a field on each entry."""
+    lines: list[str] = []
+    lines.append(f"# {title}\n")
+    lines.append(f"_{len(entries)} page{'s' if len(entries) != 1 else ''}_\n")
+
+    groups: dict[str, list[dict]] = {}
+    for e in entries:
+        group = (e.get(group_key) or "").strip() or "_general"
+        groups.setdefault(group, []).append(e)
+
+    for group_name in sorted(groups.keys(), key=lambda s: s.lower()):
+        heading = group_name.replace("_", " ").title()
+        lines.append(f"## {heading}\n")
+        for e in sorted(groups[group_name], key=lambda x: x.get("name", "").lower()):
+            name = e.get("name", "")
+            path = e.get("path", "")
+            summary = e.get("summary", "")
+            link = f"[{name}]({path})" if path else name
+            if summary:
+                lines.append(f"- {link} — {summary}")
+            else:
+                lines.append(f"- {link}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
 # ---------------------------------------------------------------------------
 # Glossary
 # ---------------------------------------------------------------------------
 
 def render_glossary(clusters: list[dict]) -> str:
-    """Render alphabetical glossary of canonical concept names → concept pages."""
+    """Render alphabetical glossary of main concept names → concept pages."""
     lines: list[str] = []
-    lines.append("# Concept Glossary\n")
-    lines.append("_Alphabetical index of all canonical concept names._\n")
+    lines.append("# Main Concepts\n")
+    lines.append("_Alphabetical index of canonical main concept names._\n")
 
     sorted_clusters = sorted(clusters, key=lambda c: c.get("canonical_name", "").lower())
     current_letter = ""
@@ -622,7 +650,7 @@ def render_glossary(clusters: list[dict]) -> str:
         path = c.get("wiki_path") or _concept_wiki_path(slug)
         link_label = name
         if "/bridge-concepts/" in path:
-            link_label += " (bridge)"
+            link_label += " (main)"
         lines.append(f"- [{link_label}]({path})")
 
     lines.append("")

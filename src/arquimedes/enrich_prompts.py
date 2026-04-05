@@ -115,6 +115,19 @@ def build_document_context(
     if isinstance(enriched_doc_type, dict) and "value" in enriched_doc_type:
         lines.append(f"Document type: {enriched_doc_type['value']}")
 
+    bridge_concepts = meta.get("bridge_concepts") or []
+    if isinstance(bridge_concepts, list) and bridge_concepts:
+        names = []
+        for item in bridge_concepts[:12]:
+            if isinstance(item, dict):
+                name = item.get("canonical_name") or item.get("slug") or ""
+            else:
+                name = str(item)
+            if name:
+                names.append(name)
+        if names:
+            lines.append(f"Bridge concepts: {', '.join(names)}")
+
     lines.append("")
     lines.append("Table of Contents:")
     lines.append(toc_str)

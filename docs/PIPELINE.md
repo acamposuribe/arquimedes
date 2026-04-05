@@ -46,6 +46,8 @@ It:
 - extracts and enriches them
 - clusters concepts
 - compiles the wiki
+- runs `arq lint --quick` after each compile
+- runs `arq lint --full` on a schedule
 - rebuilds the memory bridge
 - commits and pushes the published result
 

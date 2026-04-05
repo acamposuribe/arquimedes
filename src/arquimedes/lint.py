@@ -1023,6 +1023,7 @@ def _detect_missing_compiled_pages(
     clusters: list[dict],
 ) -> list[dict]:
     issues: list[dict] = []
+    bridge_clusters = load_bridge_clusters(root)
 
     # Material pages
     for rec in manifest_records:
@@ -1086,7 +1087,7 @@ def _detect_missing_compiled_pages(
             ))
 
     # Concept pages
-    for cluster in clusters:
+    for cluster in bridge_clusters:
         page_path = root / _concept_page_path(cluster)
         if not page_path.exists():
             issues.append(_issue(
@@ -1130,6 +1131,7 @@ def _expected_pages(
     clusters: list[dict],
 ) -> set[Path]:
     expected: set[Path] = set()
+    bridge_clusters = load_bridge_clusters(root)
     # Material pages
     for meta in metas.values():
         expected.add(root / _material_wiki_path(meta))
@@ -1143,7 +1145,7 @@ def _expected_pages(
     expected.add(root / "wiki" / "shared" / "concepts" / "_index.md")
     expected.add(root / "wiki" / "shared" / "glossary" / "_index.md")
     # Concept pages
-    for cluster in clusters:
+    for cluster in bridge_clusters:
         expected.add(root / _concept_page_path(cluster))
     # Phase 6 report itself is expected when written
     expected.add(root / REPORT_PATH)
@@ -2069,6 +2071,7 @@ def run_reflective_lint(
     metas = _load_all_metas(root, manifest_records)
     material_info = _build_material_info(root, manifest_records)
     clusters = _current_concepts(root)
+    bridge_clusters = load_bridge_clusters(root)
     groups = _group_materials_by_collection(metas)
 
     if not get_index_path().exists() or not clusters:
@@ -2092,12 +2095,12 @@ def run_reflective_lint(
 
     with ReflectionIndexTool(root) as tool:
         cluster_reviews = _run_cluster_audit(root, clusters, material_info, llm_factory, tool)
-        concept_refs = _run_concept_reflections(root, clusters, material_info, llm_factory, tool)
-        collection_refs = _run_collection_reflections(root, groups, clusters, llm_factory, tool)
+        concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool)
+        collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool)
         graph_due, graph_reason = _graph_reflection_due(
             root,
             config,
-            clusters,
+            bridge_clusters,
             manifest_records,
             cluster_reviews,
             concept_refs,

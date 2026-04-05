@@ -228,6 +228,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
 
     n_aliases = 0
     n_concept_pages = 0
+    n_index_pages = 0
     n_material_pages = 0
     n_cluster_material_links = 0
     n_cluster_relations = 0
@@ -255,8 +256,10 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
                 seen_mids.add(mid)
                 unique_mids.append(mid)
 
-        wiki_path = c.get("wiki_path") or _concept_wiki_path(slug)
         material_count = len(unique_mids)
+        wiki_path = c.get("wiki_path") or (
+            _bridge_concept_wiki_path(slug) if material_count > 1 else _concept_wiki_path(slug)
+        )
 
         # Full INSERT: concept_clusters (with bridge columns)
         con.execute(
@@ -283,14 +286,15 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
                 )
                 n_aliases += 1
 
-        # Concept wiki page
-        con.execute(
-            """INSERT OR REPLACE INTO wiki_pages
-               (page_type, page_id, title, path, domain, collection)
-               VALUES (?,?,?,?,?,?)""",
-            ("concept", cluster_id, canonical_name, wiki_path, "shared", "concepts"),
-        )
-        n_concept_pages += 1
+        # Concept wiki page only for bridge clusters (more than one material).
+        if material_count > 1:
+            con.execute(
+                """INSERT OR REPLACE INTO wiki_pages
+                   (page_type, page_id, title, path, domain, collection)
+                   VALUES (?,?,?,?,?,?)""",
+                ("concept", cluster_id, canonical_name, wiki_path, "shared", "bridge-concepts"),
+            )
+            n_concept_pages += 1
 
         # cluster_materials rows (with bridge columns confidence + material_wiki_path)
         for sc in source_concepts:
@@ -397,6 +401,22 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
             ),
         )
 
+    # Deterministic index pages for raw local concepts and bridge glossary.
+    con.execute(
+        """INSERT OR REPLACE INTO wiki_pages
+           (page_type, page_id, title, path, domain, collection)
+           VALUES (?,?,?,?,?,?)""",
+        ("concept_index", "local", "Local Concepts", "wiki/shared/concepts/_index.md", "shared", "concepts"),
+    )
+    n_index_pages += 1
+    con.execute(
+        """INSERT OR REPLACE INTO wiki_pages
+           (page_type, page_id, title, path, domain, collection)
+           VALUES (?,?,?,?,?,?)""",
+        ("glossary", "bridge", "Main Concepts", "wiki/shared/glossary/_index.md", "shared", "glossary"),
+    )
+    n_index_pages += 1
+
     # Concept reflections
     for reflection in _load_jsonl(lint_dir / "concept_reflections.jsonl"):
         cluster_id = reflection.get("cluster_id", "")
@@ -481,7 +501,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
         "cluster_relations": n_cluster_relations,
         "concept_pages": n_concept_pages,
         "material_pages": n_material_pages,
-        "wiki_pages": n_concept_pages + n_material_pages,
+        "wiki_pages": n_concept_pages + n_material_pages + n_index_pages,
     }
 
 

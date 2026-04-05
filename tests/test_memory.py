@@ -265,20 +265,18 @@ class TestClusterRelationsSharedMaterialIds:
 
 
 class TestWikiPages:
-    def test_concept_pages_written(self, repo):
+    def test_local_concept_index_written(self, repo):
         _setup_two_materials_with_clusters(repo)
         con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
-        concept_pages = con.execute(
-            "SELECT page_id, path FROM wiki_pages WHERE page_type='concept' ORDER BY page_id"
+        concept_index = con.execute(
+            "SELECT page_id, path FROM wiki_pages WHERE page_type='concept_index'"
         ).fetchall()
         con.close()
 
-        ids = [r[0] for r in concept_pages]
-        paths = [r[1] for r in concept_pages]
-        assert "concept_0001" in ids
-        assert "concept_0002" in ids
-        assert any("archive-as-architectural-space" in p for p in paths)
-        assert any("memory-and-place" in p for p in paths)
+        ids = [r[0] for r in concept_index]
+        paths = [r[1] for r in concept_index]
+        assert "local" in ids
+        assert any("shared/concepts/_index.md" in p for p in paths)
 
     def test_material_pages_written(self, repo):
         _setup_two_materials_with_clusters(repo)
@@ -376,7 +374,7 @@ class TestReflectionTables:
                 "affected_concept_names": ["archival habitat"],
                 "evidence": ["shared archive frame"],
                 "input_fingerprint": "abc",
-                "wiki_path": "wiki/shared/concepts/archive-as-architectural-space.md",
+                "wiki_path": "wiki/shared/bridge-concepts/archive-as-architectural-space.md",
             }) + "\n",
             encoding="utf-8",
         )
@@ -392,7 +390,7 @@ class TestReflectionTables:
                 "supporting_material_ids": [_MID_A, _MID_B],
                 "supporting_evidence": ["shared archive frame"],
                 "input_fingerprint": "def",
-                "wiki_path": "wiki/shared/concepts/archive-as-architectural-space.md",
+                "wiki_path": "wiki/shared/bridge-concepts/archive-as-architectural-space.md",
             }) + "\n",
             encoding="utf-8",
         )

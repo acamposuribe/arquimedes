@@ -702,7 +702,7 @@ def format_human(result: SearchResult) -> str:
             lines.append("Canonical concept clusters:")
             for cl in result.canonical_clusters:
                 alias_str = f"  (aliases: {', '.join(cl.aliases[:3])})" if cl.aliases else ""
-                bridge_tag = " [bridge]" if "/bridge-concepts/" in cl.wiki_path else ""
+                bridge_tag = " [main]" if "/bridge-concepts/" in cl.wiki_path else ""
                 lines.append(f"  • {cl.canonical_name}{bridge_tag}{alias_str}  [{cl.material_count} material(s)]")
 
         lines.append("")

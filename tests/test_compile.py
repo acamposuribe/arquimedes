@@ -450,7 +450,7 @@ def test_index_pages():
         {"canonical_name": "memory palace", "slug": "memory-palace"},
     ]
     glossary = render_glossary(clusters)
-    assert "# Concept Glossary" in glossary
+    assert "# Main Concepts" in glossary
     assert "archive as architectural space" in glossary
     assert "memory palace" in glossary
 
@@ -575,24 +575,22 @@ def test_orphan_removal(tmp_path):
     orphan_bridge.parent.mkdir(parents=True)
     orphan_bridge.write_text("# Old Bridge Concept", encoding="utf-8")
 
-    # Create a valid material page and concept page
+    # Create a valid material page, concept index page, and bridge concept page
     valid_mat = wiki / "practice" / "_general" / "mat_aaa.md"
     valid_mat.write_text("# Valid", encoding="utf-8")
-    valid_concept = wiki / "shared" / "concepts" / "memory-palace.md"
-    valid_concept.write_text("# Memory Palace", encoding="utf-8")
+    concept_index = wiki / "shared" / "concepts" / "_index.md"
+    concept_index.parent.mkdir(parents=True, exist_ok=True)
+    concept_index.write_text("# Local Concepts", encoding="utf-8")
     valid_bridge = wiki / "shared" / "bridge-concepts" / "memory-and-place.md"
     valid_bridge.parent.mkdir(parents=True, exist_ok=True)
     valid_bridge.write_text("# Memory and Place", encoding="utf-8")
-    concept_index = wiki / "shared" / "concepts" / "_index.md"
-    concept_index.write_text("# All Concepts", encoding="utf-8")
 
-    removed = _remove_orphans(wiki, {"mat_aaa"}, {"memory-palace", "memory-and-place"})
+    removed = _remove_orphans(wiki, {"mat_aaa"}, {"memory-and-place"})
 
     assert not orphan_mat.exists()
     assert not orphan_concept.exists()
     assert not orphan_bridge.exists()
     assert valid_mat.exists()
-    assert valid_concept.exists()
     assert valid_bridge.exists()
     assert concept_index.exists()
     assert len(removed) == 3
@@ -708,17 +706,25 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     manifests = tmp_path / "manifests"
     manifests.mkdir()
     mid = "mat_mmm"
-    mat_dir = tmp_path / "extracted" / mid
-    meta = _make_meta(mid, "Bridge Test Material")
-    mat_dir.mkdir(parents=True)
-    (mat_dir / "meta.json").write_text(json.dumps(meta))
-    (mat_dir / "chunks.jsonl").write_text("")
-    (mat_dir / "annotations.jsonl").write_text("")
+    mid2 = "mat_nnn"
+    for material_id, title in [(mid, "Bridge Test Material"), (mid2, "Bridge Test Material Two")]:
+        mat_dir = tmp_path / "extracted" / material_id
+        meta = _make_meta(material_id, title)
+        mat_dir.mkdir(parents=True)
+        (mat_dir / "meta.json").write_text(json.dumps(meta))
+        (mat_dir / "chunks.jsonl").write_text("")
+        (mat_dir / "annotations.jsonl").write_text("")
     (manifests / "materials.jsonl").write_text(
-        json.dumps({"material_id": mid, "file_hash": mid,
-                    "relative_path": f"Research/{mid}.pdf", "file_type": "pdf",
-                    "domain": "research", "collection": "_general",
-                    "ingested_at": "2026-01-01T00:00:00+00:00"})
+        "\n".join([
+            json.dumps({"material_id": mid, "file_hash": mid,
+                        "relative_path": f"Research/{mid}.pdf", "file_type": "pdf",
+                        "domain": "research", "collection": "_general",
+                        "ingested_at": "2026-01-01T00:00:00+00:00"}),
+            json.dumps({"material_id": mid2, "file_hash": mid2,
+                        "relative_path": f"Research/{mid2}.pdf", "file_type": "pdf",
+                        "domain": "research", "collection": "_general",
+                        "ingested_at": "2026-01-02T00:00:00+00:00"}),
+        ])
     )
     monkeypatch.chdir(tmp_path)
     rebuild_index()
@@ -732,7 +738,7 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
         "slug": "archive-space",
         "aliases": ["archival space", "archive as space"],
         "confidence": 0.9,
-        "material_ids": [mid],
+        "material_ids": [mid, mid2],
         "source_concepts": [{
             "material_id": mid,
             "concept_name": "archive space",
@@ -751,10 +757,17 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
         "aliases": ["archival space framework"],
         "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
         "confidence": 0.88,
-        "material_ids": [mid],
+        "material_ids": [mid, mid2],
         "source_concepts": [{
             "material_id": mid,
             "concept_name": "archive space",
+            "relevance": "high",
+            "source_pages": [1, 2],
+            "evidence_spans": ["the archive as built form"],
+            "confidence": 0.88,
+        }, {
+            "material_id": mid2,
+            "concept_name": "archive space framework",
             "relevance": "high",
             "source_pages": [1, 2],
             "evidence_spans": ["the archive as built form"],
@@ -788,10 +801,17 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
 
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
 
+    meta_after = json.loads((tmp_path / "extracted" / mid / "meta.json").read_text())
+    assert meta_after.get("bridge_concepts"), "bridge concepts not written back to extracted meta"
+    assert meta_after["bridge_concepts"][0]["canonical_name"] == "Archive Space Framework"
+
     # Memory bridge tables must be populated in search.sqlite
     con = sqlite3.connect(str(tmp_path / "indexes" / "search.sqlite"))
     concept_pages = con.execute(
         "SELECT path FROM wiki_pages WHERE page_type='concept'"
+    ).fetchall()
+    concept_index = con.execute(
+        "SELECT path FROM wiki_pages WHERE page_type='concept_index'"
     ).fetchall()
     material_pages = con.execute(
         "SELECT path FROM wiki_pages WHERE page_type='material'"
@@ -801,7 +821,7 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     ).fetchall()
     con.close()
 
-    assert any("archive-space" in r[0] for r in concept_pages), "concept page not in wiki_pages"
+    assert any("shared/concepts/_index.md" in r[0] for r in concept_index), "local concept index not in wiki_pages"
     assert any("bridge-concepts/archive-space-framework" in r[0] for r in concept_pages), "bridge concept page not in wiki_pages"
     assert any(mid in r[0] for r in material_pages), "material page not in wiki_pages"
     assert {r[0] for r in aliases} == {"archival space", "archive as space"}
@@ -926,10 +946,57 @@ def test_compile_writes_collection_pages(tmp_path, monkeypatch):
     assert "## Overview" in coll_page
     assert "## Materials" in coll_page
     assert "Collection Test Material" in coll_page
-    assert "## Key Concepts" in coll_page
-    assert "Test Concept" in coll_page
     assert "## Recent Additions" in coll_page
     assert "2026-04-05" in coll_page
+
+
+def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
+    """Local concepts index groups entries deterministically by collection."""
+    import shutil
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "manifests" / "materials.jsonl").write_text(
+        json.dumps({
+            "material_id": "mat_aaa", "file_hash": "x",
+            "relative_path": "Research/mat_aaa.pdf", "file_type": "pdf",
+            "domain": "research", "collection": "archives",
+            "ingested_at": "2026-04-05T12:00:00+00:00",
+        })
+    )
+
+    meta = _make_meta("mat_aaa", "Archive Material")
+    meta["collection"] = "archives"
+    mat_dir = tmp_path / "extracted" / "mat_aaa"
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps(meta))
+    (mat_dir / "chunks.jsonl").write_text("")
+    (mat_dir / "annotations.jsonl").write_text("")
+
+    db_path = _make_sqlite_db(tmp_path)
+    index_dir = tmp_path / "indexes"
+    shutil.copy(str(db_path), str(index_dir / "search.sqlite"))
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
+    monkeypatch.setattr(cluster_mod, "load_clusters", lambda root=None: [])
+    monkeypatch.setattr(cluster_mod, "cluster_bridge_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    local_index = (tmp_path / "wiki" / "shared" / "concepts" / "_index.md").read_text()
+    assert "## Archives" in local_index
+    assert "archival habitat" in local_index
 
 
 def test_compile_runs_quick_lint_after_compile(tmp_path, monkeypatch):

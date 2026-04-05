@@ -147,7 +147,7 @@ def _setup_repo(tmp_path: Path) -> tuple[Path, dict]:
     )
     _write_jsonl(derived / "bridge_concept_clusters.jsonl", [])
 
-    concept_path = tmp_path / _concept_wiki_path("archive-and-space")
+    concept_path = tmp_path / "wiki" / "shared" / "bridge-concepts" / "archive-and-space.md"
     _write_json(concept_path, {"body": "Concept page."})
 
     config = {
@@ -204,8 +204,8 @@ def _write_cluster_data(root: Path) -> list[dict]:
         },
     ]
     _write_jsonl(root / "derived" / "concept_clusters.jsonl", clusters)
-    _write_json(root / "wiki" / "shared" / "concepts" / "archive-and-space.md", {"body": "Concept page."})
-    _write_json(root / "wiki" / "shared" / "concepts" / "memory-and-place.md", {"body": "Concept page."})
+    _write_json(root / "wiki" / "shared" / "bridge-concepts" / "archive-and-space.md", {"body": "Concept page."})
+    _write_json(root / "wiki" / "shared" / "bridge-concepts" / "memory-and-place.md", {"body": "Concept page."})
     return clusters
 
 
@@ -584,7 +584,7 @@ def test_graph_reflection_writes_schema_and_skips_unchanged(tmp_path, monkeypatc
             "affected_concept_names": ["archive and space"],
             "evidence": ["shared archive frame"],
             "input_fingerprint": "abc",
-            "wiki_path": "wiki/shared/concepts/archive-and-space.md",
+            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
         }
     ]
     concept_refs = [
@@ -599,7 +599,7 @@ def test_graph_reflection_writes_schema_and_skips_unchanged(tmp_path, monkeypatc
             "supporting_material_ids": ["mat_001", "mat_002"],
             "supporting_evidence": ["shared archive frame"],
             "input_fingerprint": "def",
-            "wiki_path": "wiki/shared/concepts/archive-and-space.md",
+            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
         }
     ]
     collection_refs = [
@@ -839,7 +839,7 @@ def test_page_update_helpers_write_marked_reflection_sections(tmp_path, monkeypa
         "why_this_concept_matters": "It shapes the whole corpus.",
         "supporting_material_ids": ["mat_001", "mat_002"],
         "supporting_evidence": ["shared archive frame"],
-        "wiki_path": "wiki/shared/concepts/archive-and-space.md",
+        "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
     }
     collection_record = {
         "domain": "research",
@@ -855,7 +855,7 @@ def test_page_update_helpers_write_marked_reflection_sections(tmp_path, monkeypa
     assert _apply_concept_reflection_to_page(root, concept_record) is True
     assert _apply_collection_reflection_to_page(root, collection_record) is True
 
-    concept_page = (root / "wiki" / "shared" / "concepts" / "archive-and-space.md").read_text(encoding="utf-8")
+    concept_page = (root / "wiki" / "shared" / "bridge-concepts" / "archive-and-space.md").read_text(encoding="utf-8")
     collection_page = (root / "wiki" / "research" / "papers" / "_index.md").read_text(encoding="utf-8")
     assert "<!-- phase6:concept-reflection:start -->" in concept_page
     assert "<!-- phase6:collection-reflection:start -->" in collection_page

@@ -284,6 +284,7 @@ def _stage_route_config(config: dict, stage: str | None) -> list[dict]:
             "no_auto_update": entry.get("no_auto_update"),
             "no_custom_instructions": entry.get("no_custom_instructions"),
             "fast_fail": entry.get("fast_fail"),
+            "bare": entry.get("bare"),
         })
     return routes
 
@@ -476,7 +477,14 @@ def _build_prompt_text(system: str, messages: list[dict]) -> tuple[str, str]:
     return system, "\n".join(parts)
 
 
-def _build_agent_cmd(base_parts: list[str], system: str, *, effort: str | None = None, model_override: str | None = None) -> list[str]:
+def _build_agent_cmd(
+    base_parts: list[str],
+    system: str,
+    *,
+    effort: str | None = None,
+    model_override: str | None = None,
+    bare: bool = False,
+) -> list[str]:
     """Build the full command for an agent CLI, adding speed optimizations.
 
     For ``claude``: adds flags to minimize startup overhead without
@@ -496,6 +504,8 @@ def _build_agent_cmd(base_parts: list[str], system: str, *, effort: str | None =
     exe = base_parts[0]
     if exe == "claude":
         cmd = list(base_parts)
+        if bare and "--bare" not in cmd:
+            cmd.append("--bare")
         if "--no-session-persistence" not in cmd:
             cmd.append("--no-session-persistence")
         if "--disable-slash-commands" not in cmd:
@@ -541,7 +551,13 @@ def _build_stage_request(
     route = route or {}
     provider = provider.lower()
     if provider == "claude":
-        cmd = _build_agent_cmd(base_parts, system, effort=effort, model_override=model)
+        cmd = _build_agent_cmd(
+            base_parts,
+            system,
+            effort=effort,
+            model_override=model,
+            bare=_route_flag(route, "bare", False),
+        )
         return cmd, user_prompt, True
 
     if provider == "codex":
@@ -706,6 +722,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                         system_prompt,
                         effort=effort_value,
                         model_override=model,
+                        bare=_route_flag(attempt_cfg, "bare", False),
                     )
                     stdin_text = f"[SYSTEM]\n{system_prompt}\n\n{user_prompt}"
                     fast_fail = attempt_cfg.get("fast_fail")

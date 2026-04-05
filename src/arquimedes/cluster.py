@@ -123,6 +123,75 @@ def _build_source_concept(indexed: dict) -> dict:
     }
 
 
+def _cluster_input_path(root: Path, kind: str) -> Path:
+    """Return the staged input path for a clustering run."""
+    return root / "derived" / "tmp" / f"{kind}_cluster_input.json"
+
+
+def _write_json(path: Path, payload: object) -> None:
+    """Write JSON payloads atomically enough for staged LLM inputs."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _stage_local_cluster_input(
+    root: Path,
+    concept_rows: list[tuple],
+    material_titles: dict[str, str],
+) -> Path:
+    """Write the local clustering input file."""
+    payload = {
+        "kind": "local",
+        "concept_count": len(concept_rows),
+        "materials": material_titles,
+        "concepts": [],
+    }
+    for row in concept_rows:
+        if len(row) == 8:
+            concept_name, concept_key, material_id, relevance, source_pages_json, evidence_spans_json, confidence, _concept_type = row
+        else:
+            concept_name, concept_key, material_id, relevance, source_pages_json, evidence_spans_json, confidence = row
+        try:
+            source_pages = json.loads(source_pages_json or "[]")
+        except json.JSONDecodeError:
+            source_pages = []
+        try:
+            evidence_spans = json.loads(evidence_spans_json or "[]")
+        except json.JSONDecodeError:
+            evidence_spans = []
+        payload["concepts"].append({
+            "concept_name": concept_name,
+            "concept_key": concept_key,
+            "material_id": material_id,
+            "material_title": material_titles.get(material_id, material_id),
+            "relevance": relevance,
+            "source_pages": source_pages,
+            "evidence_spans": evidence_spans,
+            "confidence": confidence,
+        })
+    path = _cluster_input_path(root, "local")
+    _write_json(path, payload)
+    return path
+
+
+def _stage_bridge_cluster_input(
+    root: Path,
+    material_packets: list[dict],
+    existing_bridge_clusters: list[dict],
+) -> Path:
+    """Write the bridge clustering input file."""
+    payload = {
+        "kind": "bridge",
+        "existing_bridge_cluster_count": len(existing_bridge_clusters),
+        "existing_bridge_clusters": existing_bridge_clusters,
+        "material_packet_count": len(material_packets),
+        "material_packets": material_packets,
+    }
+    path = _cluster_input_path(root, "bridge")
+    _write_json(path, payload)
+    return path
+
+
 def _dedupe_aliases(values: list[str]) -> list[str]:
     """Preserve order while deduplicating empty aliases."""
     out: list[str] = []
@@ -219,7 +288,13 @@ def bridge_cluster_fingerprint(config: dict | None = None) -> str:
     finally:
         con.close()
 
-    return enrich_stamps.canonical_hash(list(local_concepts), list(bridge_concepts), list(materials))
+    root_bridge_clusters = load_bridge_clusters(root)
+    return enrich_stamps.canonical_hash(
+        list(local_concepts),
+        list(bridge_concepts),
+        list(materials),
+        list(root_bridge_clusters),
+    )
 
 
 def is_clustering_stale(config: dict | None = None, *, force: bool = False) -> bool:
@@ -295,29 +370,10 @@ Rules:
 
 
 def _build_prompt(
-    concept_rows: list[tuple],
-    material_titles: dict[str, str],
+    input_path: Path,
+    concept_count: int,
 ) -> str:
     """Build the strict local-clustering prompt."""
-    lines = []
-    for row in concept_rows:
-        if len(row) == 8:
-            concept_name, concept_key, material_id, relevance, source_pages_json, evidence_spans_json, confidence, _concept_type = row
-        else:
-            concept_name, concept_key, material_id, relevance, source_pages_json, evidence_spans_json, confidence = row
-        title = material_titles.get(material_id, material_id)
-        try:
-            spans = json.loads(evidence_spans_json or "[]")
-        except json.JSONDecodeError:
-            spans = []
-        excerpt_parts = [span.strip()[:160] for span in spans[:2] if isinstance(span, str) and span.strip()]
-        excerpt = " | ".join(excerpt_parts)
-        line = (
-            f'- concept_name="{concept_name}" | concept_key="{concept_key}" '
-            f'| material="{title}" [{material_id}] | evidence="{excerpt}"'
-        )
-        lines.append(line)
-
     schema_desc = """\
 Output schema (JSON array):
 [
@@ -333,14 +389,15 @@ Output schema (JSON array):
 ]"""
 
     return (
+        f"Read the local clustering input JSON from {input_path}.\n"
+        f"The file contains {concept_count} local concept candidates and their source materials.\n"
+        "Treat the file as the source of truth; do not rely on memory or prior turns.\n"
         "Group the following concept candidates into canonical clusters.\n"
         "Merge only when the concepts are semantically equivalent or clearly the same framework stated differently.\n"
         "Do not over-merge neighboring but distinct ideas.\n"
-        f"There are {len(concept_rows)} input concepts. The total number of source_concepts across all output clusters must also be {len(concept_rows)}.\n"
+        f"The total number of source_concepts across all output clusters must also be {concept_count}.\n"
         "Use the exact material_id and exact concept_name strings from the input.\n"
         "Do not group multiple distinct concepts from the same material into one umbrella cluster.\n\n"
-        + "\n".join(lines)
-        + "\n\n"
         + schema_desc
     )
 
@@ -366,6 +423,8 @@ Rules:
 
 
 def _build_bridge_prompt(
+    input_path: Path,
+    existing_cluster_count: int,
     material_packets: list[dict],
 ) -> str:
     """Build the bridge-clustering prompt from compact material packets."""
@@ -415,6 +474,9 @@ Output schema (JSON array):
 ]"""
 
     return (
+        f"Read the bridge clustering input JSON from {input_path}.\n"
+        f"The file contains {existing_cluster_count} existing bridge clusters and {len(material_packets)} material packets.\n"
+        "Treat the file as the source of truth; preserve the existing bridge concepts unless strong evidence demands a merge, split, or rename.\n"
         "Cluster the following bridge candidate concept packets into broader cross-material umbrellas.\n"
         f"There are {len(material_packets)} material packets. Bridge clusters must connect at least two materials.\n"
         "Use the packet summaries, local concepts, bridge candidates, and evidence snippets to judge broader conceptual territory.\n"
@@ -728,6 +790,7 @@ def cluster_concepts(
         raise EnrichmentError("No concepts in index. Run `arq enrich` on materials first.")
 
     material_titles: dict[str, str] = {mid: title for mid, title in material_rows}
+    input_path = _stage_local_cluster_input(root, concept_rows, material_titles)
 
     # Build lookup index: (material_id, concept_key) → row dict
     concept_index: dict[tuple[str, str], dict] = {}
@@ -754,7 +817,7 @@ def cluster_concepts(
         output_path.unlink()
 
     user_msg = (
-        _build_prompt(concept_rows, material_titles)
+        _build_prompt(input_path, len(concept_rows))
         + f"\n\nWrite the output JSON directly to {output_path} using the Write tool."
         + "\nDo not stream JSON into the response."
         + "\nConfirm with a single line when done."
@@ -920,6 +983,7 @@ def cluster_bridge_concepts(
         })
 
     bridge_concept_count = sum(len(packet["bridge_candidates"]) for packet in material_packets)
+    existing_bridge_clusters = load_bridge_clusters(root)
     if bridge_concept_count == 0:
         derived_dir = root / "derived"
         derived_dir.mkdir(exist_ok=True)
@@ -949,13 +1013,14 @@ def cluster_bridge_concepts(
     if llm_fn is None:
         llm_fn = make_cli_llm_fn(config, "cluster", state=llm_state)
 
+    input_path = _stage_bridge_cluster_input(root, material_packets, existing_bridge_clusters)
     output_path = _cluster_output_path(root, "bridge")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
         output_path.unlink()
 
     user_msg = (
-        _build_bridge_prompt(material_packets)
+        _build_bridge_prompt(input_path, len(existing_bridge_clusters), material_packets)
         + f"\n\nWrite the output JSON directly to {output_path} using the Write tool."
         + "\nDo not stream JSON into the response."
         + "\nConfirm with a single line when done."
@@ -981,6 +1046,18 @@ def cluster_bridge_concepts(
         "evidence_spans": row[5],
         "confidence": row[6],
     } for row in concept_rows }, {mid: info["title"] for mid, info in material_info.items()})
+
+    if existing_bridge_clusters:
+        merged: dict[str, dict] = {}
+        for cluster in existing_bridge_clusters:
+            cluster_id = str(cluster.get("cluster_id", "")).strip()
+            if cluster_id:
+                merged[cluster_id] = cluster
+        for cluster in clusters:
+            cluster_id = str(cluster.get("cluster_id", "")).strip()
+            if cluster_id:
+                merged[cluster_id] = cluster
+        clusters = list(merged.values()) if merged else clusters
 
     derived_dir = root / "derived"
     derived_dir.mkdir(exist_ok=True)

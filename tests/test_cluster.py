@@ -9,66 +9,70 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 
-from arquimedes.cluster import _BRIDGE_SYSTEM_PROMPT, _LOCAL_SYSTEM_PROMPT, _build_bridge_prompt, _build_prompt
+from arquimedes.cluster import (
+    _BRIDGE_SYSTEM_PROMPT,
+    _LOCAL_SYSTEM_PROMPT,
+    _build_bridge_prompt,
+    _build_prompt,
+    _cluster_input_path,
+    _stage_bridge_cluster_input,
+    _stage_local_cluster_input,
+)
 
 
 def test_cluster_prompt_includes_semantic_merge_guidance():
-    rows = [
-        (
-            "archival habitat",
-            "archival habitat",
-            "m1",
-            "high",
-            "[1]",
-            '["Archives are spatial infrastructures.", "Habitation gives archives social form."]',
-            0.9,
-            "local",
-        )
-    ]
-    prompt = _build_prompt(rows, {"m1": "Archival Habitat"})
+    input_path = Path("/tmp/local_cluster_input.json")
+    prompt = _build_prompt(input_path, 1)
     assert "Merge only when the concepts are semantically equivalent" in prompt
     assert "Do not group multiple distinct concepts from the same material into one umbrella cluster." in prompt
-    assert 'concept_name="archival habitat"' in prompt
+    assert str(input_path) in prompt
+    assert "Read the local clustering input JSON" in prompt
     assert "confidence=0.9" not in prompt
     assert "relevance=high" not in prompt
-    assert "Archives are spatial infrastructures." in prompt
-    assert "Habitation gives archives social form." in prompt
     assert "Do not emit singleton clusters" in _LOCAL_SYSTEM_PROMPT
     assert "backfilled deterministically" in _LOCAL_SYSTEM_PROMPT
 
 
 def test_bridge_prompt_includes_material_packets():
-    prompt = _build_bridge_prompt([
-        {
-            "material_id": "m1",
-            "title": "Archival Habitat",
-            "summary": "A material about archival space.",
-            "keywords": ["archive", "space"],
-            "local_concepts": [{"concept_name": "archival habitat", "relevance": "high"}],
-            "bridge_candidates": [{"concept_name": "archival spatiality", "relevance": "high"}],
-            "evidence_snippets": ["Archives are spatial infrastructures."],
-        },
-        {
-            "material_id": "m2",
-            "title": "Archival Landscapes",
-            "summary": "Another material about archives.",
-            "keywords": ["archive"],
-            "local_concepts": [{"concept_name": "archive as space", "relevance": "high"}],
-            "bridge_candidates": [{"concept_name": "archival spatiality", "relevance": "high"}],
-            "evidence_snippets": ["Habitation gives archives social form."],
-        },
-    ])
-    assert 'material="Archival Habitat" [m1]' in prompt
-    assert 'material="Archival Landscapes" [m2]' in prompt
-    assert "bridge candidate" in prompt or "bridge_candidates" in prompt
+    input_path = Path("/tmp/bridge_cluster_input.json")
+    prompt = _build_bridge_prompt(
+        input_path,
+        2,
+        [
+            {
+                "material_id": "m1",
+                "title": "Archival Habitat",
+                "summary": "A material about archival space.",
+                "keywords": ["archive", "space"],
+                "local_concepts": [{"concept_name": "archival habitat", "relevance": "high"}],
+                "bridge_candidates": [{"concept_name": "archival spatiality", "relevance": "high"}],
+                "evidence_snippets": ["Archives are spatial infrastructures."],
+            }
+        ],
+    )
+    assert str(input_path) in prompt
+    assert "Read the bridge clustering input JSON" in prompt
+    assert "preserve the existing bridge concepts" in prompt.lower()
     assert "Bridge clusters must connect at least two materials." in prompt
-    assert "relevance=high" not in prompt
 
 
 def test_local_cluster_prompt_requests_file_write():
     from arquimedes.cluster import _LOCAL_SYSTEM_PROMPT, _build_prompt, _cluster_output_path
 
-    prompt = _build_prompt(
+    prompt = _build_prompt(Path("/tmp/local_cluster_input.json"), 1)
+    assert "Write the output JSON directly to" not in prompt
+    assert "Do not emit singleton clusters" in _LOCAL_SYSTEM_PROMPT
+    assert _cluster_output_path(Path("/tmp"), "local").name == "local_clusters.json"
+
+
+def test_bridge_cluster_prompt_requests_file_write():
+    prompt = _build_bridge_prompt(Path("/tmp/bridge_cluster_input.json"), 1, [])
+    assert "Write the output JSON directly to" not in prompt
+
+
+def test_cluster_input_files_are_staged(tmp_path):
+    local_path = _stage_local_cluster_input(
+        tmp_path,
         [
             (
                 "archival habitat",
@@ -83,13 +87,14 @@ def test_local_cluster_prompt_requests_file_write():
         ],
         {"m1": "Archival Habitat"},
     )
-    assert "Write the output JSON directly to" not in prompt
-    assert "Do not emit singleton clusters" in _LOCAL_SYSTEM_PROMPT
-    assert _cluster_output_path(Path("/tmp"), "local").name == "local_clusters.json"
+    assert local_path == _cluster_input_path(tmp_path, "local")
+    local_payload = json.loads(local_path.read_text(encoding="utf-8"))
+    assert local_payload["kind"] == "local"
+    assert local_payload["concept_count"] == 1
+    assert local_payload["concepts"][0]["material_title"] == "Archival Habitat"
 
-
-def test_bridge_cluster_prompt_requests_file_write():
-    prompt = _build_bridge_prompt(
+    bridge_path = _stage_bridge_cluster_input(
+        tmp_path,
         [
             {
                 "material_id": "m1",
@@ -100,9 +105,14 @@ def test_bridge_cluster_prompt_requests_file_write():
                 "bridge_candidates": [{"concept_name": "archival spatiality", "relevance": "high"}],
                 "evidence_snippets": ["Archives are spatial infrastructures."],
             }
-        ]
+        ],
+        [{"cluster_id": "bridge_0001", "canonical_name": "Existing", "aliases": [], "source_concepts": [], "confidence": 1.0}],
     )
-    assert "Write the output JSON directly to" not in prompt
+    assert bridge_path == _cluster_input_path(tmp_path, "bridge")
+    bridge_payload = json.loads(bridge_path.read_text(encoding="utf-8"))
+    assert bridge_payload["kind"] == "bridge"
+    assert bridge_payload["existing_bridge_cluster_count"] == 1
+    assert bridge_payload["material_packet_count"] == 1
 
 
 def test_bridge_clustering_skips_without_candidates(tmp_path, monkeypatch):

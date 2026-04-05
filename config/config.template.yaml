@@ -75,7 +75,7 @@ library_root: "~/Arquimedes-Library"
 #         command: "claude --print"
 #         model: sonnet
 #         effort: medium
-#         tools: [Write]
+#         tools: [Read, Write]
 #         permission_mode: acceptEdits
 #       - provider: codex
 #         command: "codex exec"

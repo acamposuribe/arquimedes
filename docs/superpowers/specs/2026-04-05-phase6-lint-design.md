@@ -27,6 +27,30 @@ This keeps Phase 6 disciplined:
 - reflective synthesis second
 - memory update last
 
+## Ordering And Parallelism
+
+Phase 6 should maximize parallelism only where it does not weaken reflective quality.
+
+Recommended order:
+1. deterministic lint
+2. cluster audit
+3. concept-page reflection
+4. collection-page reflection
+5. graph reflection
+6. apply accepted changes
+7. memory rebuild
+
+Parallelize when safe:
+- deterministic checks may run in parallel
+- concept-page reflections may run in parallel across independent stale clusters
+- collection reflections may run in parallel across independent stale collections
+
+Keep ordered when quality depends on prior outputs:
+- cluster audit should run before concept-page reflection
+- concept-page reflection should run before collection reflection when collection packets depend on improved concept understanding
+- graph reflection should run last among LLM passes so it sees the best available page/graph state
+- memory rebuild must run after applied changes
+
 ## Implementation Priority
 
 Phase 6 is broad, so implementation should be staged.

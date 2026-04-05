@@ -174,24 +174,6 @@ def _stage_local_cluster_input(
     return path
 
 
-def _stage_bridge_cluster_input(
-    root: Path,
-    material_packets: list[dict],
-    existing_bridge_clusters: list[dict],
-) -> Path:
-    """Write the bridge clustering input file."""
-    payload = {
-        "kind": "bridge",
-        "existing_bridge_cluster_count": len(existing_bridge_clusters),
-        "existing_bridge_clusters": existing_bridge_clusters,
-        "material_packet_count": len(material_packets),
-        "material_packets": material_packets,
-    }
-    path = _cluster_input_path(root, "bridge")
-    _write_json(path, payload)
-    return path
-
-
 def _dedupe_aliases(values: list[str]) -> list[str]:
     """Preserve order while deduplicating empty aliases."""
     out: list[str] = []
@@ -272,29 +254,13 @@ def cluster_fingerprint(config: dict | None = None) -> str:
 
 
 def bridge_cluster_fingerprint(config: dict | None = None) -> str:
-    """SHA256 over bridge clustering inputs: materials + local + bridge concepts."""
+    """SHA256 over bridge clustering inputs: local + bridge clusters."""
     if config is None:
         config = load_config()
     root = get_project_root()
-    db_path = root / "indexes" / "search.sqlite"
-    if not db_path.exists():
-        return ""
-
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
-        local_concepts = _load_concept_rows(con, concept_type="local")
-        bridge_concepts = _load_concept_rows(con, concept_type="bridge_candidate")
-        materials = _load_material_rows(con)
-    finally:
-        con.close()
-
+    local_clusters = load_clusters(root)
     root_bridge_clusters = load_bridge_clusters(root)
-    return enrich_stamps.canonical_hash(
-        list(local_concepts),
-        list(bridge_concepts),
-        list(materials),
-        list(root_bridge_clusters),
-    )
+    return enrich_stamps.canonical_hash(list(local_clusters), list(root_bridge_clusters))
 
 
 def is_clustering_stale(config: dict | None = None, *, force: bool = False) -> bool:
@@ -423,42 +389,10 @@ Rules:
 
 
 def _build_bridge_prompt(
-    input_path: Path,
-    existing_cluster_count: int,
-    material_packets: list[dict],
+    local_clusters_path: Path,
+    bridge_clusters_path: Path,
+    output_path: Path,
 ) -> str:
-    """Build the bridge-clustering prompt from compact material packets."""
-    lines: list[str] = []
-    for packet in material_packets:
-        title = packet.get("title", packet.get("material_id", ""))
-        material_id = packet.get("material_id", "")
-        summary = packet.get("summary", "")
-        keywords = packet.get("keywords", [])
-        local_concepts = packet.get("local_concepts", [])
-        bridge_candidates = packet.get("bridge_candidates", [])
-        evidence_snippets = packet.get("evidence_snippets", [])
-        lines.append(f'- material="{title}" [{material_id}]')
-        if summary:
-            lines.append(f'  summary="{summary}"')
-        if keywords:
-            lines.append(f'  keywords="{", ".join(keywords[:8])}"')
-        if local_concepts:
-            lines.append("  local_concepts:")
-            for concept in local_concepts[:8]:
-                lines.append(
-                    f'    - concept_name="{concept.get("concept_name", "")}"'
-                )
-        if bridge_candidates:
-            lines.append("  bridge_candidates:")
-            for concept in bridge_candidates[:8]:
-                lines.append(
-                    f'    - concept_name="{concept.get("concept_name", "")}"'
-                )
-        if evidence_snippets:
-            lines.append("  evidence_snippets:")
-            for snippet in evidence_snippets[:5]:
-                lines.append(f'    - "{snippet}"')
-
     schema_desc = """\
 Output schema (JSON array):
 [
@@ -474,15 +408,15 @@ Output schema (JSON array):
 ]"""
 
     return (
-        f"Read the bridge clustering input JSON from {input_path}.\n"
-        f"The file contains {existing_cluster_count} existing bridge clusters and {len(material_packets)} material packets.\n"
-        "Treat the file as the source of truth; preserve the existing bridge concepts unless strong evidence demands a merge, split, or rename.\n"
-        "Cluster the following bridge candidate concept packets into broader cross-material umbrellas.\n"
-        f"There are {len(material_packets)} material packets. Bridge clusters must connect at least two materials.\n"
-        "Use the packet summaries, local concepts, bridge candidates, and evidence snippets to judge broader conceptual territory.\n"
-        "Do not create single-material bridge clusters.\n\n"
-        + "\n".join(lines)
-        + "\n\n"
+        f"Read the local cluster file from {local_clusters_path}.\n"
+        f"Read the current bridge memory file from {bridge_clusters_path}.\n"
+        "Treat those files as the source of truth; preserve the existing bridge concepts unless strong evidence demands a merge, split, or rename.\n"
+        "Use the cleaned local clusters as the input signal for bridge clustering.\n"
+        "Bridge clusters must connect at least two materials.\n"
+        "Do not create single-material bridge clusters.\n"
+        f"Write the updated bridge clusters to {output_path} using the Write tool.\n"
+        "Do not stream JSON into the response.\n"
+        "Confirm with a single line when done.\n\n"
         + schema_desc
     )
 
@@ -888,10 +822,6 @@ def cluster_bridge_concepts(
     if config is None:
         config = load_config()
     root = get_project_root()
-    db_path = root / "indexes" / "search.sqlite"
-
-    if not db_path.exists():
-        raise EnrichmentError("Search index not found. Run `arq index` first.")
 
     if not is_bridge_clustering_stale(config, force=force):
         logger.info("Bridge clustering is up to date — skipped.")
@@ -900,90 +830,12 @@ def cluster_bridge_concepts(
         total = sum(len(c.get("source_concepts", [])) for c in clusters)
         return {"bridge_concepts": total, "clusters": len(clusters), "multi_material": multi, "skipped": True}
 
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    try:
-        concept_rows = _load_concept_rows(con)
-        material_rows = _load_material_rows(con)
-    finally:
-        con.close()
-
-    if not concept_rows:
-        raise EnrichmentError("No concepts in index. Run `arq enrich` on materials first.")
-
-    material_info: dict[str, dict] = {}
-    for mid, title, summary, keywords_json in material_rows:
-        try:
-            keywords = json.loads(keywords_json or "[]")
-            if not isinstance(keywords, list):
-                keywords = []
-        except json.JSONDecodeError:
-            keywords = []
-        material_info[mid] = {
-            "title": title,
-            "summary": summary or "",
-            "keywords": [str(k) for k in keywords if str(k).strip()],
-        }
-
-    grouped: dict[str, dict] = {}
-    for row in concept_rows:
-        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
-        item = grouped.setdefault(material_id, {
-            "material_id": material_id,
-            "title": material_info.get(material_id, {}).get("title", material_id),
-            "summary": material_info.get(material_id, {}).get("summary", ""),
-            "keywords": material_info.get(material_id, {}).get("keywords", []),
-            "local_concepts": [],
-            "bridge_candidates": [],
-            "evidence_snippets": [],
-        })
-        concept = {
-            "concept_name": concept_name,
-            "concept_key": concept_key,
-            "relevance": relevance,
-            "source_pages": source_pages,
-            "evidence_spans": evidence_spans,
-            "confidence": confidence,
-        }
-        if concept_type == "bridge_candidate":
-            item["bridge_candidates"].append(concept)
-        else:
-            item["local_concepts"].append(concept)
-        try:
-            spans = json.loads(evidence_spans or "[]")
-        except json.JSONDecodeError:
-            spans = []
-        for span in spans[:2]:
-            if isinstance(span, str) and span.strip():
-                item["evidence_snippets"].append(span.strip())
-
-    material_packets = []
-    for packet in grouped.values():
-        local_sorted = sorted(
-            packet["local_concepts"],
-            key=lambda c: (0 if c.get("relevance") == "high" else 1 if c.get("relevance") == "medium" else 2, c.get("concept_name", "")),
-        )[:8]
-        bridge_sorted = sorted(
-            packet["bridge_candidates"],
-            key=lambda c: (0 if c.get("relevance") == "high" else 1 if c.get("relevance") == "medium" else 2, c.get("concept_name", "")),
-        )[:8]
-        snippets = []
-        seen_snippets: set[str] = set()
-        for snippet in packet["evidence_snippets"]:
-            if snippet not in seen_snippets:
-                seen_snippets.add(snippet)
-                snippets.append(snippet)
-        material_packets.append({
-            "material_id": packet["material_id"],
-            "title": packet["title"],
-            "summary": packet["summary"],
-            "keywords": packet["keywords"],
-            "local_concepts": local_sorted,
-            "bridge_candidates": bridge_sorted,
-            "evidence_snippets": snippets[:5],
-        })
-
-    bridge_concept_count = sum(len(packet["bridge_candidates"]) for packet in material_packets)
+    local_clusters = load_clusters(root)
     existing_bridge_clusters = load_bridge_clusters(root)
+    if not local_clusters:
+        raise EnrichmentError("No local clusters found. Run `arq cluster` first.")
+
+    bridge_concept_count = sum(len(cluster.get("source_concepts", [])) for cluster in local_clusters)
     if bridge_concept_count == 0:
         derived_dir = root / "derived"
         derived_dir.mkdir(exist_ok=True)
@@ -1013,17 +865,15 @@ def cluster_bridge_concepts(
     if llm_fn is None:
         llm_fn = make_cli_llm_fn(config, "cluster", state=llm_state)
 
-    input_path = _stage_bridge_cluster_input(root, material_packets, existing_bridge_clusters)
     output_path = _cluster_output_path(root, "bridge")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     if output_path.exists():
         output_path.unlink()
 
+    local_clusters_path = root / "derived" / "concept_clusters.jsonl"
+    bridge_clusters_path = root / "derived" / "bridge_concept_clusters.jsonl"
     user_msg = (
-        _build_bridge_prompt(input_path, len(existing_bridge_clusters), material_packets)
-        + f"\n\nWrite the output JSON directly to {output_path} using the Write tool."
-        + "\nDo not stream JSON into the response."
-        + "\nConfirm with a single line when done."
+        _build_bridge_prompt(local_clusters_path, bridge_clusters_path, output_path)
     )
     raw_response = llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
     if output_path.exists() and output_path.stat().st_size > 0:
@@ -1037,15 +887,26 @@ def cluster_bridge_concepts(
     if not isinstance(raw_clusters, list):
         raise EnrichmentError(f"LLM returned non-list bridge clusters: {type(raw_clusters)}")
 
-    clusters = _validate_bridge_and_attach_provenance(raw_clusters, { (row[2], row[1]): {
-        "concept_name": row[0],
-        "concept_key": row[1],
-        "material_id": row[2],
-        "relevance": row[3],
-        "source_pages": row[4],
-        "evidence_spans": row[5],
-        "confidence": row[6],
-    } for row in concept_rows }, {mid: info["title"] for mid, info in material_info.items()})
+    concept_index: dict[tuple[str, str], dict] = {}
+    for cluster in local_clusters:
+        for source in cluster.get("source_concepts", []):
+            mid = str(source.get("material_id", "")).strip()
+            cname = str(source.get("concept_name", "")).strip()
+            if not mid or not cname:
+                continue
+            ckey = _normalize_concept_name(cname)
+            concept_index[(mid, ckey)] = {
+                "concept_name": cname,
+                "concept_key": ckey,
+                "material_id": mid,
+                "concept_type": "local",
+                "relevance": source.get("relevance", "medium"),
+                "source_pages": json.dumps(source.get("source_pages", []), ensure_ascii=False),
+                "evidence_spans": json.dumps(source.get("evidence_spans", []), ensure_ascii=False),
+                "confidence": source.get("confidence", 1.0),
+            }
+
+    clusters = _validate_bridge_and_attach_provenance(raw_clusters, concept_index, {})
 
     if existing_bridge_clusters:
         merged: dict[str, dict] = {}
@@ -1072,7 +933,7 @@ def cluster_bridge_concepts(
         json.dumps({
             "clustered_at": datetime.now(timezone.utc).isoformat(),
             "fingerprint": fingerprint,
-            "bridge_concepts": sum(len(packet["bridge_candidates"]) for packet in material_packets),
+            "bridge_concepts": bridge_concept_count,
             "clusters": len(clusters),
         }, indent=2),
         encoding="utf-8",

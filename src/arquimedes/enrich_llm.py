@@ -355,6 +355,9 @@ def _run_agent_subprocess(
     safe_cmd = [_strip_nuls(part) for part in cmd]
     env = os.environ.copy()
     env["CLAUDE_CODE_DISABLE_1M_CONTEXT"] = "1"
+    env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
+    env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
     if safe_cmd and os.path.basename(safe_cmd[0]) == "claude":
         env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "4096")
         env.setdefault("MAX_THINKING_TOKENS", "2048")

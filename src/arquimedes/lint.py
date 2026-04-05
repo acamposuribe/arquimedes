@@ -474,48 +474,6 @@ class ReflectionIndexTool:
                 })
             return results
 
-    def local_concepts_for_collection(self, domain: str, collection: str, limit: int = 120) -> list[dict]:
-        domain = (domain or "practice").strip() or "practice"
-        collection = (collection or "_general").strip() or "_general"
-        with self._lock:
-            try:
-                rows = self.con.execute(
-                    """
-                    SELECT c.concept_name, c.concept_key, c.material_id, c.relevance,
-                           c.source_pages, c.evidence_spans, c.confidence, m.title
-                    FROM concepts c
-                    JOIN materials m ON m.material_id = c.material_id
-                    WHERE c.concept_type = 'local' AND m.domain = ? AND m.collection = ?
-                    ORDER BY
-                        CASE c.relevance
-                            WHEN 'high' THEN 0
-                            WHEN 'medium' THEN 1
-                            WHEN 'low' THEN 2
-                            ELSE 3
-                        END,
-                        c.confidence DESC,
-                        c.concept_name,
-                        c.material_id
-                    LIMIT ?
-                    """,
-                    [domain, collection, limit],
-                ).fetchall()
-            except sqlite3.OperationalError:
-                rows = []
-            return [
-                {
-                    "concept_name": row["concept_name"],
-                    "concept_key": row["concept_key"],
-                    "material_id": row["material_id"],
-                    "material_title": row["title"],
-                    "relevance": row["relevance"],
-                    "source_pages": _parse_json_list(row["source_pages"]),
-                    "evidence_spans": _parse_json_list(row["evidence_spans"]),
-                    "confidence": row["confidence"] or 0.0,
-                }
-                for row in rows
-            ]
-
     def open_record(self, kind: str, record_id: str) -> dict | None:
         kind = (kind or "").strip()
         record_id = (record_id or "").strip()
@@ -654,72 +612,6 @@ class ReflectionIndexTool:
                     ],
                     "reflection": self._row_to_dict(reflection) if reflection else {},
                 }
-            if kind == "local_concepts":
-                domain, _, collection = record_id.partition("/")
-                domain = domain or "practice"
-                collection = collection or "_general"
-                wiki_row = self.con.execute(
-                    """
-                    SELECT page_type, page_id, title, path, domain, collection
-                    FROM wiki_pages
-                    WHERE page_type = 'concept_index' AND domain = 'shared' AND collection = 'concepts'
-                    """,
-                    [],
-                ).fetchone()
-                try:
-                    reflection = self.con.execute(
-                        """
-                        SELECT collection_key, domain, collection, main_takeaways, main_tensions,
-                               important_concept_names, important_material_ids, supporting_concepts,
-                               supporting_material_ids, supporting_evidence, open_questions,
-                               why_this_local_concepts_group_matters, input_fingerprint, wiki_path
-                        FROM local_concept_reflections
-                        WHERE domain = ? AND collection = ?
-                        """,
-                        [domain, collection],
-                    ).fetchone()
-                except sqlite3.OperationalError:
-                    reflection = None
-                members = self.con.execute(
-                    """
-                    SELECT c.concept_name, c.concept_key, c.material_id, c.relevance,
-                           c.source_pages, c.evidence_spans, c.confidence, m.title
-                    FROM concepts c
-                    JOIN materials m ON m.material_id = c.material_id
-                    WHERE c.concept_type = 'local' AND m.domain = ? AND m.collection = ?
-                    ORDER BY
-                        CASE c.relevance
-                            WHEN 'high' THEN 0
-                            WHEN 'medium' THEN 1
-                            WHEN 'low' THEN 2
-                            ELSE 3
-                        END,
-                        c.confidence DESC,
-                        c.concept_name,
-                        c.material_id
-                    """,
-                    [domain, collection],
-                ).fetchall()
-                return {
-                    "kind": "local_concepts",
-                    "domain": domain,
-                    "collection": collection,
-                    "wiki_page": self._row_to_dict(wiki_row) if wiki_row else {},
-                    "members": [
-                        {
-                            "concept_name": row["concept_name"],
-                            "concept_key": row["concept_key"],
-                            "material_id": row["material_id"],
-                            "material_title": row["title"],
-                            "relevance": row["relevance"],
-                            "source_pages": _parse_json_list(row["source_pages"]),
-                            "evidence_spans": _parse_json_list(row["evidence_spans"]),
-                            "confidence": row["confidence"],
-                        }
-                        for row in members
-                    ],
-                    "reflection": self._row_to_dict(reflection) if reflection else {},
-                }
             return None
 
     def execute(self, request: dict) -> dict | None:
@@ -764,7 +656,7 @@ def _normalize_context_request(request: Any) -> dict | None:
     if tool == "open_record":
         kind = str(request.get("kind", "")).strip()
         record_id = str(request.get("id", "")).strip()
-        if kind not in {"material", "concept", "collection", "local_concepts"} or not record_id:
+        if kind not in {"material", "concept", "collection"} or not record_id:
             return None
         return {"tool": tool, "kind": kind, "id": record_id}
     query = str(request.get("query", "")).strip()
@@ -1462,7 +1354,6 @@ def _graph_reflection_due(
     clusters: list[dict],
     manifest_records: list[dict],
     cluster_reviews: list[dict],
-    local_concept_refs: list[dict],
     concept_refs: list[dict],
     collection_refs: list[dict],
     deterministic_report: dict,
@@ -1471,7 +1362,6 @@ def _graph_reflection_due(
     payload = {
         "deterministic_report": deterministic_report.get("summary", {}),
         "cluster_reviews": cluster_reviews[:20],
-        "local_concept_reflections": local_concept_refs[:20],
         "concept_reflections": concept_refs[:20],
         "collection_reflections": collection_refs[:20],
     }
@@ -1605,7 +1495,6 @@ def _collection_prompt_payload(
             })
     current_reflection = _extract_marked_section(page_text, "collection-reflection")
     previous_reflection = tool.open_record("collection", f"{domain}/{collection}") if tool else None
-    local_concepts_reflection = tool.open_record("local_concepts", f"{domain}/{collection}") if tool else None
     return {
         "domain": domain,
         "collection": collection,
@@ -1613,77 +1502,7 @@ def _collection_prompt_payload(
         "concepts": concepts,
         "current_reflection": current_reflection,
         "previous_reflection": previous_reflection.get("reflection", {}) if isinstance(previous_reflection, dict) else {},
-        "local_concepts_reflection": local_concepts_reflection.get("reflection", {}) if isinstance(local_concepts_reflection, dict) else {},
         "collection_page": page_text,
-    }
-
-
-def _local_concepts_reflection_marker(collection_key: str) -> str:
-    return f"local-concepts-reflection:{collection_key}"
-
-
-def _local_concept_prompt_payload(
-    domain: str,
-    collection: str,
-    metas: list[dict],
-    page_text: str,
-    tool: ReflectionIndexTool | None = None,
-) -> dict:
-    collection_key = f"{domain}/{collection}"
-    current_reflection = _extract_marked_section(page_text, _local_concepts_reflection_marker(collection_key))
-    previous_reflection = tool.open_record("local_concepts", collection_key) if tool else None
-
-    materials = []
-    local_concepts = tool.local_concepts_for_collection(domain, collection) if tool else []
-    concepts_by_material: dict[str, list[dict]] = defaultdict(list)
-    concept_counts: Counter[str] = Counter()
-    for row in local_concepts:
-        mid = row.get("material_id", "")
-        if not mid:
-            continue
-        concepts_by_material[mid].append(row)
-        name = row.get("concept_name", "")
-        if name:
-            concept_counts[name] += 1
-
-    for meta in metas:
-        mid = meta.get("material_id", "")
-        query_terms = [domain, collection, meta.get("title", ""), _meta_val(meta.get("summary"))]
-        material_record = tool._material_evidence(mid, query_terms) if tool else {}
-        materials.append({
-            "material_id": mid,
-            "title": meta.get("title", ""),
-            "summary": _meta_val(meta.get("summary")),
-            "keywords": _safe_list((_meta_val(meta.get("keywords")) or "").split(",")),
-            "local_concepts": [
-                {
-                    "concept_name": row.get("concept_name", ""),
-                    "concept_key": row.get("concept_key", ""),
-                    "relevance": row.get("relevance", ""),
-                    "source_pages": row.get("source_pages", []),
-                    "evidence_spans": row.get("evidence_spans", []),
-                    "confidence": row.get("confidence", 0.0),
-                }
-                for row in concepts_by_material.get(mid, [])[:8]
-            ],
-            "evidence": material_record,
-        })
-
-    local_concept_summary = [
-        {"concept_name": name, "count": count}
-        for name, count in concept_counts.most_common(12)
-    ]
-
-    return {
-        "domain": domain,
-        "collection": collection,
-        "collection_key": collection_key,
-        "materials": materials,
-        "local_concepts": local_concepts[:48],
-        "local_concept_summary": local_concept_summary,
-        "current_reflection": current_reflection,
-        "previous_reflection": previous_reflection.get("reflection", {}) if isinstance(previous_reflection, dict) else {},
-        "concept_index_page": page_text,
     }
 
 
@@ -1749,32 +1568,9 @@ def _collection_reflection_prompt(domain: str, collection: str, payload: dict) -
     return system, user
 
 
-def _local_concept_reflection_prompt(domain: str, collection: str, payload: dict) -> tuple[str, str]:
-    system = (
-        "You are an architecture research librarian writing reflective synthesis "
-        "for the local concepts index. Return JSON only. Preserve prior conclusions, "
-        "revise them when evidence changes, and request more read-only SQL-index context "
-        "only if the provided packet is insufficient. You will get only one "
-        "read-only context round, so request everything you need at once."
-    )
-    user = (
-        "Write reflective synthesis for the local concepts in this collection.\n"
-        "Local concepts are the per-material concepts, not the main bridge concepts.\n"
-        "Return a JSON object with keys: main_takeaways, main_tensions, important_concept_names, "
-        "important_material_ids, supporting_concepts, supporting_material_ids, "
-        "supporting_evidence, open_questions, why_this_local_concepts_group_matters, "
-        "context_requests.\n"
-        "context_requests is optional and must be a JSON array of read-only SQL-index lookups "
-        "if you need more context.\n\n"
-        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
-    )
-    return system, user
-
-
 def _graph_reflection_prompt(
     report: dict,
     cluster_findings: list[dict],
-    local_concept_refs: list[dict],
     concept_refs: list[dict],
     collection_refs: list[dict],
 ) -> tuple[str, str]:
@@ -1793,7 +1589,6 @@ def _graph_reflection_prompt(
         "of read-only SQL-index lookups if you need more context.\n\n"
         f"Deterministic report summary:\n{json.dumps(report.get('summary', {}), ensure_ascii=False, indent=2)}\n\n"
         f"Cluster findings:\n{json.dumps(cluster_findings[:20], ensure_ascii=False, indent=2)}\n\n"
-        f"Local concept reflections:\n{json.dumps(local_concept_refs[:10], ensure_ascii=False, indent=2)}\n\n"
         f"Concept reflections:\n{json.dumps(concept_refs[:10], ensure_ascii=False, indent=2)}\n\n"
         f"Collection reflections:\n{json.dumps(collection_refs[:10], ensure_ascii=False, indent=2)}"
     )
@@ -1889,32 +1684,6 @@ def _apply_collection_reflection_to_page(root: Path, record: dict) -> bool:
          f"Open questions: {', '.join(record.get('open_questions', [])) or 'n/a'}"],
     )
     updated = _upsert_marked_section(page, "collection-reflection", section)
-    if updated != page:
-        page_path.write_text(updated, encoding="utf-8")
-        return True
-    return False
-
-
-def _apply_local_concept_reflection_to_page(root: Path, record: dict) -> bool:
-    domain = record.get("domain", "")
-    collection = record.get("collection", "")
-    collection_key = record.get("collection_key", f"{domain}/{collection}")
-    page_path = root / "wiki" / "shared" / "concepts" / "_index.md"
-    if not page_path.exists():
-        return False
-    page = _read_text(page_path)
-    section = _reflection_section(
-        f"Local Concepts Reflection — {domain.replace('_', ' ').title()} / {collection.replace('_', ' ').title()}",
-        [
-            f"Main takeaways: {', '.join(record.get('main_takeaways', [])) or 'n/a'}",
-            f"Main tensions: {', '.join(record.get('main_tensions', [])) or 'n/a'}",
-            f"Important concepts: {', '.join(record.get('important_concept_names', [])) or 'n/a'}",
-            f"Important materials: {', '.join(record.get('important_material_ids', [])) or 'n/a'}",
-            f"Open questions: {', '.join(record.get('open_questions', [])) or 'n/a'}",
-        ],
-        prose=record.get("why_this_local_concepts_group_matters", ""),
-    )
-    updated = _upsert_marked_section(page, _local_concepts_reflection_marker(collection_key), section)
     if updated != page:
         page_path.write_text(updated, encoding="utf-8")
         return True
@@ -2150,72 +1919,6 @@ def _run_concept_reflections(
     return output
 
 
-def _run_local_concept_reflections(
-    root: Path,
-    groups: dict[tuple[str, str], list[dict]],
-    llm_factory=None,
-    tool: ReflectionIndexTool | None = None,
-) -> list[dict]:
-    existing = _existing_by_key(root / LINT_DIR / "local_concept_reflections.jsonl", "collection_key")
-    output: list[dict] = []
-    eligible = [(domain, collection, metas) for (domain, collection), metas in groups.items() if len(metas) >= 2]
-    workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
-
-    def _one(domain: str, collection: str, metas: list[dict]) -> dict | None:
-        page_path = root / "wiki" / "shared" / "concepts" / "_index.md"
-        payload = _local_concept_prompt_payload(domain, collection, metas, _read_text(page_path) or "", tool)
-        fingerprint = canonical_hash(payload)
-        key = f"{domain}/{collection}"
-        existing_record = existing.get(key)
-        if existing_record and existing_record.get("input_fingerprint") == fingerprint:
-            return existing_record
-        llm_fn = llm_factory("lint")
-        system, user = _local_concept_reflection_prompt(domain, collection, payload)
-        parsed = _run_reflection_prompt_with_context(
-            llm_fn,
-            system,
-            user,
-            "JSON object with keys: main_takeaways, main_tensions, important_concept_names, important_material_ids, supporting_concepts, supporting_material_ids, supporting_evidence, open_questions, why_this_local_concepts_group_matters, optional context_requests",
-            tool,
-        )
-        if not isinstance(parsed, dict):
-            raise EnrichmentError("Local concept reflection returned non-object")
-        record = {
-            "collection_key": key,
-            "domain": domain,
-            "collection": collection,
-            "main_takeaways": _safe_list(parsed.get("main_takeaways", [])),
-            "main_tensions": _safe_list(parsed.get("main_tensions", [])),
-            "important_concept_names": _safe_list(parsed.get("important_concept_names", [])),
-            "important_material_ids": _safe_list(parsed.get("important_material_ids", [])),
-            "supporting_concepts": _safe_list(parsed.get("supporting_concepts", [])),
-            "supporting_material_ids": _safe_list(parsed.get("supporting_material_ids", [])),
-            "supporting_evidence": _safe_list(parsed.get("supporting_evidence", [])),
-            "open_questions": _safe_list(parsed.get("open_questions", [])),
-            "why_this_local_concepts_group_matters": str(parsed.get("why_this_local_concepts_group_matters", "")).strip(),
-            "input_fingerprint": fingerprint,
-            "wiki_path": str(page_path.relative_to(root)),
-        }
-        return record
-
-    if len(eligible) > 1 and workers > 1:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(_one, domain, collection, metas) for domain, collection, metas in eligible]
-            for fut in as_completed(futures):
-                record = fut.result()
-                if record:
-                    output.append(record)
-    else:
-        for domain, collection, metas in eligible:
-            record = _one(domain, collection, metas)
-            if record:
-                output.append(record)
-
-    output.sort(key=lambda r: (r.get("domain", ""), r.get("collection", "")))
-    _write_jsonl(root / LINT_DIR / "local_concept_reflections.jsonl", output)
-    return output
-
-
 def _run_collection_reflections(
     root: Path,
     groups: dict[tuple[str, str], list[dict]],
@@ -2284,7 +1987,6 @@ def _run_graph_reflection(
     root: Path,
     deterministic_report: dict,
     cluster_reviews: list[dict],
-    local_concept_refs: list[dict],
     concept_refs: list[dict],
     collection_refs: list[dict],
     llm_factory=None,
@@ -2294,7 +1996,6 @@ def _run_graph_reflection(
     payload = {
         "deterministic_report": deterministic_report.get("summary", {}),
         "cluster_reviews": cluster_reviews[:20],
-        "local_concept_reflections": local_concept_refs[:20],
         "concept_reflections": concept_refs[:20],
         "collection_reflections": collection_refs[:20],
     }
@@ -2303,7 +2004,7 @@ def _run_graph_reflection(
         return existing_rows
 
     llm_fn = llm_factory("cluster")
-    system, user = _graph_reflection_prompt(deterministic_report, cluster_reviews, local_concept_refs, concept_refs, collection_refs)
+    system, user = _graph_reflection_prompt(deterministic_report, cluster_reviews, concept_refs, collection_refs)
     parsed = _run_reflection_prompt_with_context(
         llm_fn,
         system,
@@ -2381,11 +2082,10 @@ def run_reflective_lint(
     if not get_index_path().exists() or not clusters:
         lint_root = root / LINT_DIR
         lint_root.mkdir(parents=True, exist_ok=True)
-        for name in ("cluster_reviews.jsonl", "local_concept_reflections.jsonl", "concept_reflections.jsonl", "collection_reflections.jsonl", "graph_findings.jsonl"):
+        for name in ("cluster_reviews.jsonl", "concept_reflections.jsonl", "collection_reflections.jsonl", "graph_findings.jsonl"):
             (lint_root / name).write_text("", encoding="utf-8")
         return {
             "cluster_reviews": 0,
-            "local_concept_reflections": 0,
             "concept_reflections": 0,
             "collection_reflections": 0,
             "graph_findings": 0,
@@ -2398,11 +2098,10 @@ def run_reflective_lint(
         shared_llm_state: dict = {}
 
         def llm_factory(stage: str) -> LlmFn:
-            return make_cli_llm_fn(config, "cluster", state=shared_llm_state)
+            return make_cli_llm_fn(config, "lint", state=shared_llm_state)
 
     with ReflectionIndexTool(root) as tool:
         cluster_reviews = _run_cluster_audit(root, clusters, material_info, llm_factory, tool)
-        local_concept_refs = _run_local_concept_reflections(root, groups, llm_factory, tool)
         concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool)
         collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool)
         graph_due, graph_reason = _graph_reflection_due(
@@ -2411,14 +2110,13 @@ def run_reflective_lint(
             bridge_clusters,
             manifest_records,
             cluster_reviews,
-            local_concept_refs,
             concept_refs,
             collection_refs,
             deterministic_report,
         )
         if graph_due or not scheduled:
             graph_findings = _run_graph_reflection(
-                root, deterministic_report, cluster_reviews, local_concept_refs, concept_refs, collection_refs, llm_factory, tool
+                root, deterministic_report, cluster_reviews, concept_refs, collection_refs, llm_factory, tool
             )
             graph_skipped = False
             graph_skip_reason = ""
@@ -2428,8 +2126,6 @@ def run_reflective_lint(
             graph_skip_reason = graph_reason
 
     if apply:
-        for record in local_concept_refs:
-            _apply_local_concept_reflection_to_page(root, record)
         for record in concept_refs:
             _apply_concept_reflection_to_page(root, record)
         for record in collection_refs:
@@ -2440,7 +2136,6 @@ def run_reflective_lint(
 
     return {
         "cluster_reviews": len(cluster_reviews),
-        "local_concept_reflections": len(local_concept_refs),
         "concept_reflections": len(concept_refs),
         "collection_reflections": len(collection_refs),
         "graph_findings": len(graph_findings),

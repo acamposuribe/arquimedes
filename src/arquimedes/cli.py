@@ -398,7 +398,6 @@ def lint(quick: bool, full: bool, report: bool, fix: bool, as_json: bool):
         if isinstance(reflection, dict):
             click.echo("Reflective passes:")
             click.echo(f"  cluster reviews:      {reflection.get('cluster_reviews', 0)}")
-            click.echo(f"  local concept refs:   {reflection.get('local_concept_reflections', 0)}")
             click.echo(f"  concept reflections:  {reflection.get('concept_reflections', 0)}")
             click.echo(f"  collection reflections: {reflection.get('collection_reflections', 0)}")
             click.echo(f"  graph findings:       {reflection.get('graph_findings', 0)}")

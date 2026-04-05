@@ -311,10 +311,8 @@ The default packet should already be rich enough to support good conclusions:
 - representative excerpts from linked materials
 - key chunk summaries / annotations / figure descriptions when relevant
 
-Local concepts also need this treatment:
-- reflect on the grouped local concepts index, not only on bridge/main concepts
-- preserve prior local-concepts reflection text in `wiki/shared/concepts/_index.md`
-- feed local-concepts reflections the grouped local concept rows plus rich evidence
+Local concepts stay searchable and useful as raw inputs, but they do **not** receive their own reflection pass in Phase 6.
+They feed the bridge/main-concept work and remain available through the index.
 
 The search tool is for filling gaps, not for making the prompt thin by default.
 
@@ -334,9 +332,6 @@ Minimum indexed reflection types:
 - concept takeaways
 - concept tensions
 - concept open questions
-- local-concept takeaways
-- local-concept tensions
-- local-concept open questions
 - collection takeaways
 - collection tensions
 - collection open questions
@@ -364,11 +359,6 @@ Concept reflection is stale when any of these changed:
 - canonical name
 - supporting material summaries / concepts
 - compiled concept page content
-
-Local-concepts reflection is stale when any of these changed:
-- local concept rows in the collection
-- grouped local concepts index content
-- prior local-concepts reflection text
 
 Collection reflection is stale when any of these changed:
 - collection membership

@@ -154,23 +154,6 @@ CREATE TABLE IF NOT EXISTS collection_reflections (
     PRIMARY KEY (domain, collection)
 );
 
-CREATE TABLE IF NOT EXISTS local_concept_reflections (
-    collection_key                    TEXT PRIMARY KEY,
-    domain                            TEXT NOT NULL,
-    collection                        TEXT NOT NULL,
-    main_takeaways                    TEXT NOT NULL DEFAULT '[]',
-    main_tensions                     TEXT NOT NULL DEFAULT '[]',
-    important_concept_names           TEXT NOT NULL DEFAULT '[]',
-    important_material_ids            TEXT NOT NULL DEFAULT '[]',
-    supporting_concepts               TEXT NOT NULL DEFAULT '[]',
-    supporting_material_ids           TEXT NOT NULL DEFAULT '[]',
-    supporting_evidence               TEXT NOT NULL DEFAULT '[]',
-    open_questions                    TEXT NOT NULL DEFAULT '[]',
-    why_this_local_concepts_group_matters TEXT NOT NULL DEFAULT '',
-    input_fingerprint                 TEXT NOT NULL DEFAULT '',
-    wiki_path                         TEXT NOT NULL DEFAULT ''
-);
-
 CREATE TABLE IF NOT EXISTS graph_findings (
     finding_id              TEXT PRIMARY KEY,
     finding_type            TEXT NOT NULL DEFAULT '',
@@ -239,7 +222,6 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
     con.execute("DELETE FROM cluster_reviews")
     con.execute("DELETE FROM concept_reflections")
     con.execute("DELETE FROM collection_reflections")
-    con.execute("DELETE FROM local_concept_reflections")
     con.execute("DELETE FROM graph_findings")
     # Rebuild FTS
     con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('delete-all')")
@@ -486,38 +468,6 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
             ),
         )
 
-    # Local concept reflections
-    for reflection in _load_jsonl(lint_dir / "local_concept_reflections.jsonl"):
-        collection_key = reflection.get("collection_key", "")
-        domain = reflection.get("domain", "")
-        collection = reflection.get("collection", "")
-        if not collection_key or not domain or not collection:
-            continue
-        con.execute(
-            """INSERT OR REPLACE INTO local_concept_reflections
-               (collection_key, domain, collection, main_takeaways, main_tensions,
-                important_concept_names, important_material_ids, supporting_concepts,
-                supporting_material_ids, supporting_evidence, open_questions,
-                why_this_local_concepts_group_matters, input_fingerprint, wiki_path)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-            (
-                collection_key,
-                domain,
-                collection,
-                json.dumps(reflection.get("main_takeaways") or [], ensure_ascii=False),
-                json.dumps(reflection.get("main_tensions") or [], ensure_ascii=False),
-                json.dumps(reflection.get("important_concept_names") or [], ensure_ascii=False),
-                json.dumps(reflection.get("important_material_ids") or [], ensure_ascii=False),
-                json.dumps(reflection.get("supporting_concepts") or [], ensure_ascii=False),
-                json.dumps(reflection.get("supporting_material_ids") or [], ensure_ascii=False),
-                json.dumps(reflection.get("supporting_evidence") or [], ensure_ascii=False),
-                json.dumps(reflection.get("open_questions") or [], ensure_ascii=False),
-                reflection.get("why_this_local_concepts_group_matters", ""),
-                reflection.get("input_fingerprint", ""),
-                reflection.get("wiki_path", ""),
-            ),
-        )
-
     # Graph findings
     for finding in _load_jsonl(lint_dir / "graph_findings.jsonl"):
         finding_id = finding.get("finding_id", "")
@@ -571,7 +521,6 @@ def _cluster_fingerprint(root: Path) -> str:
     lint_dir = root / "derived" / "lint"
     lint_paths = [
         lint_dir / "cluster_reviews.jsonl",
-        lint_dir / "local_concept_reflections.jsonl",
         lint_dir / "concept_reflections.jsonl",
         lint_dir / "collection_reflections.jsonl",
         lint_dir / "graph_findings.jsonl",

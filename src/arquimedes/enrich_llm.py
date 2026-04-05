@@ -351,10 +351,13 @@ def _run_agent_subprocess(
     """
     # Enrichment prompts fit well within 200K — disable 1M context to avoid
     # the drastically higher token consumption of extended context windows.
+    safe_cmd = [_strip_nuls(part) for part in cmd]
     env = os.environ.copy()
     env["CLAUDE_CODE_DISABLE_1M_CONTEXT"] = "1"
+    if safe_cmd and os.path.basename(safe_cmd[0]) == "claude":
+        env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "4096")
+        env.setdefault("MAX_THINKING_TOKENS", "2048")
 
-    safe_cmd = [_strip_nuls(part) for part in cmd]
     safe_stdin = _strip_nuls(stdin_text)
 
     proc = subprocess.Popen(

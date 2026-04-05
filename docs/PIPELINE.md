@@ -84,7 +84,7 @@ When a collaborator adds a file to the shared library root:
   - chunk summaries and keywords
   - figure descriptions / visual type
   - concept candidates
-- Stage-specific provider/model order comes from `enrichment.llm_routes[stage]` when configured; legacy `llm.agent_cmd` remains a fallback.
+- Stage-specific provider/model order comes from `enrichment.llm_routes[stage]` when configured; legacy `llm.agent_cmd` remains a fallback. Use `lint` routes for `arq lint` so full lint can stay separate from cluster routing.
 - **LLM required for the enrichment part of this command**
 
 4. **`arq index rebuild`**

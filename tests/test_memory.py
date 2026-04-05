@@ -195,7 +195,7 @@ class TestMemoryRebuild:
         assert "manifest_fingerprint" in stamp
 
 
-class TestAliasTable:
+class TestAliasTableRebuild:
     def test_alias_rows_written(self, repo):
         _setup_two_materials_with_clusters(repo)
         con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
@@ -211,47 +211,7 @@ class TestAliasTable:
         assert ("concept_0002", "spatial memory") in aliases
 
 
-class TestLocalConceptReflections:
-    def test_local_concept_reflections_written(self, repo):
-        _setup_two_materials_with_clusters(repo)
-        lint_dir = repo / "derived" / "lint"
-        lint_dir.mkdir(parents=True, exist_ok=True)
-        (lint_dir / "local_concept_reflections.jsonl").write_text(
-            json.dumps(
-                {
-                    "collection_key": "research/papers",
-                    "domain": "research",
-                    "collection": "papers",
-                    "main_takeaways": ["The collection has a stable local vocabulary."],
-                    "main_tensions": ["Specificity vs reuse"],
-                    "important_concept_names": ["archival habitat"],
-                    "important_material_ids": ["aabbcc112233", "ddeeff445566"],
-                    "supporting_concepts": ["archive architecture"],
-                    "supporting_material_ids": ["aabbcc112233"],
-                    "supporting_evidence": ["archival habitat"],
-                    "open_questions": ["Which local concepts should bridge?"],
-                    "why_this_local_concepts_group_matters": "It captures the raw vocabulary before bridging.",
-                    "input_fingerprint": "abc123",
-                    "wiki_path": "wiki/shared/concepts/_index.md",
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        memory_rebuild()
-
-        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
-        row = con.execute(
-            "SELECT collection_key, domain, collection, main_takeaways FROM local_concept_reflections"
-        ).fetchone()
-        con.close()
-
-        assert row is not None
-        assert row[0] == "research/papers"
-        assert row[1] == "research"
-        assert row[2] == "papers"
-        assert "stable local vocabulary" in row[3]
-
+class TestAliasTable:
     def test_alias_rows_replaced_on_rebuild(self, repo):
         _setup_two_materials_with_clusters(repo)
         # Write minimal single-cluster file and rebuild

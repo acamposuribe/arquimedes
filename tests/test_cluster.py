@@ -8,7 +8,7 @@ import sqlite3
 import pytest
 from click.testing import CliRunner
 
-from arquimedes.cluster import _build_bridge_prompt, _build_prompt
+from arquimedes.cluster import _BRIDGE_SYSTEM_PROMPT, _LOCAL_SYSTEM_PROMPT, _build_bridge_prompt, _build_prompt
 
 
 def test_cluster_prompt_includes_semantic_merge_guidance():
@@ -31,6 +31,8 @@ def test_cluster_prompt_includes_semantic_merge_guidance():
     assert "confidence=0.9" in prompt
     assert "Archives are spatial infrastructures." in prompt
     assert "Habitation gives archives social form." in prompt
+    assert "Do not emit singleton clusters" in _LOCAL_SYSTEM_PROMPT
+    assert "backfilled deterministically" in _LOCAL_SYSTEM_PROMPT
 
 
 def test_bridge_prompt_includes_material_packets():

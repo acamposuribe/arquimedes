@@ -289,7 +289,8 @@ Rules:
 - Do not create umbrella clusters, chapter themes, or document-level topic summaries
 - A cluster should usually have at most one source concept per material
 - If unsure whether two concepts are equivalent, keep them separate
-- A concept appearing in only one material is still a valid cluster
+- Do not emit singleton clusters; only return clusters that connect at least two materials
+- Single-material concepts will be backfilled deterministically by the code
 - Return valid JSON array, no markdown fences"""
 
 

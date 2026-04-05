@@ -39,6 +39,13 @@ def _load_json(path: Path, default=None):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _save_jsonl(path: Path, rows: list[dict]) -> None:
+    """Write rows to a JSONL file."""
+    with open(path, "w", encoding="utf-8") as f:
+        for row in rows:
+            f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
 # ---------------------------------------------------------------------------
 # Caption candidate extraction
 # ---------------------------------------------------------------------------
@@ -58,6 +65,96 @@ def _extract_caption_candidates(page_text: str) -> list[str]:
         if stripped and ("fig" in stripped.lower() or "figure" in stripped.lower()):
             candidates.append(stripped)
     return candidates
+
+
+_SCAN_ARTIFACT_PHRASES = (
+    "scanned title page",
+    "scanned article text page",
+    "scanned page of",
+    "text-only page",
+    "body-text page",
+    "dense prose",
+    "continuous prose",
+    "no standalone illustration",
+    "no graphic content",
+    "article text and page footer",
+    "journal footer and page number",
+    "title page of the article",
+)
+
+
+def _is_full_page_bbox(bbox: list[float]) -> bool:
+    """Heuristic: bbox looks like a full-page capture."""
+    if len(bbox) != 4:
+        return False
+    x0, y0, x1, y1 = bbox
+    width = x1 - x0
+    height = y1 - y0
+    return x0 <= 1.0 and y0 <= 1.0 and width >= 400 and height >= 700
+
+
+def _should_delete_figure(sidecar: dict) -> bool:
+    """Return True if the enriched figure is safe to delete as non-substantive."""
+    relevance = str(sidecar.get("relevance", "")).strip().lower()
+    if relevance in {"decorative", "front_matter"}:
+        return True
+
+    if sidecar.get("extraction_method") != "embedded":
+        return False
+    if not _is_full_page_bbox(sidecar.get("bbox", [])):
+        return False
+
+    description = sidecar.get("description")
+    if isinstance(description, dict):
+        description = description.get("value", "")
+    description_text = str(description or "").strip().lower()
+    return any(phrase in description_text for phrase in _SCAN_ARTIFACT_PHRASES)
+
+
+def _cleanup_non_substantive_figures(output_dir: Path) -> int:
+    """Delete non-substantive figure artifacts and remove page refs."""
+    figures_dir = output_dir / "figures"
+    if not figures_dir.exists():
+        return 0
+
+    sidecar_paths = sorted(figures_dir.glob("*.json"))
+    delete_ids: set[str] = set()
+    delete_paths: list[Path] = []
+    image_paths: list[Path] = []
+
+    for sidecar_path in sidecar_paths:
+        sidecar = _load_json(sidecar_path, default={}) or {}
+        if not _should_delete_figure(sidecar):
+            continue
+        figure_id = sidecar.get("figure_id", "")
+        if figure_id:
+            delete_ids.add(figure_id)
+        delete_paths.append(sidecar_path)
+        image_path_str = sidecar.get("image_path", "")
+        if image_path_str:
+            image_path = Path(image_path_str)
+            if not image_path.is_absolute():
+                image_path = output_dir / image_path
+            image_paths.append(image_path)
+
+    if not delete_ids:
+        return 0
+
+    pages_path = output_dir / "pages.jsonl"
+    if pages_path.exists():
+        pages = _load_jsonl(pages_path)
+        for page in pages:
+            refs = page.get("figure_refs", [])
+            if refs:
+                page["figure_refs"] = [ref for ref in refs if ref not in delete_ids]
+        _save_jsonl(pages_path, pages)
+
+    for path in delete_paths:
+        path.unlink(missing_ok=True)
+    for path in image_paths:
+        path.unlink(missing_ok=True)
+
+    return len(delete_ids)
 
 
 # ---------------------------------------------------------------------------
@@ -395,6 +492,9 @@ def enrich_figures_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"Write sidecar error: {exc}"}
 
+    # 10. Deterministic cleanup of non-substantive/artifact figures
+    deleted_count = _cleanup_non_substantive_figures(output_dir)
+
     # Build detail string
     total_batches = len(batches)
     detail_parts = [f"{len(stale_figures)} figures", f"{total_batches} batch{'es' if total_batches != 1 else ''}"]
@@ -402,6 +502,8 @@ def enrich_figures_stage(
         detail_parts.append(f"{n_vision_batches} vision batch{'es' if n_vision_batches != 1 else ''}")
     if n_text_batches:
         detail_parts.append(f"{n_text_batches} text fallback batch{'es' if n_text_batches != 1 else ''}")
+    if deleted_count:
+        detail_parts.append(f"{deleted_count} deleted")
     detail = ", ".join(detail_parts)
 
     return {"status": "enriched", "detail": detail}

@@ -657,6 +657,9 @@ If the figure is blank, partial, scanner-generated, background-only, heavily deg
 no meaningful visual knowledge beyond logos, borders, watermarks, page texture, or platform artifacts, \
 say so plainly in the description and classify it as "decorative" or "front_matter". Do not invent \
 architectural content for non-informative images.
+If the image is effectively a full-page screenshot or scan of article text, a title page, or another \
+text-dominated page capture with no standalone visual figure, treat it as non-substantive and classify \
+it as "front_matter" or "decorative".
 
 """
 

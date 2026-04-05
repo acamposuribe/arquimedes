@@ -224,13 +224,13 @@ class TestEnrichFiguresStage:
     def test_relevance_stored_on_sidecar(self, tmp_path):
         """relevance from LLM response should be stored as a plain string on the sidecar."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
-        # Return a decorative-classified figure
+        # Return a substantive figure so it survives cleanup
         resp = json.dumps({"figures": [{
             "figure_id": "fig_0001",
-            "visual_type": {"value": "logo", "source_pages": [1], "evidence_spans": ["logo"], "confidence": 0.9},
-            "description": {"value": "Publisher logo", "source_pages": [1], "evidence_spans": ["logo"], "confidence": 0.8},
-            "caption": {"value": "", "source_pages": [1], "evidence_spans": [], "confidence": 0.5},
-            "relevance": "decorative",
+            "visual_type": {"value": "photo", "source_pages": [1], "evidence_spans": ["photo"], "confidence": 0.9},
+            "description": {"value": "Portrait photograph of an architect", "source_pages": [1], "evidence_spans": ["portrait"], "confidence": 0.8},
+            "caption": {"value": "Portrait of architect", "source_pages": [1], "evidence_spans": ["portrait"], "confidence": 0.5},
+            "relevance": "substantive",
         }]})
         llm_fn = _make_llm_fn([resp])
         config = _make_config()
@@ -239,7 +239,57 @@ class TestEnrichFiguresStage:
         assert result["status"] == "enriched"
 
         sidecar = json.loads((output_dir / "figures" / "fig_0001.json").read_text())
-        assert sidecar["relevance"] == "decorative"
+        assert sidecar["relevance"] == "substantive"
+
+    def test_deletes_decorative_figure_and_clears_page_ref(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
+        pages = [json.loads(line) for line in (output_dir / "pages.jsonl").read_text().splitlines() if line.strip()]
+        pages[0]["figure_refs"] = ["fig_0001"]
+        with open(output_dir / "pages.jsonl", "w", encoding="utf-8") as f:
+            for p in pages:
+                f.write(json.dumps(p) + "\n")
+
+        resp = json.dumps({"figures": [{
+            "figure_id": "fig_0001",
+            "visual_type": {"value": "photo", "source_pages": [1], "evidence_spans": ["logo"], "confidence": 0.8},
+            "description": {"value": "Publisher logo on a blank background.", "source_pages": [1], "evidence_spans": ["logo"], "confidence": 0.8},
+            "caption": {"value": "", "source_pages": [1], "evidence_spans": [], "confidence": 0.5},
+            "relevance": "decorative",
+        }]})
+        llm_fn = _make_llm_fn([resp])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "enriched"
+        assert "1 deleted" in result["detail"]
+        assert not (output_dir / "figures" / "fig_0001.json").exists()
+        assert not (output_dir / "figures" / "fig_0001.png").exists()
+
+        page = json.loads((output_dir / "pages.jsonl").read_text().splitlines()[0])
+        assert page["figure_refs"] == []
+
+    def test_deletes_full_page_scan_artifact_even_if_mislabeled_substantive(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
+        sidecar_path = output_dir / "figures" / "fig_0001.json"
+        sidecar = json.loads(sidecar_path.read_text())
+        sidecar["bbox"] = [0.0, 0.0, 458.4, 762.0]
+        sidecar["extraction_method"] = "embedded"
+        sidecar_path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+
+        resp = json.dumps({"figures": [{
+            "figure_id": "fig_0001",
+            "visual_type": {"value": "photo", "source_pages": [1], "evidence_spans": ["page"], "confidence": 0.8},
+            "description": {"value": "Scanned article text page with continuous prose and no standalone illustration visible.", "source_pages": [1], "evidence_spans": ["text page"], "confidence": 0.8},
+            "caption": {"value": "", "source_pages": [1], "evidence_spans": [], "confidence": 0.5},
+            "relevance": "substantive",
+        }]})
+        llm_fn = _make_llm_fn([resp])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "enriched"
+        assert "1 deleted" in result["detail"]
+        assert not sidecar_path.exists()
 
     def test_skipped_when_no_figures_dir(self, tmp_path):
         """If there is no figures directory, the stage is skipped."""

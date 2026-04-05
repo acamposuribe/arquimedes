@@ -312,6 +312,10 @@ def _route_flag(route: dict, key: str, default: bool) -> bool:
     return bool(value)
 
 
+def _is_exhaustion_signal(text: str) -> bool:
+    return bool(_FAST_FAIL_RE.search(text or ""))
+
+
 # ---------------------------------------------------------------------------
 # Agent CLI adapter (default — shells out to configurable agent command)
 # ---------------------------------------------------------------------------
@@ -605,7 +609,7 @@ def _build_stage_request(
     return cmd, f"[SYSTEM]\n{system}\n\n{user_prompt}", True
 
 
-def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
+def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | None = None) -> LlmFn:
     """Build an LlmFn that shells out to an agent CLI.
 
     If stage-specific routes are configured under ``enrichment.llm_routes``
@@ -667,12 +671,21 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
     enrichment_config = config.get("enrichment", {})
     max_retries: int = enrichment_config.get("max_retries", 3)
     default_timeout_seconds = _coerce_timeout_seconds(enrichment_config.get("llm_timeout_seconds"))
+    state = state if isinstance(state, dict) else {}
+    exhausted_providers: set[str] = state.setdefault("exhausted_providers", set())
+    exhausted_lock: threading.RLock = state.setdefault("exhausted_lock", threading.RLock())
 
     def llm_fn(system: str, messages: list[dict]) -> str:
         system_prompt, user_prompt = _build_prompt_text(system, messages)
         debug_enabled = _llm_debug_enabled()
 
-        for attempt_cfg in resolved:
+        with exhausted_lock:
+            active_routes = [route for route in resolved if str(route.get("provider") or _provider_from_parts(route.get("command_parts", []))) not in exhausted_providers]
+
+        if not active_routes:
+            raise EnrichmentError("All configured providers are currently exhausted")
+
+        for attempt_cfg in active_routes:
             base_parts = attempt_cfg["command_parts"]
             provider = str(attempt_cfg.get("provider") or _provider_from_parts(base_parts))
 
@@ -745,6 +758,9 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
                                 f"stdout_chars={len(result.stdout)} stderr_chars={len(result.stderr)} "
                                 f"detail_preview={_llm_debug_preview(detail, 200)}"
                             )
+                        if _is_exhaustion_signal(detail):
+                            with exhausted_lock:
+                                exhausted_providers.add(provider)
                         last_exc = EnrichmentError(
                             f"{provider} failed (exit {result.returncode}): {detail[:500]}"
                         )
@@ -770,6 +786,10 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
                         _llm_debug(f"provider CLI missing: {provider}")
                     last_exc = EnrichmentError(f"Agent CLI not found: {provider!r}")
                     break
+
+            if last_exc and _is_exhaustion_signal(str(last_exc)):
+                with exhausted_lock:
+                    exhausted_providers.add(provider)
 
             if len(resolved) > 1:
                 print(f"  [{provider}] {last_exc} — trying next agent", file=sys.stderr)

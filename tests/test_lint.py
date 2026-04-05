@@ -11,7 +11,7 @@ from click.testing import CliRunner
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import ReflectionIndexTool, _apply_collection_reflection_to_page, _apply_concept_reflection_to_page, _build_material_info, _graph_reflection_due, _load_manifest, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
+from arquimedes.lint import ReflectionIndexTool, _apply_collection_reflection_to_page, _apply_concept_reflection_to_page, _apply_local_concept_reflection_to_page, _build_material_info, _graph_reflection_due, _load_manifest, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, _run_local_concept_reflections, run_deterministic_lint, run_lint
 from arquimedes.cli import lint as lint_cmd
 
 
@@ -554,6 +554,119 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
     assert len(calls) == 1
 
 
+def test_local_concept_reflection_targets_grouped_local_concepts_and_skips_unchanged(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    _write_jsonl(
+        root / "manifests" / "materials.jsonl",
+        [
+            {
+                "material_id": "mat_001",
+                "file_hash": "hash-001",
+                "relative_path": "Research/One.pdf",
+                "file_type": "pdf",
+                "domain": "research",
+                "collection": "papers",
+                "ingested_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "material_id": "mat_002",
+                "file_hash": "hash-002",
+                "relative_path": "Research/Two.pdf",
+                "file_type": "pdf",
+                "domain": "research",
+                "collection": "papers",
+                "ingested_at": "2026-01-02T00:00:00+00:00",
+            },
+        ],
+    )
+    for mid, title in [("mat_001", "One"), ("mat_002", "Two")]:
+        mat_dir = root / "extracted" / mid
+        mat_dir.mkdir(parents=True, exist_ok=True)
+        _write_json(
+            mat_dir / "meta.json",
+            {
+                "material_id": mid,
+                "file_hash": f"hash-{mid[-3:]}",
+                "source_path": f"Research/{title}.pdf",
+                "title": title,
+                "authors": [f"Author {title}"],
+                "year": "2026",
+                "page_count": 1,
+                "file_type": "pdf",
+                "domain": "research",
+                "collection": "papers",
+                "raw_keywords": ["archive"],
+                "raw_document_type": "paper",
+                "summary": {"value": "Summary", "provenance": {}},
+                "keywords": {"value": ["archive"], "provenance": {}},
+                "document_type": {"value": "paper", "provenance": {}},
+                "facets": {},
+                "_enrichment_stamp": {"prompt_version": "enrich-v1.0", "enrichment_schema_version": "1"},
+            },
+        )
+        _write_jsonl(
+            mat_dir / "concepts.jsonl",
+            [
+                {"concept_name": "archival habitat", "relevance": "high"},
+                {"concept_name": "archive architecture", "relevance": "medium"},
+            ],
+        )
+
+    rebuild_index(config)
+    _write_json(root / "wiki" / "shared" / "concepts" / "_index.md", {
+        "body": "<!-- phase6:local-concepts-reflection:research/papers:start -->\n## Local Concepts Reflection — Research / Papers\n- Prior local note\n<!-- phase6:local-concepts-reflection:research/papers:end -->\n",
+    })
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(messages[0]["content"])
+            return json.dumps(
+                {
+                    "main_takeaways": ["The collection has a stable local vocabulary."],
+                    "main_tensions": ["Specificity vs reuse"],
+                    "important_concept_names": ["archival habitat"],
+                    "important_material_ids": ["mat_001", "mat_002"],
+                    "supporting_concepts": ["archive architecture"],
+                    "supporting_material_ids": ["mat_001"],
+                    "supporting_evidence": ["archival habitat"],
+                    "open_questions": ["Which local concepts should bridge?"],
+                    "why_this_local_concepts_group_matters": "It captures the raw vocabulary before bridging.",
+                }
+            )
+
+        return fn
+
+    material_info = _build_material_info(root, [
+        {"material_id": "mat_001"},
+        {"material_id": "mat_002"},
+    ])
+    groups = {
+        ("research", "papers"): [
+            material_info["mat_001"] | {"material_id": "mat_001"},
+            material_info["mat_002"] | {"material_id": "mat_002"},
+        ]
+    }
+
+    with ReflectionIndexTool(root) as tool:
+        first = _run_local_concept_reflections(root, groups, llm_factory, tool)
+
+    assert len(first) == 1
+    assert first[0]["collection_key"] == "research/papers"
+    assert len(calls) == 1
+    assert "Prior local note" in calls[0]
+    assert {"collection_key", "domain", "collection", "main_takeaways", "main_tensions", "important_concept_names", "important_material_ids", "supporting_concepts", "supporting_material_ids", "supporting_evidence", "open_questions", "why_this_local_concepts_group_matters", "input_fingerprint", "wiki_path"} <= set(first[0])
+
+    with ReflectionIndexTool(root) as tool:
+        second = _run_local_concept_reflections(root, groups, llm_factory, tool)
+
+    assert len(second) == 1
+    assert len(calls) == 1
+
+
 def test_graph_reflection_writes_schema_and_skips_unchanged(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
@@ -585,6 +698,24 @@ def test_graph_reflection_writes_schema_and_skips_unchanged(tmp_path, monkeypatc
             "evidence": ["shared archive frame"],
             "input_fingerprint": "abc",
             "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+        }
+    ]
+    local_concept_refs = [
+        {
+            "collection_key": "research/papers",
+            "domain": "research",
+            "collection": "papers",
+            "main_takeaways": ["The collection has a stable local vocabulary."],
+            "main_tensions": ["Specificity vs reuse"],
+            "important_concept_names": ["archival habitat"],
+            "important_material_ids": ["mat_001", "mat_002"],
+            "supporting_concepts": ["archive architecture"],
+            "supporting_material_ids": ["mat_001"],
+            "supporting_evidence": ["archival habitat"],
+            "open_questions": ["Which local concepts should bridge?"],
+            "why_this_local_concepts_group_matters": "It captures the raw vocabulary before bridging.",
+            "input_fingerprint": "loc",
+            "wiki_path": "wiki/shared/concepts/_index.md",
         }
     ]
     concept_refs = [
@@ -639,13 +770,13 @@ def test_graph_reflection_writes_schema_and_skips_unchanged(tmp_path, monkeypatc
 
         return fn
 
-    first = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, llm_factory)
+    first = _run_graph_reflection(root, deterministic_report, cluster_reviews, local_concept_refs, concept_refs, collection_refs, llm_factory)
     assert len(first) == 1
     assert first[0]["finding_id"] == "graph:0"
     assert len(calls) == 1
     assert {"finding_id", "finding_type", "severity", "summary", "details", "affected_material_ids", "affected_cluster_ids", "candidate_future_sources", "candidate_bridge_links", "input_fingerprint"} <= set(first[0])
 
-    second = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, llm_factory)
+    second = _run_graph_reflection(root, deterministic_report, cluster_reviews, local_concept_refs, concept_refs, collection_refs, llm_factory)
     assert len(second) == 1
     assert len(calls) == 1
 
@@ -827,6 +958,7 @@ def test_page_update_helpers_write_marked_reflection_sections(tmp_path, monkeypa
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
     _write_json(root / "wiki" / "shared" / "concepts" / "archive-and-space.md", {"body": "Concept page."})
+    _write_json(root / "wiki" / "shared" / "concepts" / "_index.md", {"body": "Local concepts index."})
     _write_json(root / "wiki" / "research" / "papers" / "_index.md", {"body": "Collection home."})
 
     concept_record = {
@@ -851,14 +983,32 @@ def test_page_update_helpers_write_marked_reflection_sections(tmp_path, monkeypa
         "open_questions": ["What else is in the archive?"],
         "wiki_path": "wiki/research/papers/_index.md",
     }
+    local_concept_record = {
+        "collection_key": "research/papers",
+        "domain": "research",
+        "collection": "papers",
+        "main_takeaways": ["The collection has a stable local vocabulary."],
+        "main_tensions": ["Specificity vs reuse"],
+        "important_concept_names": ["archival habitat"],
+        "important_material_ids": ["mat_001", "mat_002"],
+        "supporting_concepts": ["archive architecture"],
+        "supporting_material_ids": ["mat_001"],
+        "supporting_evidence": ["archival habitat"],
+        "open_questions": ["Which local concepts should bridge?"],
+        "why_this_local_concepts_group_matters": "It captures the raw vocabulary before bridging.",
+        "wiki_path": "wiki/shared/concepts/_index.md",
+    }
 
     assert _apply_concept_reflection_to_page(root, concept_record) is True
     assert _apply_collection_reflection_to_page(root, collection_record) is True
+    assert _apply_local_concept_reflection_to_page(root, local_concept_record) is True
 
     concept_page = (root / "wiki" / "shared" / "bridge-concepts" / "archive-and-space.md").read_text(encoding="utf-8")
     collection_page = (root / "wiki" / "research" / "papers" / "_index.md").read_text(encoding="utf-8")
+    local_concepts_page = (root / "wiki" / "shared" / "concepts" / "_index.md").read_text(encoding="utf-8")
     assert "<!-- phase6:concept-reflection:start -->" in concept_page
     assert "<!-- phase6:collection-reflection:start -->" in collection_page
+    assert "<!-- phase6:local-concepts-reflection:research/papers:start -->" in local_concepts_page
 
 
 def test_lint_cli_supports_json_and_exit_codes(tmp_path, monkeypatch):
@@ -1052,4 +1202,4 @@ def test_graph_reflection_schedule_gate_is_coarse(tmp_path, monkeypatch):
         },
     )
 
-    assert _graph_reflection_due(root, config, clusters, _load_manifest(root), cluster_reviews, concept_refs, collection_refs, deterministic) == (False, "graph reflection deferred by schedule")
+    assert _graph_reflection_due(root, config, clusters, _load_manifest(root), cluster_reviews, [], concept_refs, collection_refs, deterministic) == (False, "graph reflection deferred by schedule")

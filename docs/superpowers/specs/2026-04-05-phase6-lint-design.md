@@ -311,6 +311,11 @@ The default packet should already be rich enough to support good conclusions:
 - representative excerpts from linked materials
 - key chunk summaries / annotations / figure descriptions when relevant
 
+Local concepts also need this treatment:
+- reflect on the grouped local concepts index, not only on bridge/main concepts
+- preserve prior local-concepts reflection text in `wiki/shared/concepts/_index.md`
+- feed local-concepts reflections the grouped local concept rows plus rich evidence
+
 The search tool is for filling gaps, not for making the prompt thin by default.
 
 ## Memory Integration
@@ -329,6 +334,9 @@ Minimum indexed reflection types:
 - concept takeaways
 - concept tensions
 - concept open questions
+- local-concept takeaways
+- local-concept tensions
+- local-concept open questions
 - collection takeaways
 - collection tensions
 - collection open questions
@@ -356,6 +364,11 @@ Concept reflection is stale when any of these changed:
 - canonical name
 - supporting material summaries / concepts
 - compiled concept page content
+
+Local-concepts reflection is stale when any of these changed:
+- local concept rows in the collection
+- grouped local concepts index content
+- prior local-concepts reflection text
 
 Collection reflection is stale when any of these changed:
 - collection membership
@@ -392,6 +405,8 @@ Phase 6 is not an every-file pipeline step.
 Recommended model:
 - `--quick` after compile
 - `--full` on a periodic schedule or when enough change has accumulated
+
+Within one run, provider exhaustion should be remembered across independent batches so a provider that hit a limit is skipped for later passes instead of being retried repeatedly.
 
 This keeps cost reasonable while still allowing richer reflective growth.
 

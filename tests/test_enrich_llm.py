@@ -472,3 +472,31 @@ class TestMakeCliLlmFn:
         fn = make_cli_llm_fn(config)
         result = fn("system", [{"role": "user", "content": "hi"}])
         assert "ok" in result
+
+    def test_exhausted_provider_is_not_retried_on_next_call(self, tmp_path):
+        limited = tmp_path / "limited-agent"
+        count_path = tmp_path / "limited-count.txt"
+        limited.write_text(
+            '#!/bin/bash\n'
+            f'count=0\n'
+            f'if [ -f "{count_path}" ]; then count=$(cat "{count_path}"); fi\n'
+            f'count=$((count + 1))\n'
+            f'printf "%s" "$count" > "{count_path}"\n'
+            'cat - > /dev/null\n'
+            'echo "Error: rate limit exceeded" >&2\n'
+            'exit 1\n'
+        )
+        limited.chmod(0o755)
+
+        working = tmp_path / "working-agent"
+        working.write_text('#!/bin/bash\ncat - > /dev/null\necho "ok"')
+        working.chmod(0o755)
+
+        config = {
+            "llm": {"agent_cmd": [str(limited), str(working)]},
+            "enrichment": {"max_retries": 1},
+        }
+        fn = make_cli_llm_fn(config)
+        assert "ok" in fn("system", [{"role": "user", "content": "hi"}])
+        assert "ok" in fn("system", [{"role": "user", "content": "hi again"}])
+        assert count_path.read_text() == "1"

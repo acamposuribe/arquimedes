@@ -687,6 +687,7 @@ def cluster_concepts(
     config: dict | None = None,
     *,
     llm_fn: LlmFn | None = None,
+    llm_state: dict | None = None,
     force: bool = False,
 ) -> dict:
     """Run concept clustering, write derived artifacts, return summary.
@@ -741,7 +742,7 @@ def cluster_concepts(
 
     # --- Build prompt and call LLM ---
     if llm_fn is None:
-        llm_fn = make_cli_llm_fn(config, "cluster")
+        llm_fn = make_cli_llm_fn(config, "cluster", state=llm_state)
 
     user_msg = _build_prompt(concept_rows, material_titles)
     raw_response = llm_fn(_LOCAL_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
@@ -801,6 +802,7 @@ def cluster_bridge_concepts(
     config: dict | None = None,
     *,
     llm_fn: LlmFn | None = None,
+    llm_state: dict | None = None,
     force: bool = False,
 ) -> dict:
     """Run bridge clustering over bridge candidates, write derived/bridge_concept_clusters.jsonl."""
@@ -929,7 +931,7 @@ def cluster_bridge_concepts(
         }
 
     if llm_fn is None:
-        llm_fn = make_cli_llm_fn(config, "cluster")
+        llm_fn = make_cli_llm_fn(config, "cluster", state=llm_state)
 
     user_msg = _build_bridge_prompt(material_packets)
     raw_response = llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])

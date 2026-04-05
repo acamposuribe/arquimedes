@@ -288,9 +288,11 @@ def cluster_cmd(force: bool):
     from arquimedes.enrich_llm import EnrichmentError
     from arquimedes.config import load_config
 
+    llm_state: dict = {}
+
     try:
-        local_summary = cluster_concepts(load_config(), force=force)
-        bridge_summary = cluster_bridge_concepts(load_config(), force=force)
+        local_summary = cluster_concepts(load_config(), force=force, llm_state=llm_state)
+        bridge_summary = cluster_bridge_concepts(load_config(), force=force, llm_state=llm_state)
     except EnrichmentError as e:
         raise click.ClickException(str(e))
     except FileNotFoundError as e:
@@ -396,6 +398,7 @@ def lint(quick: bool, full: bool, report: bool, fix: bool, as_json: bool):
         if isinstance(reflection, dict):
             click.echo("Reflective passes:")
             click.echo(f"  cluster reviews:      {reflection.get('cluster_reviews', 0)}")
+            click.echo(f"  local concept refs:   {reflection.get('local_concept_reflections', 0)}")
             click.echo(f"  concept reflections:  {reflection.get('concept_reflections', 0)}")
             click.echo(f"  collection reflections: {reflection.get('collection_reflections', 0)}")
             click.echo(f"  graph findings:       {reflection.get('graph_findings', 0)}")

@@ -2166,6 +2166,7 @@ def run_lint(
         raise ValueError("lint cannot be both quick and full")
     if not quick and not full:
         quick = True
+    apply = fix or full
 
     deterministic = run_deterministic_lint(config)
     root = get_project_root()
@@ -2177,7 +2178,7 @@ def run_lint(
         "report_path": str((get_project_root() / REPORT_PATH)),
     }
 
-    if fix:
+    if apply:
         result["fixes"] = _apply_deterministic_fixes(deterministic, config)
 
     full_reflection_ran = False
@@ -2199,7 +2200,7 @@ def run_lint(
                 config,
                 deterministic,
                 llm_factory=llm_factory,
-                apply=fix,
+                apply=apply,
                 scheduled=scheduled,
             )
             full_reflection_ran = True

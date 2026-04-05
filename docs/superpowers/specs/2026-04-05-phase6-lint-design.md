@@ -110,6 +110,8 @@ CLI exit codes:
 - rebuild memory bridge
 - regenerate missing pages through compile if safe
 
+`--full` also auto-applies those same safe fixes after the reflective passes, so full lint is a maintenance action rather than a read-only report.
+
 ## LLM Passes
 
 `arq lint --full` runs deterministic checks first, then these reflective passes.
@@ -237,7 +239,7 @@ Phase 6 should not stop at reports.
 
 It must be able to materialize reflective knowledge into the wiki.
 
-`arq lint --fix` or a later explicit apply step should:
+`arq lint --full` or `arq lint --fix` should:
 - update concept pages with reflection sections
 - update collection pages with reflection sections
 - optionally update related-links sections when recommendations are accepted
@@ -262,12 +264,12 @@ Phase 6 should support a human-in-the-loop review model.
 
 Recommended split:
 - deterministic fixes may apply automatically
-- reflective page updates may apply through `--fix` only when accepted or configured as safe
+- reflective page updates may apply through `--full` or `--fix` when accepted or configured as safe
 - graph findings and suggested future questions/sources may remain filed for later review
 
 The default safety model should be:
 - `--quick`: deterministic only
-- `--full`: generate reflective artifacts, no broad page mutation by default
+- `--full`: generate reflective artifacts and apply safe page updates / maintenance fixes
 - `--fix`: deterministic fixes + explicitly safe or approved reflective page updates
 
 ## Cumulative Reflection Context

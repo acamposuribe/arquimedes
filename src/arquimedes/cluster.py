@@ -21,9 +21,6 @@ from arquimedes.enrich_llm import (
     LlmFn,
     make_cli_llm_fn,
     parse_json_or_repair,
-    set_codex_params,
-    set_effort,
-    set_model,
 )
 
 logger = logging.getLogger(__name__)
@@ -746,9 +743,6 @@ def cluster_concepts(
     if llm_fn is None:
         llm_fn = make_cli_llm_fn(config, "cluster")
 
-    set_effort(llm_fn, config, "cluster")
-    set_model(llm_fn, config, "cluster")
-    set_codex_params(llm_fn, config, "cluster")
     user_msg = _build_prompt(concept_rows, material_titles)
     raw_response = llm_fn(_LOCAL_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
 
@@ -937,9 +931,6 @@ def cluster_bridge_concepts(
     if llm_fn is None:
         llm_fn = make_cli_llm_fn(config, "cluster")
 
-    set_effort(llm_fn, config, "cluster")
-    set_model(llm_fn, config, "cluster")
-    set_codex_params(llm_fn, config, "cluster")
     user_msg = _build_bridge_prompt(material_packets)
     raw_response = llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
 

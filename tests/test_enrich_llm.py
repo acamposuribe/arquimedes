@@ -18,7 +18,6 @@ from arquimedes.enrich_llm import (
     get_model_id,
     make_cli_llm_fn,
     parse_json_or_repair,
-    set_codex_params,
 )
 
 
@@ -174,7 +173,7 @@ class TestBuildAgentCmd:
         assert cmd.count("--ephemeral") == 1
 
     def test_codex_model_and_effort(self):
-        cmd = _build_agent_cmd(["codex", "exec"], "sys", codex_model="gpt-5.4-mini", codex_effort="high")
+        cmd = _build_agent_cmd(["codex", "exec"], "sys", model_override="gpt-5.4-mini", effort="high")
         assert "-m" in cmd
         assert cmd[cmd.index("-m") + 1] == "gpt-5.4-mini"
         assert "-c" in cmd

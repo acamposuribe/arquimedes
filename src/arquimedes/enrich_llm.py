@@ -35,46 +35,6 @@ from typing import Callable
 LlmFn = Callable[[str, list[dict]], str]
 """(system_prompt, messages) -> response_text"""
 
-
-def set_effort(llm_fn: LlmFn, config: dict, stage: str) -> None:
-    """Set legacy per-stage thinking effort attrs on llm_fn.
-
-    This is used by the legacy single-agent path and by custom injected llm_fn
-    implementations that honor these attributes. Stage-route mode reads model
-    and effort directly from the configured route entries instead.
-    """
-    effort = config.get("enrichment", {}).get("effort", {})
-    if isinstance(effort, dict):
-        level = effort.get(stage)
-    else:
-        level = None
-    if hasattr(llm_fn, "effort"):
-        llm_fn.effort = level  # type: ignore[attr-defined]
-
-
-def set_model(llm_fn: LlmFn, config: dict, stage: str) -> None:
-    """Set legacy per-stage model attrs on llm_fn."""
-    model_cfg = config.get("enrichment", {}).get("model", {})
-    if isinstance(model_cfg, dict):
-        model = model_cfg.get(stage)
-    else:
-        model = None
-    if hasattr(llm_fn, "model_override"):
-        llm_fn.model_override = model  # type: ignore[attr-defined]
-
-
-def set_codex_params(llm_fn: LlmFn, config: dict, stage: str) -> None:
-    """Set legacy codex-specific attrs on llm_fn."""
-    enrichment = config.get("enrichment", {})
-    codex_model = enrichment.get("codex_model")
-    codex_effort_cfg = enrichment.get("codex_effort", {})
-    codex_effort = codex_effort_cfg.get(stage) if isinstance(codex_effort_cfg, dict) else None
-    if hasattr(llm_fn, "codex_model"):
-        llm_fn.codex_model = codex_model  # type: ignore[attr-defined]
-    if hasattr(llm_fn, "codex_effort"):
-        llm_fn.codex_effort = codex_effort  # type: ignore[attr-defined]
-
-
 # ---------------------------------------------------------------------------
 # Custom exception
 # ---------------------------------------------------------------------------
@@ -152,8 +112,8 @@ def get_model_id(config: dict, stage: str | None = None) -> str:
     """Derive a stable model identifier from the config.
 
     If stage-specific routes are configured, return a stable signature for the
-    ordered route list for that stage. Otherwise fall back to the legacy
-    ``llm.agent_cmd`` configuration (e.g. ``"claude --print|codex exec"``).
+    ordered route list for that stage. Otherwise fall back to the configured
+    ``llm.agent_cmd`` command list (e.g. ``"claude --print|codex exec"``).
 
     The value is stored in stamps for audit/debugging.
     """
@@ -427,7 +387,7 @@ def _build_prompt_text(system: str, messages: list[dict]) -> tuple[str, str]:
     return system, "\n".join(parts)
 
 
-def _build_agent_cmd(base_parts: list[str], system: str, *, effort: str | None = None, model_override: str | None = None, codex_model: str | None = None, codex_effort: str | None = None) -> list[str]:
+def _build_agent_cmd(base_parts: list[str], system: str, *, effort: str | None = None, model_override: str | None = None) -> list[str]:
     """Build the full command for an agent CLI, adding speed optimizations.
 
     For ``claude``: adds flags to minimize startup overhead without
@@ -470,10 +430,10 @@ def _build_agent_cmd(base_parts: list[str], system: str, *, effort: str | None =
         cmd = list(base_parts)
         if "--ephemeral" not in cmd:
             cmd.append("--ephemeral")
-        if codex_model and "-m" not in cmd:
-            cmd.extend(["-m", codex_model])
-        if codex_effort:
-            cmd.extend(["-c", f"model_reasoning_effort={codex_effort}"])
+        if model_override and "-m" not in cmd:
+            cmd.extend(["-m", model_override])
+        if effort:
+            cmd.extend(["-c", f"model_reasoning_effort={effort}"])
         return cmd
     return list(base_parts)
 
@@ -537,7 +497,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
     If stage-specific routes are configured under ``enrichment.llm_routes``
     (or ``enrichment.routes``), they are used in order for that stage. Each
     route can specify provider, command, model, and effort. Otherwise the
-    legacy ``llm.agent_cmd`` setting is used (single string or list of strings,
+    plain ``llm.agent_cmd`` fallback is used (single string or list of strings,
     tried in order — first success wins). The agent authenticates with its own
     credentials — no API keys needed in this codebase.
 
@@ -594,10 +554,6 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
 
     def llm_fn(system: str, messages: list[dict]) -> str:
         system_prompt, user_prompt = _build_prompt_text(system, messages)
-        effort = getattr(llm_fn, "effort", None)
-        model_override = getattr(llm_fn, "model_override", None)
-        codex_model = getattr(llm_fn, "codex_model", None)
-        codex_effort = getattr(llm_fn, "codex_effort", None)
 
         for attempt_cfg in resolved:
             base_parts = attempt_cfg["command_parts"]
@@ -613,8 +569,6 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
                         system_prompt,
                         effort=effort_value,
                         model_override=model,
-                        codex_model=model,
-                        codex_effort=effort_value,
                     )
                     stdin_text = f"[SYSTEM]\n{system_prompt}\n\n{user_prompt}"
                     fast_fail = attempt_cfg.get("fast_fail")
@@ -630,15 +584,11 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
                         effort=effort_value,
                     )
             else:
-                effective_model = model_override if provider != "codex" else codex_model
-                effective_effort = effort if provider != "codex" else codex_effort
                 cmd, stdin_text, fast_fail = _build_stage_request(
                     base_parts,
                     provider,
                     system_prompt,
                     user_prompt,
-                    model=effective_model,
-                    effort=effective_effort,
                 )
 
             last_exc: Exception | None = None
@@ -675,10 +625,6 @@ def make_cli_llm_fn(config: dict, stage: str | None = None) -> LlmFn:
         raise last_exc  # type: ignore[arg-type]
 
     llm_fn.last_model = get_model_id(config, stage) if stage else get_model_id(config)  # type: ignore[attr-defined]
-    llm_fn.effort = None  # type: ignore[attr-defined]
-    llm_fn.model_override = None  # type: ignore[attr-defined]
-    llm_fn.codex_model = None  # type: ignore[attr-defined]
-    llm_fn.codex_effort = None  # type: ignore[attr-defined]
-    llm_fn.route_mode = "stage-routes" if use_stage_routes else "legacy"  # type: ignore[attr-defined]
+    llm_fn.route_mode = "stage-routes" if use_stage_routes else "fallback"  # type: ignore[attr-defined]
     llm_fn.route_stage = stage  # type: ignore[attr-defined]
     return llm_fn  # type: ignore[return-value]

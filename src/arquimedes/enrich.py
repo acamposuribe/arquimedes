@@ -325,11 +325,7 @@ def _run_combined_enrichment(
         if not target_chunks:
             return None, None
 
-    # Build combined prompt and make one LLM call (use document effort — it's the harder task)
-    from arquimedes.enrich_llm import set_effort, set_model, set_codex_params
-    set_effort(llm_fn, config, "document")
-    set_model(llm_fn, config, "document")
-    set_codex_params(llm_fn, config, "document")
+    # Build combined prompt and make one LLM call using the document-stage adapter.
     system, messages = enrich_prompts.build_combined_prompt(
         meta, toc, chunks, target_chunks, annotations
     )

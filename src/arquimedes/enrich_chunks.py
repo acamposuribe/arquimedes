@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 
 from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
-from arquimedes.enrich_llm import get_model_id, set_effort, set_model, set_codex_params
+from arquimedes.enrich_llm import get_model_id
 from arquimedes.enrich_prompts import estimate_tokens
 from arquimedes.models import EnrichedField, Provenance
 
@@ -233,9 +233,6 @@ def enrich_chunks_stage(
 
         for batch_idx, batch in enumerate(batches):
             try:
-                set_effort(llm_fn, config, "chunk")
-                set_model(llm_fn, config, "chunk")
-                set_codex_params(llm_fn, config, "chunk")
                 system, messages = enrich_prompts.build_chunk_batch_prompt(
                     batch, doc_context_str, annotations
                 )

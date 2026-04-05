@@ -171,9 +171,6 @@ def enrich_document_stage(
         if _pre_parsed_response is not None:
             parsed = _pre_parsed_response
         else:
-            enrich_llm.set_effort(llm_fn, config, "document")
-            enrich_llm.set_model(llm_fn, config, "document")
-            enrich_llm.set_codex_params(llm_fn, config, "document")
             system, messages = enrich_prompts.build_document_prompt(meta, toc, chunks, annotations)
             raw_text = llm_fn(system, messages)
             parsed = enrich_llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_SCHEMA_DESC)

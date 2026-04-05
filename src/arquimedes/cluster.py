@@ -314,8 +314,7 @@ def _build_prompt(
         excerpt = " | ".join(excerpt_parts)
         line = (
             f'- concept_name="{concept_name}" | concept_key="{concept_key}" '
-            f'| material="{title}" [{material_id}] | relevance={relevance} '
-            f'| confidence={confidence} | evidence="{excerpt}"'
+            f'| material="{title}" [{material_id}] | evidence="{excerpt}"'
         )
         lines.append(line)
 
@@ -388,13 +387,13 @@ def _build_bridge_prompt(
             lines.append("  local_concepts:")
             for concept in local_concepts[:8]:
                 lines.append(
-                    f'    - concept_name="{concept.get("concept_name", "")}" | relevance={concept.get("relevance", "")}'
+                    f'    - concept_name="{concept.get("concept_name", "")}"'
                 )
         if bridge_candidates:
             lines.append("  bridge_candidates:")
             for concept in bridge_candidates[:8]:
                 lines.append(
-                    f'    - concept_name="{concept.get("concept_name", "")}" | relevance={concept.get("relevance", "")}'
+                    f'    - concept_name="{concept.get("concept_name", "")}"'
                 )
         if evidence_snippets:
             lines.append("  evidence_snippets:")

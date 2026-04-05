@@ -29,7 +29,8 @@ def test_cluster_prompt_includes_semantic_merge_guidance():
     assert "Merge only when the concepts are semantically equivalent" in prompt
     assert "Do not group multiple distinct concepts from the same material into one umbrella cluster." in prompt
     assert 'concept_name="archival habitat"' in prompt
-    assert "confidence=0.9" in prompt
+    assert "confidence=0.9" not in prompt
+    assert "relevance=high" not in prompt
     assert "Archives are spatial infrastructures." in prompt
     assert "Habitation gives archives social form." in prompt
     assert "Do not emit singleton clusters" in _LOCAL_SYSTEM_PROMPT
@@ -61,6 +62,7 @@ def test_bridge_prompt_includes_material_packets():
     assert 'material="Archival Landscapes" [m2]' in prompt
     assert "bridge candidate" in prompt or "bridge_candidates" in prompt
     assert "Bridge clusters must connect at least two materials." in prompt
+    assert "relevance=high" not in prompt
 
 
 def test_local_cluster_prompt_requests_file_write():

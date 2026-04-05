@@ -594,8 +594,10 @@ def _render_index_pages(
         tree.setdefault(domain, {}).setdefault(collection, []).append(meta)
 
     all_material_entries = []
+    domain_pages: list[dict] = []
     for domain, collections in tree.items():
-        domain_entries = []
+        domain_entries: list[dict] = []
+        domain_index = f"wiki/{domain}/_index.md"
         for collection, metas in collections.items():
             coll_index = f"wiki/{domain}/{collection}/_index.md"
             coll_mids = {m["material_id"] for m in metas}
@@ -605,15 +607,21 @@ def _render_index_pages(
             for meta in metas:
                 mid = meta["material_id"]
                 mat_path = compile_pages._material_wiki_path(meta)
-                rel = compile_pages._relative_link(coll_index, mat_path)
-                entry = {
+                coll_rel = compile_pages._relative_link(coll_index, mat_path)
+                domain_rel = compile_pages._relative_link(domain_index, mat_path)
+                root_rel = compile_pages._relative_link("wiki/_index.md", mat_path)
+                coll_entry = {
                     "name": meta.get("title") or mid,
-                    "path": rel,
+                    "path": coll_rel,
                     "summary": compile_pages._meta_val(meta.get("summary") or "")[:120],
                 }
-                coll_entries.append(entry)
-                domain_entries.append(entry)
-                all_material_entries.append(entry)
+                domain_entry = dict(coll_entry)
+                domain_entry["path"] = domain_rel
+                root_entry = dict(coll_entry)
+                root_entry["path"] = root_rel
+                coll_entries.append(coll_entry)
+                domain_entries.append(domain_entry)
+                all_material_entries.append(root_entry)
 
             # Key concepts: canonical bridge clusters with >=1 material in this collection
             concept_counts: dict[str, int] = {}
@@ -696,6 +704,11 @@ def _render_index_pages(
         domain_content = compile_pages.render_index_page(domain.title(), domain_entries)
         _write_page(wiki_root / domain / "_index.md", domain_content)
         written += 1
+        domain_pages.append({
+            "name": domain.title(),
+            "path": f"{domain}/_index.md",
+            "summary": f"{sum(len(cols) for cols in collections.values())} materials",
+        })
 
     # Local concept index
     concept_entries = local_concept_entries or []
@@ -716,9 +729,10 @@ def _render_index_pages(
     # Master index
     master_content = compile_pages.render_index_page(
         "Arquimedes Wiki",
-        [{"name": "Materials", "path": "practice/_index.md", "summary": f"{len(all_metas)} materials"},
-         {"name": "Local Concepts", "path": "shared/concepts/_index.md", "summary": f"{len(concept_entries)} local concepts"},
-        {"name": "Main Concepts", "path": "shared/glossary/_index.md", "summary": f"{len(bridge_clusters)} main concepts"}],
+        domain_pages + [
+            {"name": "Local Concepts", "path": "shared/concepts/_index.md", "summary": f"{len(concept_entries)} local concepts"},
+            {"name": "Main Concepts", "path": "shared/glossary/_index.md", "summary": f"{len(bridge_clusters)} main concepts"},
+        ],
     )
     _write_page(wiki_root / "_index.md", master_content)
     written += 1

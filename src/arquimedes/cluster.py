@@ -397,7 +397,7 @@ Output schema (JSON array):
         "Do not create single-material bridge clusters.\n"
         f"Write the updated bridge clusters to {output_path} using the Write tool.\n"
         "Do not stream JSON into the response.\n"
-        "Confirm with a single line when done.\n\n"
+        "When finished, emit exactly PROCESS_FINISHED on a single line and stop.\n\n"
         + schema_desc
     )
 

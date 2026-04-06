@@ -43,6 +43,7 @@ def test_bridge_cluster_prompt_requests_file_write():
         Path("/tmp/bridge_clusters.json"),
     )
     assert "Write the updated bridge clusters" in prompt
+    assert "PROCESS_FINISHED" in prompt
 
 
 def test_bridge_packet_file_is_staged(tmp_path):

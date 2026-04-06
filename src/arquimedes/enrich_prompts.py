@@ -14,6 +14,7 @@ All prompts instruct the LLM to return ONLY valid JSON, no markdown fences.
 from __future__ import annotations
 
 import base64
+import json
 import mimetypes
 from pathlib import Path
 
@@ -142,123 +143,6 @@ def build_document_context(
     return "\n".join(lines)
 
 
-# ---------------------------------------------------------------------------
-# Document prompt
-# ---------------------------------------------------------------------------
-
-_DOCUMENT_SYSTEM_PROMPT = """\
-You are an expert architecture librarian. Analyze the provided architecture document and return \
-structured JSON with enriched metadata. Return ONLY valid JSON, no markdown fences, no prose.\
-"""
-
-_DOCUMENT_SCHEMA = """\
-{
-  "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "document_type": {"value": "one of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "methodological_conclusions": {"value": ["short method takeaway 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "main_content_learnings": {"value": ["short content learning 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "bibliography": {
-    "journal_name": "...",
-    "volume": "...",
-    "issue": "...",
-    "start_page": "...",
-    "end_page": "...",
-    "doi": "...",
-    "book_title": "...",
-    "editors": ["..."],
-    "publisher": "...",
-    "place": "...",
-    "edition": "...",
-    "source_pages": [...],
-    "confidence": 0.0-1.0
-  },
-  "facets": {
-    "building_type": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "scale": {"value": "one of: detail|building|urban|territorial", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "location": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "jurisdiction": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "climate": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "program": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "material_system": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "structural_system": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "historical_period": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "course_topic": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "studio_project": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
-  },
-    "concepts_local": [
-        {"concept_name": "specific, reusable concept phrase", "descriptor": "one short sentence describing the concept", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
-    ],
-    "concepts_bridge_candidates": [
-        {"concept_name": "broader reusable umbrella phrase", "descriptor": "one short sentence describing the concept", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
-    ]
-}\
-"""
-
-_DOCUMENT_USER_TEMPLATE = """\
-## Document Metadata
-
-{doc_context}
-
-## Document Text
-
-Sections marked with [HIGHLIGHTED]...[/HIGHLIGHTED] were annotated by the reader and should \
-be weighted as priority context for summaries, keywords, and facets. \
-[NOTE: ...] markers contain the reader's own comments on the highlighted passage.
-
-{chunks_text}
-
-## Instructions
-
-Analyze this architecture document and return a single JSON object matching the schema below. \
-Only include facets where you are confident (omit fields you cannot determine). \
-For "summary": write a dense but readable synthesis of the document's distinctive contribution. \
-Do not merely restate the topic. Name the central argument, method, archive/project/case focus when \
-important, and what the document helps the reader understand that is not obvious from the title alone. \
-Prefer intellectual specificity and nuance over a bland generic abstract. \
-For "keywords": return 6-12 strong terms or short phrases that maximize retrieval value. Prefer a mix of \
-named actors, places, archives, projects, methods, institutional conditions, and core concepts when they \
-are central. Avoid generic filler and avoid repeating the broadest document theme in multiple synonymous \
-forms. \
-For "methodological_conclusions": return 2-4 short, reusable statements about how the document says \
-methods should be used, why they matter, and what methodological stance or procedure it contributes. \
-Keep them concrete and archival/architectural rather than generic. \
-For "main_content_learnings": return 2-4 short, reusable statements about what the document contributes \
-to architectural knowledge. Focus on the main claims, conceptual contributions, or historically useful \
-learnings that another reader could reuse across materials. \
-For "facets": infer only concrete, useful indexing values grounded in the document. Prefer specific values \
-over vague ones, and do not force every facet field. Use facets to capture real scope and context rather \
-than abstract interpretation. \
-For "bibliography": extract journal name, volume, issue, page range, DOI, publisher, place, \
-book title, and editors as they appear on the title page, header, footer, or references — \
-omit any sub-field you cannot find. \
-For "concepts_local": extract 8-15 strong material-level concept candidates that this material \
-genuinely contributes to. A good local concept is a reusable intellectual unit with strong textual \
-evidence. Prefer concept phrases that are specific enough to carry real analytical content but still \
-could recur across materials. Include named mechanisms, typologies, institutional logics, methods, \
-conditions, and frameworks when the document supports them strongly. Concepts may be theoretically \
-dense and multi-word; do not reduce them to thin generic labels or ultra-narrow fragments. Prefer \
-architecture-, spatial-, material-, institutional-, and visual-culture-relevant concepts when present. \
-Avoid near-duplicate concepts and incidental topics mentioned only in passing. Avoid generic labels \
-like "history", "power", "space", or "memory" unless they are sharply qualified into a real \
-concept phrase. For each concept, also provide a short one-sentence descriptor that explains what \
-the concept means in this document.
-
-If a historical qualifier helps distinguish the concept, use only the minimum needed. Do not force \
-names, dates, or locations into every local concept; keep the label reusable unless the detail adds \
-clear meaning.
-
-For "concepts_bridge_candidates": extract 4-8 broader umbrella candidates that could connect this \
-material to related materials. Favor larger frameworks, problematics, fields of inquiry, spatial or \
-institutional conditions, and reusable analytic umbrellas grounded in this document. These may be \
-broad but still meaningful. Avoid vague one-word abstractions, chapter themes, or trivial paraphrases \
-of the title. For each candidate, also provide a short one-sentence descriptor that explains the \
-umbrella idea.
-Return ONLY valid JSON, no markdown fences, no explanations.
-
-{schema}\
-"""
-
 
 def estimate_tokens(text: str) -> int:
     """Rough token estimate: ~4 characters per token."""
@@ -279,275 +163,156 @@ def _build_chunks_text(chunks: list[dict], annotations: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def _curate_context_for_large_doc(
-    chunks: list[dict],
-    annotations: list[dict],
-    toc: list | None,
-    max_tokens: int,
-) -> str:
-    """Build curated context for documents too large to send in full.
-
-    Strategy from spec: TOC/headings + first chunks + last chunks +
-    chunks overlapping annotations + top emphasized chunks.
-    """
-    # Reserve space for TOC and framing
-    toc_text = format_toc(toc)
-    overhead_tokens = estimate_tokens(toc_text) + 500
-    budget = max_tokens - overhead_tokens
-
-    # Collect annotated page numbers
-    annotated_pages: set[int] = set()
-    for ann in annotations:
-        p = ann.get("page")
-        if isinstance(p, int):
-            annotated_pages.add(p)
-
-    # Score chunks: position priority + annotation overlap + emphasis
-    n = len(chunks) if chunks else 1
-    scored: list[tuple[float, int, dict]] = []
-    for idx, chunk in enumerate(chunks):
-        score = 0.0
-        # First 10% and last 10% of chunks get priority
-        if idx < n * 0.1 or idx >= n * 0.9:
-            score += 2.0
-        pages = set(chunk.get("source_pages", []))
-        if pages & annotated_pages:
-            score += 3.0
-        if chunk.get("emphasized"):
-            score += 1.0
-        scored.append((score, idx, chunk))
-
-    # Sort by score desc, then by original position
-    scored.sort(key=lambda t: (-t[0], t[1]))
-
-    # Greedily select chunks within budget
-    selected_indices: list[int] = []
-    used_tokens = 0
-    for _score, idx, chunk in scored:
-        text = chunk.get("text", "")
-        tok = estimate_tokens(text)
-        if used_tokens + tok > budget:
-            continue
-        selected_indices.append(idx)
-        used_tokens += tok
-
-    # Render in original order
-    selected_indices.sort()
-    parts = [f"[Curated context: {len(selected_indices)} of {len(chunks)} chunks selected]\n"]
-    for idx in selected_indices:
-        chunk = chunks[idx]
-        chunk_id = chunk.get("chunk_id", "")
-        source_pages = chunk.get("source_pages", [])
-        text = chunk.get("text", "")
-        for page_num in source_pages:
-            text = inject_annotations(text, annotations, page_num)
-        pages_str = ", ".join(str(p) for p in source_pages)
-        parts.append(f"--- Chunk {chunk_id} (pages {pages_str}) ---\n{text}\n")
-    return "\n".join(parts)
-
-
-# Default context token limit for document prompts (characters / 4)
-_DEFAULT_MAX_CONTEXT_TOKENS = 80_000
-
-
-def build_document_prompt(
-    meta: dict,
-    toc: list | None,
-    chunks: list[dict],
-    annotations: list[dict],
-    *,
-    max_context_tokens: int = _DEFAULT_MAX_CONTEXT_TOKENS,
-) -> tuple[str, list[dict]]:
-    """Build (system_prompt, messages) for document-level LLM enrichment.
-
-    For small/moderate materials, sends all chunk text. For large materials
-    where full chunk text exceeds max_context_tokens, uses curated context
-    (first/last chunks, annotated chunks, emphasized chunks).
-    """
-    doc_context = build_document_context(meta, toc, None)
-    full_chunks_text = _build_chunks_text(chunks, annotations)
-
-    # Check if full text fits within token budget
-    total_tokens = estimate_tokens(doc_context + full_chunks_text + _DOCUMENT_SCHEMA)
-    if total_tokens <= max_context_tokens:
-        chunks_text = full_chunks_text
-    else:
-        chunks_text = _curate_context_for_large_doc(
-            chunks, annotations, toc, max_context_tokens
-        )
-
-    user_content = _DOCUMENT_USER_TEMPLATE.format(
-        doc_context=doc_context,
-        chunks_text=chunks_text,
-        schema=_DOCUMENT_SCHEMA,
-    )
-
-    messages = [{"role": "user", "content": user_content}]
-    return _DOCUMENT_SYSTEM_PROMPT, messages
 
 
 # ---------------------------------------------------------------------------
-# Combined prompt (document + chunks in a single call)
+# File-based document enrichment (work-file approach)
 # ---------------------------------------------------------------------------
 
-_COMBINED_SCHEMA = """\
-{
-  "document": {
-    "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "document_type": {"value": "one of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "methodological_conclusions": {"value": ["short method takeaway 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "main_content_learnings": {"value": ["short content learning 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-    "bibliography": {
-      "journal_name": "...",
-      "volume": "...",
-      "issue": "...",
-      "start_page": "...",
-      "end_page": "...",
-      "doi": "...",
-      "book_title": "...",
-      "editors": ["..."],
-      "publisher": "...",
-      "place": "...",
-      "edition": "...",
-      "source_pages": [...],
-      "confidence": 0.0-1.0
-    },
+_DOCUMENT_WORK_SCAFFOLD = {
+    "summary": None,
+    "document_type": None,
+    "keywords": None,
+    "methodological_conclusions": None,
+    "main_content_learnings": None,
+    "bibliography": None,
     "facets": {
-      "building_type": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "scale": {"value": "one of: detail|building|urban|territorial", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "location": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "jurisdiction": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "climate": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "program": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "material_system": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "structural_system": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "historical_period": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "course_topic": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "studio_project": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
+        "building_type": None,
+        "scale": None,
+        "location": None,
+        "jurisdiction": None,
+        "climate": None,
+        "program": None,
+        "material_system": None,
+        "structural_system": None,
+        "historical_period": None,
+        "course_topic": None,
+        "studio_project": None,
     },
-    "concepts": [
-      {"concept_name": "specific, reusable concept phrase", "descriptor": "one short sentence describing the concept", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
-    ]
-  },
-  "chunks": [
-    {
-      "chunk_id": "...",
-      "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "keywords": {"value": ["..."], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "content_class": "one of: argument|methodology|case_study|bibliography|front_matter|caption|appendix"
-    }
-  ]
-}\
+    "concepts_local": [],        # [{concept_name, descriptor, relevance, source_pages, evidence_spans}]
+    "concepts_bridge_candidates": [],  # [{concept_name, descriptor, relevance, source_pages, evidence_spans}]
+    "toc": None,  # fill if empty: [{"title": "...", "level": 0, "page": 1}, ...]
+}
+
+_DOCUMENT_FILE_SYSTEM_PROMPT = """\
+You are an expert architecture librarian enriching structured metadata for a document in a research knowledge base.
+
+Your job is to read the source files, fill the null fields in the work file with enriched values, and edit the work file in place.
+
+Field instructions:
+
+"summary": A dense but readable synthesis of the document's distinctive contribution. Do not merely restate the topic. Name the central argument, method, archive/project/case focus when important, and what the document helps the reader understand that is not obvious from the title alone. Prefer intellectual specificity and nuance over a bland generic abstract. String value.
+
+"document_type": One of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document. String value.
+
+"keywords": 6-12 strong terms or short phrases that maximize retrieval value. Prefer a mix of named actors, places, archives, projects, methods, institutional conditions, and core concepts when they are central. Avoid generic filler and avoid repeating the broadest document theme in multiple synonymous forms. Array of strings.
+
+"methodological_conclusions": 2-4 short, reusable statements about how the document says methods should be used, why they matter, and what methodological stance or procedure it contributes. Keep them concrete and archival/architectural rather than generic. Array of strings.
+
+"main_content_learnings": 2-4 short, reusable statements about what the document contributes to architectural knowledge. Focus on the main claims, conceptual contributions, or historically useful learnings that another reader could reuse across materials. Array of strings.
+
+"bibliography": Extract journal name, volume, issue, page range, DOI, publisher, place, book title, and editors as they appear on the title page, header, footer, or references. Omit any sub-field you cannot find. Use keys: journal_name, volume, issue, start_page, end_page, doi, book_title, editors, publisher, place, edition. Object or null if nothing found.
+
+"facets": Infer only concrete, useful indexing values grounded in the document. Prefer specific values over vague ones. Do not force every facet field — set fields you cannot determine to null.
+- building_type: string or null
+- scale: one of detail|building|urban|territorial or null
+- location: string or null
+- jurisdiction: string or null
+- climate: string or null
+- program: string or null
+- material_system: string or null
+- structural_system: string or null
+- historical_period: string or null
+- course_topic: string or null
+- studio_project: string or null
+
+"concepts_local": 8-15 strong material-level concept candidates. Each must be a reusable intellectual unit with strong textual evidence. Prefer concept phrases specific enough to carry real analytical content but still reusable across materials. Include named mechanisms, typologies, institutional logics, methods, conditions, and frameworks. Concepts may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like "history", "power", "space", or "memory" unless sharply qualified. If a historical qualifier helps distinguish the concept, use only the minimum needed.
+Naming rules: use all lowercase. Prefer compound noun phrases that carry analytical charge — patterns like "archivability as selective gatekeeping", "co-ownership of dead time", "archive as sepulchre", "chronophagy" are ideal. Avoid bare single nouns ("power", "memory", "space"). Proper nouns (people, places, institutions) may be capitalized only when central to the concept name.
+Array of objects: [{concept_name, descriptor, relevance, source_pages, evidence_spans}] where relevance is high|medium|low, descriptor is one short sentence explaining the concept in this document, source_pages is an array of page numbers where the concept appears, and evidence_spans is an array of short quoted phrases (1-6 words) from the text that ground the concept.
+
+"concepts_bridge_candidates": 4-8 broader umbrella candidates that could connect this material to related materials. Favor larger frameworks, problematics, fields of inquiry, spatial or institutional conditions, and reusable analytic umbrellas. Avoid vague one-word abstractions, chapter themes, or trivial paraphrases of the title. Same naming rules as concepts_local: all lowercase compound phrases. Array of objects: [{concept_name, descriptor, relevance, source_pages, evidence_spans}] — same provenance fields as concepts_local.
+
+"toc": If the "toc" field in the work file is null, extract a table of contents from the document text. Each entry: {"title": "section heading", "level": 0|1|2, "page": N}. Level 0 for top-level sections, 1 for subsections, 2 for sub-subsections. If the document has no discernible section structure, set to []. Array of objects or [].
+
+Sections marked with [HIGHLIGHTED]...[/HIGHLIGHTED] in the document text were annotated by the reader — weight them as priority context. [NOTE: ...] markers contain the reader's own comments.
+
+When finished editing the work file, emit PROCESS_FINISHED on a single line and stop.\
 """
 
-_COMBINED_USER_TEMPLATE = """\
-## Document Metadata
+_DOCUMENT_FILE_USER_TEMPLATE = """\
+Read these files:
+- Work file (edit this): {work_meta_path}
+- Document text (full text, read-only): {work_chunks_path}
 
-{doc_context}
-
-## Document Context Text
-
-Sections marked with [HIGHLIGHTED]...[/HIGHLIGHTED] were annotated by the reader and should \
-be weighted as priority context. [NOTE: ...] markers contain the reader's own comments.
-
-{doc_chunks_text}
-
-## Chunk Targets
-
-Return chunk-level outputs only for the chunk_ids listed in this section.
-
-{target_chunks_text}
-
-## Instructions
-
-Analyze this architecture document and return a single JSON object with two top-level keys: \
-"document" and "chunks".
-
-For "document": provide summary, document_type, keywords, facets (only where confident — omit \
-fields you cannot determine), concepts, and bibliography (journal/book publication details \
-extracted from title page, header, or references — omit sub-fields you cannot find).
-For "document.summary": capture the document's distinctive argument or contribution with some nuance, \
-not just a generic topic sentence. \
-For "document.keywords": maximize retrieval value with a mix of entities, methods, institutions, and \
-core concepts. \
-For "document.methodological_conclusions": return 2-4 short, reusable statements about how the \
-document says methods should be used, why they matter, and what methodological stance or procedure \
-it contributes. Keep them concrete and archival/architectural rather than generic. \
-For "document.main_content_learnings": return 2-4 short, reusable statements about what the document \
-contributes to architectural knowledge. Focus on the main claims, conceptual contributions, or \
-historically useful learnings that another reader could reuse across materials. \
-For "document.facets": provide concrete, grounded indexing values rather than vague themes. \
-For "document.concepts_local": extract 8-15 strong material-level concept candidates that this \
-material genuinely contributes to. A good local concept is a reusable intellectual unit with strong \
-textual evidence. Prefer concept phrases that are specific enough to carry real analytical content \
-but still could recur across materials. Include named mechanisms, typologies, institutional logics, \
-methods, conditions, and frameworks when the document supports them strongly. Concepts may be \
-theoretically dense and multi-word; do not reduce them to thin generic labels or ultra-narrow \
-fragments. Prefer architecture-, spatial-, material-, institutional-, and visual-culture-relevant \
-concepts when present. Avoid near-duplicate concepts and incidental topics mentioned only in \
-passing. Avoid generic labels like "history", "power", "space", or "memory" unless they are \
-sharply qualified into a real concept phrase. For each concept, also provide a short one-sentence \
-descriptor that explains what the concept means in this document.
-
-If a historical qualifier helps distinguish the concept, use only the minimum needed. Do not force \
-names, dates, or locations into every local concept; keep the label reusable unless the detail adds \
-clear meaning.
-
-For "document.concepts_bridge_candidates": extract 4-8 broader umbrella candidates that could connect \
-this material to related materials. Favor larger frameworks, problematics, fields of inquiry, \
-spatial or institutional conditions, and reusable analytic umbrellas grounded in this document. These \
-may be broad but still meaningful. Avoid vague one-word abstractions, chapter themes, or trivial \
-paraphrases of the title. For each candidate, also provide a short one-sentence descriptor that \
-explains the umbrella idea.
-
-For "chunks": provide a list entry only for each chunk_id listed in "Chunk Targets", with a \
-one-line summary and keywords specific to that chunk's content.
-
-Return ONLY valid JSON, no markdown fences, no explanations.
-
-{schema}\
+The work file already contains the document's raw metadata and a scaffold of null fields.
+Fill every null field with enriched values following the field instructions in your system prompt.
+Keep all existing raw fields (title, authors, year, etc.) unchanged.
+Edit {work_meta_path} in place.
+When finished, emit PROCESS_FINISHED on a single line and stop.\
 """
 
 
-def build_combined_prompt(
+def build_document_work_files(
+    output_dir: Path,
     meta: dict,
-    toc: list | None,
-    doc_chunks: list[dict],
-    target_chunks: list[dict],
+    chunks: list[dict],
     annotations: list[dict],
-    *,
-    max_context_tokens: int = _DEFAULT_MAX_CONTEXT_TOKENS,
-) -> tuple[str, list[dict]]:
-    """Build (system_prompt, messages) for combined document + chunk enrichment.
+) -> tuple[Path, Path]:
+    """Create work files for file-based document enrichment.
 
-    The LLM returns both document-level metadata and per-chunk summaries/keywords
-    in a single response.
+    Writes:
+    - meta.work.json: meta.json + enrichment scaffold (null fields for LLM to fill).
+      Includes "toc": null only when toc.json is empty — LLM will extract it.
+    - chunks.work.txt: plain text with annotation markers injected (read-only for LLM)
 
-    `doc_chunks` provide document-level context and may be curated for large
-    documents. `target_chunks` are the specific stale chunks that should receive
-    chunk-level outputs.
+    Returns (work_meta_path, work_chunks_path).
     """
-    doc_context = build_document_context(meta, toc, None)
-    full_doc_chunks_text = _build_chunks_text(doc_chunks, annotations)
-    total_tokens = estimate_tokens(doc_context + full_doc_chunks_text + _COMBINED_SCHEMA)
-    if total_tokens <= max_context_tokens:
-        doc_chunks_text = full_doc_chunks_text
-    else:
-        doc_chunks_text = _curate_context_for_large_doc(
-            doc_chunks, annotations, toc, max_context_tokens
-        )
-    target_chunks_text = _build_chunks_text(target_chunks, annotations)
+    # meta.work.json — raw meta + enrichment scaffold
+    work_meta = dict(meta)
+    for key, empty_val in _DOCUMENT_WORK_SCAFFOLD.items():
+        if key not in work_meta:
+            work_meta[key] = empty_val
 
-    user_content = _COMBINED_USER_TEMPLATE.format(
-        doc_context=doc_context,
-        doc_chunks_text=doc_chunks_text,
-        target_chunks_text=target_chunks_text,
-        schema=_COMBINED_SCHEMA,
+    # Only ask LLM to extract TOC if toc.json is empty
+    toc_src = output_dir / "toc.json"
+    existing_toc = json.loads(toc_src.read_text(encoding="utf-8")) if toc_src.exists() else []
+    if existing_toc:
+        work_meta.pop("toc", None)  # already have one, don't overwrite
+
+    work_meta_path = output_dir / "meta.work.json"
+    work_meta_path.write_text(
+        json.dumps(work_meta, indent=2, ensure_ascii=False), encoding="utf-8"
     )
 
-    messages = [{"role": "user", "content": user_content}]
-    return _DOCUMENT_SYSTEM_PROMPT, messages
+    # chunks.work.txt — plain text with annotation markers injected
+    work_chunks_path = output_dir / "chunks.work.txt"
+    parts = []
+    for chunk in chunks:
+        text = chunk.get("text", "")
+        for page_num in chunk.get("source_pages", []):
+            text = inject_annotations(text, annotations, page_num)
+        parts.append(text)
+    work_chunks_path.write_text("\n\n".join(parts), encoding="utf-8")
+
+    return work_meta_path, work_chunks_path
+
+
+def build_document_file_prompt(
+    work_meta_path: Path,
+    work_chunks_path: Path,
+) -> tuple[str, list[dict]]:
+    """Build (system_prompt, messages) for file-based document enrichment.
+
+    The LLM reads the work files directly and edits meta.work.json in place.
+    No document content is embedded in the prompt.
+    """
+    user_content = _DOCUMENT_FILE_USER_TEMPLATE.format(
+        work_meta_path=work_meta_path,
+        work_chunks_path=work_chunks_path,
+    )
+    return _DOCUMENT_FILE_SYSTEM_PROMPT, [{"role": "user", "content": user_content}]
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -555,22 +320,9 @@ def build_combined_prompt(
 # ---------------------------------------------------------------------------
 
 _CHUNK_BATCH_SYSTEM_PROMPT = """\
-You are analyzing text chunks from an architecture document. \
-Return structured JSON with per-chunk metadata. \
-Return ONLY valid JSON, no markdown fences, no prose.\
-"""
-
-_CHUNK_BATCH_SCHEMA = """\
-{
-  "chunks": [
-    {
-      "chunk_id": "...",
-      "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "keywords": {"value": ["..."], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "content_class": "one of: argument|methodology|case_study|bibliography|front_matter|caption|appendix"
-    }
-  ]
-}\
+You are an architecture research librarian analyzing text chunks from an architecture document.
+For each chunk, output one JSON object per line (JSONL). No wrapper, no markdown fences, no prose.
+Format: {"id":"chk_XXXXX","cls":"...","kw":["term1","term2","term3"],"s":"one-line summary"}\
 """
 
 _CHUNK_BATCH_USER_TEMPLATE = """\
@@ -584,39 +336,22 @@ _CHUNK_BATCH_USER_TEMPLATE = """\
 
 ## Instructions
 
-For each chunk above, provide:
-- a concise one-line summary that names the chunk's distinctive claim, example, or move, not just the document's general theme
-- a list of architecture-relevant keywords grounded in this specific chunk
-- a content_class that categorizes the chunk's role in the document
+For each chunk, output exactly one line: {{"id":"<chunk_id>","cls":"<content_class>","kw":["term1","term2","term3"],"s":"<summary>"}}
 
-When a chunk is organized around a specific person, archive, project, place, event, or object, keep that concrete focus visible in the summary rather than flattening it into abstract theory.
+Rules:
+- "s": one-line summary naming the chunk's distinctive claim, example, or move. When a chunk centers on a specific person, archive, project, place, or event, keep that focus visible — do not flatten into abstract theory.
+- "kw": exactly 3 architecture-relevant keywords. Prefer a mix of concrete entities, mechanisms, and named concepts central to this chunk. Preserve named actors, places, buildings, or projects when they are central. Avoid generic repeats from the overall document context unless they are truly central here.
+- "cls": choose the most specific class:
+  - "front_matter": title pages, abstracts, acknowledgments, author bios, journal metadata
+  - "bibliography": references, citations, endnotes, works cited
+  - "caption": figure or table captions
+  - "appendix": supplementary material outside the main argumentative flow
+  - "methodology": research methods, analytical frameworks, how the archive/research is approached
+  - "case_study": a specific person, project, building, archive episode, or concrete example is the main focus
+  - "argument": substantive analysis or theory only when no more specific class fits
+  Prefer the most specific valid class. Do not default to "argument" when the chunk is mainly a case, method, bibliography, or front matter. If a chunk is interpretive but centered on a specific person, archive, project, or event, still prefer "case_study" — you can synthesize it, but classify it there.
 
-Choose content_class using these rules:
-- "front_matter": title pages, abstracts, acknowledgments, journal/platform metadata, author bios
-- "bibliography": references, citations, endnotes, works cited, citation-heavy notes
-- "caption": figure captions, table captions, image descriptions
-- "appendix": supplementary or supporting material outside the main argumentative flow
-- "methodology": research methods, analytical frameworks, how the archive/research is approached
-- "case_study": a specific person, project, building, archive episode, precedent, or concrete example is the main focus
-- "argument": substantive analysis or theory only when no more specific class above fits
-
-Prefer the most specific valid class. Do not default to "argument" when the chunk is mainly a case, method, bibliography, or front matter.
-If a chunk is interpretive but centered on a specific person, archive, project, or event, still prefer "case_study".
-
-For keywords:
-- prefer a mix of concrete entities, mechanisms, and named concepts central to this chunk
-- preserve named actors, places, archives, buildings, projects, or objects when they are central to the chunk
-- avoid generic repeats from the overall document context unless they are truly central here
-
-Examples:
-- a chunk centered on a specific archival encounter, person, or project -> "case_study"
-- a chunk explaining how the researcher reads or uses archives -> "methodology"
-- a chunk of endnotes or references -> "bibliography"
-- a chunk of theory with no stronger specific role -> "argument"
-
-Return ONLY valid JSON matching the schema below. No markdown fences, no explanations.
-
-{schema}\
+Output one line per chunk, nothing else.\
 """
 
 
@@ -637,7 +372,6 @@ def build_chunk_batch_prompt(
     user_content = _CHUNK_BATCH_USER_TEMPLATE.format(
         doc_context_str=doc_context_str,
         chunks_text=chunks_text,
-        schema=_CHUNK_BATCH_SCHEMA,
     )
 
     messages = [{"role": "user", "content": user_content}]
@@ -649,23 +383,9 @@ def build_chunk_batch_prompt(
 # ---------------------------------------------------------------------------
 
 _FIGURE_BATCH_SYSTEM_PROMPT = """\
-You are analyzing figures from an architecture document. \
-Return structured JSON with per-figure metadata. \
-Return ONLY valid JSON, no markdown fences, no prose.\
-"""
-
-_FIGURE_BATCH_SCHEMA = """\
-{
-  "figures": [
-    {
-      "figure_id": "...",
-      "visual_type": {"value": "one of: plan|section|elevation|detail|photo|diagram|chart|render|sketch", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "description": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "caption": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "relevance": {"value": "one of: substantive|decorative|front_matter", "confidence": 0.0-1.0}
-    }
-  ]
-}\
+You are an architecture research librarian analyzing figures from an architecture document.
+For each figure, output one JSON object per line (JSONL). No wrapper, no markdown fences, no prose.
+Format: {"id":"fig_NNN","vt":"...","rel":"...","desc":"...","cap":"..."}\
 """
 
 _FIGURE_BATCH_USER_INTRO = """\
@@ -675,34 +395,24 @@ _FIGURE_BATCH_USER_INTRO = """\
 
 ## Figures
 
-For each figure below, identify its visual_type (plan, section, elevation, detail, photo, \
-diagram, chart, render, or sketch), write a concise description, extract or infer a caption, \
-and classify its relevance:
-- "substantive": architectural drawings, photos, diagrams, or other visual knowledge
-- "decorative": logos, publisher marks, decorative borders, page ornaments
-- "front_matter": journal covers, title page images, platform/database artifacts
+For each figure, output exactly one line:
+{{"id":"<figure_id>","vt":"<visual_type>","rel":"<relevance>","desc":"<description>","cap":"<caption>"}}
 
-When an image is available, prioritize what is visibly present in the image itself. Use caption \
-candidates and surrounding page text as supporting context, not as a replacement for visual \
-evidence. Only fall back to text-only inference when the image is unavailable or unreadable.
+Field rules:
+- "vt": one of: plan|section|elevation|detail|photo|diagram|chart|render|sketch
+- "rel": one of: substantive|decorative|front_matter
+  - "substantive": architectural drawings, photos, diagrams, or other visual knowledge
+  - "decorative": logos, publisher marks, decorative borders, page ornaments
+  - "front_matter": journal covers, title page images, platform/database artifacts
+- "desc": concise description of what is visually present. Do not invent architectural content for non-informative images.
+  If the figure is blank, partial, scanner-generated, heavily degraded, or contains no meaningful visual knowledge beyond logos, borders, watermarks, or platform artifacts, say so plainly and set rel to "decorative" or "front_matter".
+  If the image is a full-page scan of article text or a title page with no standalone visual figure, set rel to "front_matter".
+- "cap": extracted or inferred caption, or "" if none
 
-If the figure is blank, partial, scanner-generated, background-only, heavily degraded, or contains \
-no meaningful visual knowledge beyond logos, borders, watermarks, page texture, or platform artifacts, \
-say so plainly in the description and classify it as "decorative" or "front_matter". Do not invent \
-architectural content for non-informative images.
-If the image is effectively a full-page screenshot or scan of article text, a title page, or another \
-text-dominated page capture with no standalone visual figure, treat it as non-substantive and classify \
-it as "front_matter" or "decorative".
+When an image is available, prioritize what is visibly present. Use caption candidates and surrounding page text as supporting context only. Fall back to text-only inference only when the image is unavailable or unreadable.
 
-"""
+Output one line per figure, nothing else.
 
-_FIGURE_BATCH_USER_OUTRO = """\
-
-## Instructions
-
-Return ONLY valid JSON matching the schema below. No markdown fences, no explanations.
-
-{schema}\
 """
 
 
@@ -739,11 +449,9 @@ def build_figure_batch_prompt(
     context is provided and the LLM is notified.
     """
     intro = _FIGURE_BATCH_USER_INTRO.format(doc_context_str=doc_context_str)
-    outro = _FIGURE_BATCH_USER_OUTRO.format(schema=_FIGURE_BATCH_SCHEMA)
 
     # Build the content list for the user message (multimodal)
-    content: list[dict] = []
-    content.append({"type": "text", "text": intro})
+    content: list[dict] = [{"type": "text", "text": intro}]
 
     for fig in figures_with_context:
         figure_id = fig.get("figure_id", "")
@@ -761,7 +469,6 @@ def build_figure_batch_prompt(
 
         has_image = bool(image_path) and Path(image_path).exists()
 
-        # Text header for this figure
         header = (
             f"### Figure: {figure_id}\n"
             f"Source page: {source_page}\n"
@@ -776,24 +483,19 @@ def build_figure_batch_prompt(
         if has_image:
             try:
                 media_type, b64_data = _encode_image(image_path)
-                content.append(
-                    {
-                        "type": "image",
-                        "source": {
-                            "type": "base64",
-                            "media_type": media_type,
-                            "data": b64_data,
-                        },
-                        "_source_path": str(image_path),
-                    }
-                )
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": b64_data,
+                    },
+                    "_source_path": str(image_path),
+                })
             except (OSError, ValueError):
-                # If encoding fails, fall back to text-only
                 content.append(
                     {"type": "text", "text": "(Image could not be read — text-only fallback)\n"}
                 )
-
-    content.append({"type": "text", "text": outro})
 
     messages = [{"role": "user", "content": content}]
     return _FIGURE_BATCH_SYSTEM_PROMPT, messages

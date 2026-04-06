@@ -49,14 +49,14 @@ def _load_json(path: Path, default=None):
 # ---------------------------------------------------------------------------
 
 
-def _make_enriched_field(llm_field: dict, model: str, prompt_version: str) -> EnrichedField:
+def _make_enriched_field(llm_field: dict, model: str, prompt_version: str, *, confidence: float = 1.0) -> EnrichedField:
     """Build an EnrichedField from the LLM response dict for a single field."""
     provenance = Provenance.create(
         model=model,
         prompt_version=prompt_version,
-        confidence=float(llm_field.get("confidence", 0.0)),
-        source_pages=llm_field.get("source_pages", []),
-        evidence_spans=llm_field.get("evidence_spans", []),
+        confidence=confidence,
+        source_pages=[],
+        evidence_spans=[],
     )
     return EnrichedField(value=llm_field["value"], provenance=provenance)
 
@@ -71,16 +71,21 @@ def _make_facets(facets_data: dict, model: str, prompt_version: str) -> Architec
     kwargs = {}
     for name in facet_fields:
         if name in facets_data and isinstance(facets_data[name], dict) and "value" in facets_data[name]:
-            kwargs[name] = _make_enriched_field(facets_data[name], model, prompt_version)
+            kwargs[name] = _make_enriched_field(facets_data[name], model, prompt_version, confidence=0.7)
     return ArchitectureFacets(**kwargs)
+
+
+_RELEVANCE_CONFIDENCE = {"high": 1.0, "medium": 0.7, "low": 0.4}
 
 
 def _make_concept(concept_data: dict, model: str, prompt_version: str) -> ConceptCandidate:
     """Build a ConceptCandidate from the LLM concepts list entry."""
+    relevance = concept_data.get("relevance", "medium")
+    confidence = _RELEVANCE_CONFIDENCE.get(str(relevance).lower(), 0.7)
     provenance = Provenance.create(
         model=model,
         prompt_version=prompt_version,
-        confidence=concept_data.get("confidence", 1.0),
+        confidence=confidence,
         source_pages=concept_data.get("source_pages", []),
         evidence_spans=concept_data.get("evidence_spans", []),
     )
@@ -109,18 +114,6 @@ def _make_concepts(concepts_data: list[dict], model: str, prompt_version: str, *
 # Public API
 # ---------------------------------------------------------------------------
 
-_DOCUMENT_SCHEMA_DESC = """\
-{
-  "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "document_type": {"value": "regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "methodological_conclusions": {"value": ["short method takeaway 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "main_content_learnings": {"value": ["short content learning 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-  "facets": {<facet_name>: {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}},
-    "concepts_local": [{"concept_name": "...", "descriptor": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}],
-    "concepts_bridge_candidates": [{"concept_name": "...", "descriptor": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}]
-}"""
-
 
 def enrich_document_stage(
     output_dir: Path,
@@ -128,7 +121,6 @@ def enrich_document_stage(
     llm_fn,
     *,
     force: bool = False,
-    _pre_parsed_response: dict | None = None,
 ) -> dict:
     """Enrich document-level metadata for a single material.
 
@@ -137,8 +129,6 @@ def enrich_document_stage(
         config: Full config dict (enrichment section read from config["enrichment"]).
         llm_fn: Callable (system, messages) -> str. The LLM implementation.
         force: Re-enrich even if not stale.
-        _pre_parsed_response: If provided, skip LLM call and use this parsed
-            dict directly (used by combined doc+chunk call in orchestrator).
 
     Returns:
         {"status": "enriched"|"skipped"|"failed", "detail": str}
@@ -170,20 +160,54 @@ def enrich_document_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"Load error: {exc}"}
 
-    # 4. Build prompt and call LLM (or use pre-parsed response)
+    # 4. Build prompt and call LLM
+    work_meta_path = output_dir / "meta.work.json"
+    work_chunks_path = output_dir / "chunks.work.txt"
     try:
-        if _pre_parsed_response is not None:
-            parsed = _pre_parsed_response
-        else:
-            system, messages = enrich_prompts.build_document_prompt(meta, toc, chunks, annotations)
-            raw_text = llm_fn(system, messages)
-            parsed = enrich_llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_SCHEMA_DESC)
+        # Pre-step: create work files with enrichment scaffold
+        enrich_prompts.build_document_work_files(output_dir, meta, chunks, annotations)
+
+        # LLM reads and edits work files in place — no content in prompt
+        system, messages = enrich_prompts.build_document_file_prompt(
+            work_meta_path, work_chunks_path
+        )
+        llm_fn(system, messages)
+
+        # Post-step: read back the edited work file
+        work_meta = _load_json(work_meta_path)
+        if work_meta is None:
+            return {"status": "failed", "detail": "LLM did not produce a valid work file"}
+        parsed = work_meta
     except enrich_llm.EnrichmentError as exc:
         return {"status": "failed", "detail": str(exc)}
     except Exception as exc:
         return {"status": "failed", "detail": f"LLM error: {exc}"}
+    finally:
+        # Clean up work files regardless of outcome
+        for work_path in (work_meta_path, work_chunks_path):
+            try:
+                work_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
-    # 5. Validate required fields are present
+    # 5. Normalize flat values into {"value": ...} shape for downstream mapping.
+    # The file-based approach has the LLM write plain values; the pre-parsed
+    # path still uses the old {"value": ...} wrapper shape.
+    def _normalize_field(data: dict, key: str) -> None:
+        val = data.get(key)
+        if val is not None and not isinstance(val, dict):
+            data[key] = {"value": val}
+
+    for field in ("summary", "document_type", "keywords",
+                  "methodological_conclusions", "main_content_learnings"):
+        _normalize_field(parsed, field)
+    # Normalize each facet value
+    facets = parsed.get("facets") or {}
+    if isinstance(facets, dict):
+        for fkey in list(facets):
+            _normalize_field(facets, fkey)
+
+    # Validate required fields are present
     _REQUIRED_FIELDS = ("summary", "document_type", "keywords")
     missing = [f for f in _REQUIRED_FIELDS if f not in parsed or not isinstance(parsed[f], dict)]
     if missing:
@@ -226,6 +250,10 @@ def enrich_document_stage(
         # bibliography: stored as-is (plain dict of optional strings) plus provenance metadata
         bibliography_data = parsed.get("bibliography")
         if bibliography_data and isinstance(bibliography_data, dict):
+            # Normalize editors: LLM may return a comma-separated string instead of array
+            editors = bibliography_data.get("editors")
+            if isinstance(editors, str) and editors.strip():
+                bibliography_data["editors"] = [e.strip() for e in editors.split(",") if e.strip()]
             # Strip schema-metadata keys from the actual bib fields; keep everything else
             bib = {
                 k: v for k, v in bibliography_data.items()
@@ -251,6 +279,16 @@ def enrich_document_stage(
         concepts.extend(_make_concepts(concepts_bridge_data, actual_model, prompt_version, concept_type="bridge_candidate"))
         enriched_count["concepts"] = len(concepts)
 
+        # TOC: promote if LLM extracted one and toc.json is currently empty
+        toc_out: list | None = None
+        toc_path = output_dir / "toc.json"
+        existing_toc = json.loads(toc_path.read_text(encoding="utf-8")) if toc_path.exists() else []
+        if not existing_toc:
+            toc_data = parsed.get("toc")
+            if isinstance(toc_data, list) and toc_data:
+                toc_out = toc_data
+                enriched_count["toc"] = len(toc_out)
+
     except Exception as exc:
         return {"status": "failed", "detail": f"Mapping error: {exc}"}
 
@@ -274,13 +312,23 @@ def enrich_document_stage(
             for concept in concepts:
                 f.write(json.dumps(concept.to_dict(), ensure_ascii=False) + "\n")
 
+        toc_path = output_dir / "toc.json"
+        tmp_toc = toc_path.with_suffix(".json.tmp") if toc_out is not None else None
+        if tmp_toc is not None:
+            tmp_toc.write_text(
+                json.dumps(toc_out, separators=(',', ':'), ensure_ascii=False), encoding="utf-8"
+            )
+
         # Backup originals for rollback
         bak_meta = meta_path.with_suffix(".json.bak")
         bak_concepts = concepts_path.with_suffix(".jsonl.bak")
+        bak_toc = toc_path.with_suffix(".json.bak") if tmp_toc is not None else None
         if meta_path.exists():
             meta_path.replace(bak_meta)
         if concepts_path.exists():
             concepts_path.replace(bak_concepts)
+        if bak_toc is not None and toc_path.exists():
+            toc_path.replace(bak_toc)
 
         # Commit: rename all temps to final
         committed: list[tuple[Path, Path]] = []  # (final, backup)
@@ -289,28 +337,33 @@ def enrich_document_stage(
             committed.append((meta_path, bak_meta))
             tmp_concepts.replace(concepts_path)
             committed.append((concepts_path, bak_concepts))
+            if tmp_toc is not None:
+                tmp_toc.replace(toc_path)
+                committed.append((toc_path, bak_toc))
         except Exception:
             # Rollback: restore backups for any committed files
             for final_path, backup_path in committed:
                 try:
-                    if backup_path.exists():
+                    if backup_path and backup_path.exists():
                         backup_path.replace(final_path)
                 except Exception:
                     pass
             # Clean up temps
-            for tmp in (tmp_meta, tmp_concepts):
-                try:
-                    tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
+            for tmp in (tmp_meta, tmp_concepts, tmp_toc):
+                if tmp is not None:
+                    try:
+                        tmp.unlink(missing_ok=True)
+                    except Exception:
+                        pass
             raise
 
         # Clean up backups on success
-        for bak in (bak_meta, bak_concepts):
-            try:
-                bak.unlink(missing_ok=True)
-            except Exception:
-                pass
+        for bak in (bak_meta, bak_concepts, bak_toc):
+            if bak is not None:
+                try:
+                    bak.unlink(missing_ok=True)
+                except Exception:
+                    pass
     except Exception as exc:
         return {"status": "failed", "detail": f"Write error: {exc}"}
 
@@ -330,6 +383,8 @@ def enrich_document_stage(
         parts.append(f"{enriched_count['facets']} facets")
     if enriched_count["concepts"]:
         parts.append(f"{enriched_count['concepts']} concepts")
+    if enriched_count.get("toc"):
+        parts.append(f"toc ({enriched_count['toc']} entries)")
     detail = ", ".join(parts) if parts else "no fields enriched"
 
     return {"status": "enriched", "detail": detail}

@@ -90,7 +90,12 @@ class EnrichedField:
     provenance: Provenance
 
     def to_dict(self) -> dict:
-        return {"value": self.value, "provenance": asdict(self.provenance)}
+        prov = asdict(self.provenance)
+        if not prov.get("source_pages"):
+            prov.pop("source_pages", None)
+        if not prov.get("evidence_spans"):
+            prov.pop("evidence_spans", None)
+        return {"value": self.value, "provenance": prov}
 
     @classmethod
     def from_dict(cls, data: dict) -> EnrichedField:

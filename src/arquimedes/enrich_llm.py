@@ -67,9 +67,8 @@ def _coerce_timeout_seconds(value, default: int | None = None) -> int | None:
 # Claude OAuth usage pre-flight check
 # ---------------------------------------------------------------------------
 
-_CLAUDE_USAGE_EXHAUSTED_THRESHOLD = float(
-    os.getenv("ARQ_CLAUDE_USAGE_THRESHOLD", "90")
-)
+_CLAUDE_USAGE_THRESHOLD_5H = float(os.getenv("ARQ_CLAUDE_USAGE_THRESHOLD_5H", "90"))
+_CLAUDE_USAGE_THRESHOLD_7D = float(os.getenv("ARQ_CLAUDE_USAGE_THRESHOLD_7D", "97"))
 
 
 def check_claude_oauth_usage() -> dict | None:
@@ -128,16 +127,20 @@ def _read_claude_oauth_token() -> str | None:
     return None
 
 
-def _claude_usage_over_threshold(threshold: float = _CLAUDE_USAGE_EXHAUSTED_THRESHOLD) -> bool:
-    """Return True if any Claude usage window is at or above *threshold* percent.
+def _claude_usage_over_threshold() -> bool:
+    """Return True if any Claude usage window exceeds its threshold.
 
-    Checks ``five_hour`` and ``seven_day`` windows. Returns False if the usage
-    data cannot be fetched (fail open — let the provider attempt run normally).
+    five_hour >= 90% or seven_day >= 97% triggers fallback.
+    Returns False if usage data cannot be fetched (fail open).
     """
     usage = check_claude_oauth_usage()
     if not usage:
         return False
-    for window in ("five_hour", "seven_day"):
+    thresholds = {
+        "five_hour": _CLAUDE_USAGE_THRESHOLD_5H,
+        "seven_day": _CLAUDE_USAGE_THRESHOLD_7D,
+    }
+    for window, threshold in thresholds.items():
         entry = usage.get(window)
         if isinstance(entry, dict):
             util = entry.get("utilization")

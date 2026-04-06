@@ -157,39 +157,49 @@ def _cleanup_non_substantive_figures(output_dir: Path) -> int:
     return len(delete_ids)
 
 
-# ---------------------------------------------------------------------------
-# Schema description for repair fallback
-# ---------------------------------------------------------------------------
-
-_FIGURE_BATCH_SCHEMA_DESC = """\
-{
-  "figures": [
-    {
-      "figure_id": "...",
-      "visual_type": {"value": "plan|section|elevation|detail|photo|diagram|chart|render|sketch", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "description": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "caption": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
-      "relevance": {"value": "substantive|decorative|front_matter", "confidence": 0.0-1.0}
-    }
-  ]
-}"""
+_VALID_VISUAL_TYPES = frozenset(
+    {"plan", "section", "elevation", "detail", "photo", "diagram", "chart", "render", "sketch"}
+)
+_VALID_RELEVANCE = frozenset({"substantive", "decorative", "front_matter"})
 
 
-# ---------------------------------------------------------------------------
-# Field-level helper
-# ---------------------------------------------------------------------------
+def _parse_figure_jsonl(raw_text: str) -> dict[str, dict]:
+    """Parse compact JSONL figure response into figure_id → fields dict.
+
+    Each line: {"id":"fig_NNN","vt":"...","rel":"...","desc":"...","cap":"..."}
+    Malformed lines are skipped.
+    """
+    result: dict[str, dict] = {}
+    for line in raw_text.splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        figure_id = obj.get("id", "")
+        if not figure_id:
+            continue
+        result[figure_id] = {
+            "visual_type": obj.get("vt", "") if obj.get("vt", "") in _VALID_VISUAL_TYPES else "",
+            "relevance": obj.get("rel", "substantive") if obj.get("rel", "") in _VALID_RELEVANCE else "substantive",
+            "description": obj.get("desc", ""),
+            "caption": obj.get("cap", ""),
+        }
+    return result
 
 
-def _make_enriched_field(llm_field: dict, model: str, prompt_version: str) -> EnrichedField:
-    """Build an EnrichedField from an LLM response dict for a single field."""
-    provenance = Provenance.create(
-        model=model,
-        prompt_version=prompt_version,
-        confidence=float(llm_field.get("confidence", 0.0)),
-        source_pages=llm_field.get("source_pages", []),
-        evidence_spans=llm_field.get("evidence_spans", []),
-    )
-    return EnrichedField(value=llm_field["value"], provenance=provenance)
+def _make_enriched_field_value(value: str, model: str, prompt_version: str) -> dict:
+    """Build an EnrichedField dict with deterministic confidence from a plain value."""
+    return EnrichedField(
+        value=value,
+        provenance=Provenance.create(
+            model=model,
+            prompt_version=prompt_version,
+            confidence=1.0,
+        ),
+    ).to_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -359,9 +369,6 @@ def enrich_figures_stage(
             )
             raw_text = llm_fn(system, messages)
             actual_model = getattr(llm_fn, "last_model", model)
-            parsed = enrich_llm.parse_json_or_repair(
-                llm_fn, raw_text, _FIGURE_BATCH_SCHEMA_DESC
-            )
         except enrich_llm.EnrichmentError as exc:
             return {
                 "status": "failed",
@@ -373,16 +380,10 @@ def enrich_figures_stage(
                 "detail": f"Batch {batch_idx + 1}/{len(batches)} error: {exc}",
             }
 
-        # Map responses back by figure_id
-        response_by_id: dict[str, dict] = {}
-        figures_response = parsed.get("figures", [])
-        if isinstance(figures_response, list):
-            for fig_data in figures_response:
-                fid = fig_data.get("figure_id", "")
-                if fid:
-                    response_by_id[fid] = fig_data
+        # Parse compact JSONL response
+        response_by_id = _parse_figure_jsonl(raw_text)
 
-        for fig, fig_ctx in zip(batch, figures_with_context):
+        for fig in batch:
             sidecar = fig["sidecar"]
             figure_id = sidecar.get("figure_id", "")
             image_path = fig["image_path"]
@@ -396,49 +397,15 @@ def enrich_figures_stage(
                     "detail": f"Batch {batch_idx + 1}/{len(batches)}: LLM output missing figure '{figure_id}'",
                 }
 
-            # Validate required fields and their 'value' key
-            for req_field in ("visual_type", "description", "caption"):
-                if req_field not in fig_response or not isinstance(fig_response[req_field], dict):
-                    return {
-                        "status": "failed",
-                        "detail": f"Figure '{figure_id}' missing required field '{req_field}'",
-                    }
-                if "value" not in fig_response[req_field]:
-                    return {
-                        "status": "failed",
-                        "detail": f"Figure '{figure_id}' field '{req_field}' missing 'value'",
-                    }
-
             # Build enriched sidecar fields
             enriched: dict = dict(sidecar)
             enriched["analysis_mode"] = analysis_mode
-
-            try:
-                ef = _make_enriched_field(fig_response["visual_type"], actual_model, prompt_version)
-                enriched["visual_type"] = ef.to_dict()
-
-                ef = _make_enriched_field(fig_response["description"], actual_model, prompt_version)
-                enriched["description"] = ef.to_dict()
-
-                ef = _make_enriched_field(fig_response["caption"], actual_model, prompt_version)
-                enriched["caption"] = ef.to_dict()
-
-                # Relevance classification (optional — graceful fallback)
-                rel = fig_response.get("relevance")
-                if isinstance(rel, dict) and "value" in rel:
-                    enriched["relevance"] = rel["value"]
-                elif isinstance(rel, str) and rel:
-                    enriched["relevance"] = rel
-                else:
-                    enriched["relevance"] = "substantive"  # default
-            except Exception as exc:
-                return {
-                    "status": "failed",
-                    "detail": f"Figure '{figure_id}' field mapping error: {exc}",
-                }
-
+            enriched["visual_type"] = _make_enriched_field_value(fig_response["visual_type"], actual_model, prompt_version)
+            enriched["description"] = _make_enriched_field_value(fig_response["description"], actual_model, prompt_version)
+            enriched["caption"] = _make_enriched_field_value(fig_response["caption"], actual_model, prompt_version)
+            enriched["relevance"] = fig_response["relevance"]
             enriched["_enrichment_stamp"] = fig["stamp"]
-            enriched["_enrichment_stamp"]["model"] = actual_model  # actual responding model
+            enriched["_enrichment_stamp"]["model"] = actual_model
             enriched_by_path[fig["path"]] = enriched
 
     # 9. Atomic write: stage all sidecar files, then commit with rollback

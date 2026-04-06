@@ -1557,7 +1557,7 @@ def _cluster_audit_prompt(root: Path, input_path: Path, output_path: Path, bridg
         f"If you need more context, include a context_requests array with up to "
         f"{MAX_CONTEXT_REQUESTS_PER_PASS} read-only SQL-index lookups from the allowed toolset. "
         "You will get only one read-only context round, so request everything you need at once.\n"
-        "When finished, write the outputs and then emit exactly x on a single line. Do not say anything else."
+        "When finished, write the outputs and, ONLY AFTER, emit exactly PROCESS_FINISHED on a single line. Do not say anything else."
     )
     user = (
         f"Read the current bridge memory from {root / 'derived' / 'bridge_concept_clusters.jsonl'}.\n"
@@ -1572,7 +1572,7 @@ def _cluster_audit_prompt(root: Path, input_path: Path, output_path: Path, bridg
         "Each finding must include: finding_type, severity, recommendation, affected_material_ids, affected_concept_names, evidence.\n"
         f"Write the findings JSON to {output_path} using the Write tool.\n"
         f"Write the updated bridge_concept_clusters JSON to {bridge_output_path} using the Write tool.\n"
-        "After writing both files, emit exactly x on a single line and stop."
+        "After writing both files, emit exactly PROCESS_FINISHED on a single line and stop."
     )
     return system, user
 

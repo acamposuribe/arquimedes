@@ -305,6 +305,28 @@ class TestMakeCliLlmFn:
         # last_model should be set to the script name
         assert fn.last_model == script.name
 
+    def test_completion_sentinel_terminates_cleanly(self, tmp_path):
+        script = tmp_path / "sentinel-agent"
+        script.write_text(
+            '#!/bin/bash\n'
+            'cat - > /dev/null\n'
+            'echo "PROCESS_FINISHED"\n'
+            'sleep 300\n'
+        )
+        script.chmod(0o755)
+
+        config = {"llm": {"agent_cmd": str(script)}, "enrichment": {"max_retries": 1}}
+        fn = make_cli_llm_fn(config)
+
+        import time
+
+        t0 = time.monotonic()
+        result = fn("system prompt", [{"role": "user", "content": "hello"}])
+        elapsed = time.monotonic() - t0
+
+        assert result == "{}"
+        assert elapsed < 15, f"Sentinel shutdown took too long: {elapsed:.1f}s"
+
     def test_fallback_to_second_agent(self, tmp_path):
         failing = tmp_path / "failing-agent"
         failing.write_text('#!/bin/bash\necho "rate limited" >&2\nexit 1')

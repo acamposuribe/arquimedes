@@ -343,6 +343,8 @@ _FAST_FAIL_RE = re.compile(
     re.IGNORECASE,
 )
 
+_COMPLETION_SENTINELS = {"PROCESS_FINISHED", "x"}
+
 
 def _strip_nuls(text: str) -> str:
     """Remove embedded NUL bytes that break subprocess argv/stdin handling."""
@@ -398,6 +400,7 @@ def _run_agent_subprocess(
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
     done = threading.Event()
+    completion_seen = threading.Event()
 
     def _kill_tree() -> None:
         """Kill the process and all its children (entire process group)."""
@@ -413,10 +416,15 @@ def _run_agent_subprocess(
         try:
             assert proc.stdout is not None
             while True:
-                chunk = proc.stdout.read(4096)
-                if not chunk:
+                line = proc.stdout.readline()
+                if not line:
                     break
-                stdout_chunks.append(chunk)
+                stdout_chunks.append(line)
+                if line.strip() in _COMPLETION_SENTINELS:
+                    completion_seen.set()
+                    _kill_tree()
+                    done.set()
+                    return
         except (ValueError, OSError):
             pass
         done.set()
@@ -452,6 +460,14 @@ def _run_agent_subprocess(
     proc.wait(timeout=10)
     t_out.join(timeout=5)
     t_err.join(timeout=5)
+
+    if completion_seen.is_set():
+        return subprocess.CompletedProcess(
+            safe_cmd,
+            0,
+            "".join(stdout_chunks),
+            "".join(stderr_chunks),
+        )
 
     return subprocess.CompletedProcess(
         safe_cmd, proc.returncode or 0, "".join(stdout_chunks), "".join(stderr_chunks)
@@ -654,6 +670,13 @@ def _build_stage_request(
     return cmd, f"[SYSTEM]\n{system}\n\n{user_prompt}", True
 
 
+def _normalize_completion_output(text: str) -> str:
+    stripped = (text or "").strip()
+    if stripped in _COMPLETION_SENTINELS:
+        return "{}"
+    return text
+
+
 def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | None = None) -> LlmFn:
     """Build an LlmFn that shells out to an agent CLI.
 
@@ -820,7 +843,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                             f"stdout_preview={_llm_debug_preview(result.stdout)}"
                         )
                     llm_fn.last_model = get_agent_model_name(cmd)
-                    return result.stdout
+                    return _normalize_completion_output(result.stdout)
                 except subprocess.TimeoutExpired:
                     if debug_enabled:
                         _llm_debug(

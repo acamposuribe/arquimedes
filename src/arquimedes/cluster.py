@@ -166,7 +166,7 @@ def _cluster_input_path(root: Path, kind: str) -> Path:
 def _write_json(path: Path, payload: object) -> None:
     """Write JSON payloads atomically enough for staged LLM inputs."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(payload, separators=(',', ':'), ensure_ascii=False), encoding="utf-8")
 
 
 def _write_jsonl(path: Path, rows: list[dict]) -> None:

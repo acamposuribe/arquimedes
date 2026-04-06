@@ -101,7 +101,7 @@ def extract_raw_image(
         extraction_method="embedded",
     )
     (figures_dir / "fig_0001.json").write_text(
-        json.dumps(figure.to_dict(), indent=2, ensure_ascii=False),
+        json.dumps(figure.to_dict(), separators=(',', ':'), ensure_ascii=False),
         encoding="utf-8",
     )
 

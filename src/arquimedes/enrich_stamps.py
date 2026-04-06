@@ -282,7 +282,7 @@ def write_document_stamp(output_dir: Path, stamp: dict) -> None:
     meta_path = output_dir / "meta.json"
     data = json.loads(meta_path.read_text(encoding="utf-8"))
     data["_enrichment_stamp"] = stamp
-    meta_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    meta_path.write_text(json.dumps(data, separators=(',', ':'), ensure_ascii=False), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -301,7 +301,7 @@ def read_chunk_stamps(output_dir: Path) -> dict:
 def write_chunk_stamps(output_dir: Path, stamps: dict) -> None:
     """Write chunk_enrichment_stamps.json."""
     stamps_path = output_dir / "chunk_enrichment_stamps.json"
-    stamps_path.write_text(json.dumps(stamps, indent=2, ensure_ascii=False), encoding="utf-8")
+    stamps_path.write_text(json.dumps(stamps, separators=(',', ':'), ensure_ascii=False), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -321,4 +321,4 @@ def write_figure_stamp(figure_json_path: Path, stamp: dict) -> None:
     """Merge stamp into figure sidecar as ``_enrichment_stamp`` key."""
     data = json.loads(figure_json_path.read_text(encoding="utf-8"))
     data["_enrichment_stamp"] = stamp
-    figure_json_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    figure_json_path.write_text(json.dumps(data, separators=(',', ':'), ensure_ascii=False), encoding="utf-8")

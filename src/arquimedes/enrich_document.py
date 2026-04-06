@@ -268,7 +268,7 @@ def enrich_document_stage(
         tmp_concepts = concepts_path.with_suffix(".jsonl.tmp")
 
         tmp_meta.write_text(
-            json.dumps(meta_out, indent=2, ensure_ascii=False), encoding="utf-8"
+            json.dumps(meta_out, separators=(',', ':'), ensure_ascii=False), encoding="utf-8"
         )
         with open(tmp_concepts, "w", encoding="utf-8") as f:
             for concept in concepts:

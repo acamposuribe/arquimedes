@@ -360,7 +360,7 @@ def extract_all_figures(
     for fig in all_figures:
         sidecar_path = output_dir / "figures" / f"{fig.figure_id}.json"
         sidecar_path.write_text(
-            json.dumps(fig.to_dict(), indent=2, ensure_ascii=False),
+            json.dumps(fig.to_dict(), separators=(',', ':'), ensure_ascii=False),
             encoding="utf-8",
         )
 

@@ -400,7 +400,7 @@ def extract_raw_pdf(
 
     # TOC
     (output_dir / "toc.json").write_text(
-        json.dumps(_sanitize_strings(toc), indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(_sanitize_strings(toc), separators=(',', ':'), ensure_ascii=False), encoding="utf-8"
     )
 
     return meta

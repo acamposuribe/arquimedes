@@ -271,7 +271,6 @@ def _stage_route_config(config: dict, stage: str | None) -> list[dict]:
             "model": entry.get("model"),
             "effort": entry.get("effort"),
             "tools": entry.get("tools"),
-            "permission_mode": entry.get("permission_mode"),
             "agent": entry.get("agent"),
             "timeout_seconds": entry.get("timeout_seconds"),
             "prompt_mode": entry.get("prompt_mode"),
@@ -373,6 +372,10 @@ def _run_agent_subprocess(
     env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
     env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
     env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+    env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
+    env["CLAUDE_CODE_DISABLE_HOOKS"] = "1"
+    env["MAX_THINKING_TOKENS"] = "0"
+    env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
 
     safe_stdin = _strip_nuls(stdin_text)
 
@@ -513,7 +516,7 @@ def _build_agent_cmd(
     effort: str | None = None,
     model_override: str | None = None,
     tools=None,
-    permission_mode: str | None = None,
+    disable_slash_commands: bool = True,
     bare: bool = False,
 ) -> list[str]:
     """Build the full command for an agent CLI, adding speed optimizations.
@@ -522,7 +525,7 @@ def _build_agent_cmd(
     breaking credential discovery (``--bare`` is avoided for that reason):
     - ``--no-session-persistence``: skip saving session to disk
     - ``--system-prompt``: pass system prompt natively
-    - ``--tools ""``: disable built-in tools (we only need text output)
+    - ``--tools Read,Write,Bash``: default tool surface for our Claude routes
     - ``--disable-slash-commands``: skip skill resolution
     - ``--effort``: control thinking budget (low/medium/high)
     - ``--model``: per-stage model override (e.g. haiku for chunks)
@@ -539,12 +542,12 @@ def _build_agent_cmd(
             cmd.append("--bare")
         if "--no-session-persistence" not in cmd:
             cmd.append("--no-session-persistence")
-        if "--disable-slash-commands" not in cmd:
+        if disable_slash_commands and "--disable-slash-commands" not in cmd:
             cmd.append("--disable-slash-commands")
-        tools_value = _tools_arg(tools)
+        tools_value = _tools_arg(tools if tools is not None else ["Read", "Write", "Bash"])
         if "--tools" not in cmd and "--allowedTools" not in cmd and "--allowed-tools" not in cmd:
             if tools_value is None:
-                cmd.extend(["--tools", ""])
+                cmd.extend(["--tools", "Read,Write,Bash"])
             else:
                 cmd.extend(["--tools", tools_value])
         # Model: per-stage override takes precedence, then default to sonnet
@@ -557,8 +560,6 @@ def _build_agent_cmd(
         # Control thinking budget — lower = cheaper + faster
         if "--effort" not in cmd and effort:
             cmd.extend(["--effort", effort])
-        if permission_mode and "--permission-mode" not in cmd:
-            cmd.extend(["--permission-mode", permission_mode])
         cmd.extend(["--system-prompt", system])
         return cmd
     if exe == "codex":
@@ -593,7 +594,7 @@ def _build_stage_request(
             effort=effort,
             model_override=model,
             tools=route.get("tools"),
-            permission_mode=route.get("permission_mode"),
+            disable_slash_commands=_route_flag(route, "disable_slash_commands", True),
             bare=_route_flag(route, "bare", False),
         )
         return cmd, user_prompt, True
@@ -768,7 +769,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                         effort=effort_value,
                         model_override=model,
                         tools=attempt_cfg.get("tools"),
-                        permission_mode=attempt_cfg.get("permission_mode"),
+                        disable_slash_commands=_route_flag(attempt_cfg, "disable_slash_commands", True),
                         bare=_route_flag(attempt_cfg, "bare", False),
                     )
                     stdin_text = f"[SYSTEM]\n{system_prompt}\n\n{user_prompt}"

@@ -151,7 +151,7 @@ class TestBuildAgentCmd:
         assert "--disable-slash-commands" in cmd
         assert "--tools" in cmd
         idx_tools = cmd.index("--tools")
-        assert cmd[idx_tools + 1] == ""  # all tools disabled
+        assert cmd[idx_tools + 1] == "Read,Write,Bash"
         assert "--model" in cmd
         idx_model = cmd.index("--model")
         assert cmd[idx_model + 1] == "sonnet"  # default model

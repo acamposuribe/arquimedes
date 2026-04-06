@@ -557,7 +557,7 @@ def _write_stamp(
         "counts": counts,
     }
     stamp_path.parent.mkdir(parents=True, exist_ok=True)
-    stamp_path.write_text(json.dumps(stamp, indent=2, ensure_ascii=False))
+    stamp_path.write_text(json.dumps(stamp, separators=(',', ':'), ensure_ascii=False))
 
 
 # ---------------------------------------------------------------------------

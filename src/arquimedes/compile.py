@@ -118,7 +118,7 @@ def _update_extracted_meta_bridge_feedback(extracted_root: Path, bridge_clusters
         meta["bridge_concepts"] = refs
         tmp = meta_path.with_suffix(".json.tmp")
         bak = meta_path.with_suffix(".json.bak")
-        tmp.write_text(json.dumps(meta, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp.write_text(json.dumps(meta, separators=(',', ':'), ensure_ascii=False), encoding="utf-8")
         if meta_path.exists():
             meta_path.replace(bak)
         try:
@@ -315,7 +315,7 @@ def _write_compile_stamp(
             "compiled_at": datetime.now(timezone.utc).isoformat(),
             "material_stamps": material_stamps,
             "cluster_stamp": cluster_stamp,
-        }, indent=2),
+        }, separators=(',', ':')),
         encoding="utf-8",
     )
 

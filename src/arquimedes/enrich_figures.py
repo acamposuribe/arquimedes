@@ -448,7 +448,7 @@ def enrich_figures_stage(
         for sidecar_path, enriched in enriched_by_path.items():
             tmp = sidecar_path.with_suffix(".json.tmp")
             tmp.write_text(
-                json.dumps(enriched, indent=2, ensure_ascii=False), encoding="utf-8"
+                json.dumps(enriched, separators=(',', ':'), ensure_ascii=False), encoding="utf-8"
             )
             temp_pairs.append((tmp, sidecar_path))
 

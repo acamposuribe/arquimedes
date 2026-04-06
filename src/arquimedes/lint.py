@@ -123,7 +123,7 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
 
 def _write_json(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(payload, separators=(',', ':'), ensure_ascii=False), encoding="utf-8")
 
 
 def _read_stamp(path: Path) -> dict:
@@ -132,7 +132,7 @@ def _read_stamp(path: Path) -> dict:
 
 def _write_stamp(path: Path, payload: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    path.write_text(json.dumps(payload, separators=(',', ':'), ensure_ascii=False), encoding="utf-8")
 
 
 def _cleanup_paths(*paths: Path) -> None:
@@ -146,7 +146,7 @@ def _cleanup_paths(*paths: Path) -> None:
 
 
 def _stage_work_copy(source: Path, target: Path) -> Path:
-    """Duplicate a canonical file into tmp so Claude can edit the copy in place."""
+    """Duplicate a canonical file into tmp so LLM can edit the copy in place."""
     target.parent.mkdir(parents=True, exist_ok=True)
     if source.exists():
         shutil.copyfile(source, target)
@@ -883,7 +883,7 @@ def _normalize_context_request(request: Any) -> dict | None:
 
 
 def _format_context_tool_results(results: list[dict]) -> str:
-    return json.dumps(results, ensure_ascii=False, indent=2)
+    return json.dumps(results, ensure_ascii=False, separators=(',', ':'))
 
 
 def _extract_context_requests(parsed: Any) -> list[dict]:
@@ -920,13 +920,16 @@ def _run_reflection_prompt_with_context(
 
     tool_results = _execute_context_requests(tool, requests)
     followup_user = (
-        f"{user}\n\n"
         "You requested more context from the read-only SQL-index tool.\n"
         "Tool results:\n"
         f"{_format_context_tool_results(tool_results)}\n\n"
         "Revise your answer using the added context. Return final JSON only."
     )
-    raw = llm_fn(system, [{"role": "user", "content": followup_user}])
+    raw = llm_fn(system, [
+        {"role": "user", "content": user},
+        {"role": "assistant", "content": raw},
+        {"role": "user", "content": followup_user},
+    ])
     parsed = parse_json_or_repair(llm_fn, raw, schema_description)
     if isinstance(parsed, dict):
         parsed.pop("context_requests", None)
@@ -1655,78 +1658,6 @@ def _graph_reflection_due(
     if age_hours >= min_hours:
         return True, "graph reflection periodic interval reached"
     return False, "graph reflection deferred by schedule"
-
-
-def _cluster_prompt_payload(
-    cluster: dict,
-    material_info: dict[str, dict],
-    concept_page_text: str,
-    tool: ReflectionIndexTool | None = None,
-) -> dict:
-    source_concepts = cluster.get("source_concepts", [])
-    unique_material_ids = []
-    seen: set[str] = set()
-    for sc in sorted(
-        source_concepts,
-        key=lambda x: (
-            x.get("material_id", ""),
-            -float(x.get("confidence", 0.0) or 0.0),
-        ),
-    ):
-        mid = sc.get("material_id", "")
-        if mid and mid not in seen:
-            seen.add(mid)
-            unique_material_ids.append(mid)
-
-    current_reflection = _extract_marked_section(concept_page_text, "concept-reflection")
-    previous_reflection = tool.open_record("concept", cluster.get("cluster_id", "")) if tool else None
-
-    supporting_materials = []
-    query_terms = [
-        cluster.get("canonical_name", ""),
-        *(_safe_list(cluster.get("aliases", []))),
-        *[sc.get("concept_name", "") for sc in source_concepts if sc.get("concept_name")],
-    ]
-    for mid in unique_material_ids:
-        info = material_info.get(mid, {})
-        evidence = tool._material_evidence(mid, query_terms) if tool else {}
-        supporting_materials.append({
-            "material_id": mid,
-            "title": info.get("title", mid),
-            "summary": info.get("summary", ""),
-            "keywords": info.get("keywords", []),
-            "relevance": next((sc.get("relevance", "") for sc in source_concepts if sc.get("material_id") == mid), ""),
-            "concept_names": sorted({sc.get("concept_name", "") for sc in source_concepts if sc.get("material_id") == mid and sc.get("concept_name")}),
-            "evidence_spans": sorted({
-                span
-                for sc in source_concepts
-                if sc.get("material_id") == mid
-                for span in _safe_list(sc.get("evidence_spans", []))
-            }),
-            "source_pages": sorted({
-                int(p)
-                for sc in source_concepts
-                if sc.get("material_id") == mid
-                for p in _safe_list(sc.get("source_pages", []))
-                if str(p).isdigit()
-            }),
-            "evidence": evidence,
-        })
-
-    return {
-        "cluster_id": cluster.get("cluster_id", ""),
-        "canonical_name": cluster.get("canonical_name", ""),
-        "slug": cluster.get("slug", ""),
-        "aliases": cluster.get("aliases", []),
-        "material_count": len(unique_material_ids),
-        "materials": supporting_materials,
-        "current_reflection": current_reflection,
-        "previous_reflection": previous_reflection.get("reflection", {}) if isinstance(previous_reflection, dict) else {},
-        "concept_page": concept_page_text,
-        "query_terms": [term for term in query_terms if term],
-    }
-
-
 def _concept_reflection_stage_dir(root: Path) -> Path:
     return root / "derived" / "tmp" / "concept_reflections"
 
@@ -1953,11 +1884,9 @@ def _build_concept_reflection_evidence_payload(
 
 def _concept_reflection_scaffold(
     cluster: dict,
-    existing_record: dict | None,
     fingerprint: str,
     root: Path,
 ) -> dict:
-    existing_record = existing_record if isinstance(existing_record, dict) else {}
     source_concepts = cluster.get("source_concepts", [])
     supporting_material_ids = sorted({
         sc.get("material_id", "")
@@ -1973,10 +1902,10 @@ def _concept_reflection_scaffold(
         "cluster_id": cluster.get("cluster_id", ""),
         "slug": cluster.get("slug", ""),
         "canonical_name": cluster.get("canonical_name", ""),
-        "main_takeaways": _safe_list(existing_record.get("main_takeaways", [])),
-        "main_tensions": _safe_list(existing_record.get("main_tensions", [])),
-        "open_questions": _safe_list(existing_record.get("open_questions", [])),
-        "why_this_concept_matters": str(existing_record.get("why_this_concept_matters", "")).strip(),
+        "main_takeaways": [],
+        "main_tensions": [],
+        "open_questions": [],
+        "why_this_concept_matters": "",
         "supporting_material_ids": supporting_material_ids,
         "supporting_evidence": supporting_evidence,
         "input_fingerprint": fingerprint,
@@ -2235,25 +2164,19 @@ def _build_collection_reflection_evidence_payload(
 def _collection_reflection_scaffold(
     domain: str,
     collection: str,
-    existing_record: dict | None,
     fingerprint: str,
     root: Path,
 ) -> dict:
-    existing_record = existing_record if isinstance(existing_record, dict) else {}
     return {
         "collection_key": _collection_reflection_key(domain, collection),
         "domain": domain,
         "collection": collection,
-        "main_takeaways": _safe_list(existing_record.get("main_takeaways", [])),
-        "main_tensions": _safe_list(existing_record.get("main_tensions", [])),
-        "important_material_ids": _safe_list(existing_record.get("important_material_ids", [])),
-        "important_cluster_ids": _safe_list(existing_record.get("important_cluster_ids", [])),
-        "open_questions": _safe_list(existing_record.get("open_questions", [])),
-        "why_this_collection_matters": str(
-            existing_record.get("why_this_collection_matters", "")
-            or existing_record.get("why_this_concept_matters", "")
-            or ""
-        ).strip(),
+        "main_takeaways": [],
+        "main_tensions": [],
+        "important_material_ids": [],
+        "important_cluster_ids": [],
+        "open_questions": [],
+        "why_this_collection_matters": "",
         "input_fingerprint": fingerprint,
         "wiki_path": str(_collection_page_path(domain, collection)),
     }
@@ -2269,64 +2192,6 @@ def _collection_reflection_fingerprint(domain: str, collection: str, metas: list
         "collection_key": _collection_reflection_key(domain, collection),
         "material_ids": material_ids,
     })
-
-
-def _collection_reflection_prompt(
-    domain: str,
-    collection: str,
-    page_path: Path,
-    evidence_path: Path,
-    work_path: Path,
-) -> tuple[str, str]:
-    system = (
-        "You are an architecture research librarian writing reflective synthesis for a collection page.\n"
-        "\n"
-        "Your job is not to restate the collection page. Your job is to explain what the collection is doing as a whole: "
-        "the main takeaways, the main tensions, the important materials and bridge concepts, and the open questions that should stay visible.\n"
-        "\n"
-        "Use the collection wiki page as the current public state of the collection. Use the staged SQL-evidence file for "
-        "the supporting materials, methodological conclusions, main content learnings, chunks, annotations, figures, and compact bridge-concept "
-        "summaries that ground the synthesis. Use the work file as the source of truth for this run and edit it in place. Preserve prior "
-        "conclusions when they still hold, but revise them when the evidence changes.\n"
-        "\n"
-        "The material-level methodological conclusions and main content learnings are the primary reusable evidence for each material. "
-        "The chunks are only secondary support. Chunks with source=search are the strongest matches to the collection evidence queries. "
-        "Chunks with source=fallback are only fill-in evidence for the same material and may be less directly relevant. "
-        "Prefer the search-sourced chunks when forming the synthesis, and keep the chunk selection compact.\n"
-        "\n"
-        "For each reflection, be specific and cumulative. Prefer concrete main takeaways over generic summaries. "
-        "Write the reflection as a synthesis, not as a list of facts. The reflection should usually cover: "
-        "the collection's central through-line, the strongest supporting materials, the most important bridge concepts, "
-        "the main tensions or ambiguities, the open questions worth tracking, and a concise statement of why this collection matters to the larger corpus.\n"
-        "If this is the first run, the scaffold in the work file already has the right shape; fill it with a strong "
-        "first synthesis instead of waiting for prior history. Keep the work file valid JSON.\n"
-        "\n"
-        "When finished, emit PROCESS_FINISHED as a stop marker."
-    )
-    user = (
-        f"Read these files:\n"
-        f"- Collection wiki page: {page_path}\n"
-        f"- SQL evidence file: {evidence_path}\n"
-        f"- Work file: {work_path}\n"
-        "\n"
-        "The collection wiki page is the current public page and already contains the materials, key concepts, and any previous reflection.\n"
-        "The SQL evidence file contains staged material packets split into new_materials and old_materials.\n"
-        "new_materials are the materials that were not present in the previous collection reflection and therefore carry the strongest evidence.\n"
-        "old_materials are materials already present in the previous collection reflection; they are only compact continuity context.\n"
-        "The chunks inside new_materials are ordered by usefulness; source=search is the strongest match to the collection queries, while source=fallback is only secondary support.\n"
-        "The chunks are only secondary support.\n"
-        "The bridge_concepts entries are short synthesized cues from the concept reflections, not raw membership ids.\n"
-        "Treat the new_materials as the main evidence for this run and the old_materials as compact background continuity.\n"
-        "Treat the methodological conclusions and main content learnings as the primary material-level evidence; the chunks are only a small supporting slice.\n"
-        "The work file is the source of truth for this run; if this is the first reflection, it already has the right scaffold and field structure.\n"
-        "Update the reflection fields in that scaffold rather than inventing a new shape.\n"
-        "Write a strong reflection that includes the main takeaways, main tensions, important materials, important bridge concepts, open questions, and why this collection matters.\n"
-        "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
-        "Do not leave the work file as a mere summary of the page. Use the evidence to surface the collection's role, stakes, and unresolved questions.\n"
-        f"Edit {work_path} in place.\n"
-        "After editing the work file, emit PROCESS_FINISHED as a stop marker.\n"
-    )
-    return system, user
 
 
 def _cluster_audit_prompt(root: Path, input_path: Path, bridge_work_path: Path, reviews_work_path: Path) -> tuple[str, str]:
@@ -2352,10 +2217,10 @@ def _cluster_audit_prompt(root: Path, input_path: Path, bridge_work_path: Path, 
     )
     user = (
         f"Read these files:\n"
-        f"- {bridge_work_path}\n"
-        f"- {reviews_work_path}\n"
         f"- {input_path}\n"
         "- If the packet points to a bridge packet file, read that too.\n"
+        f"- {reviews_work_path}\n"
+        f"- {bridge_work_path}\n"
         "\n"
         "The duplicated work files are the source of truth; edit them in place rather than creating fresh outputs.\n"
         "The bridge work file is JSONL and already contains the current bridge graph.\n"
@@ -2401,9 +2266,9 @@ def _concept_reflection_prompt(
     )
     user = (
         f"Read these files:\n"
+        f"- Work file: {work_path}\n"
         f"- Concept wiki page: {page_path}\n"
         f"- SQL evidence file: {evidence_path}\n"
-        f"- Work file: {work_path}\n"
         "\n"
         "The concept wiki page is the current public page and already contains linked materials, annotations, figures, and any previous reflection.\n"
         "The SQL evidence file contains the staged evidence for this concept cluster.\n"
@@ -2414,6 +2279,64 @@ def _concept_reflection_prompt(
         "Write a strong reflection that includes the main takeaways, main tensions, open questions, and why this concept matters.\n"
         "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
         "Do not leave the work file as a mere summary of the page. Use the evidence to surface the concept's role, stakes, and unresolved questions.\n"
+        f"Edit {work_path} in place.\n"
+        "After editing the work file, emit PROCESS_FINISHED as a stop marker.\n"
+    )
+    return system, user
+
+
+def _collection_reflection_prompt(
+    domain: str,
+    collection: str,
+    page_path: Path,
+    evidence_path: Path,
+    work_path: Path,
+) -> tuple[str, str]:
+    system = (
+        "You are an architecture research librarian writing reflective synthesis for a collection page.\n"
+        "\n"
+        "Your job is not to restate the collection page. Your job is to explain what the collection is doing as a whole: "
+        "the main takeaways, the main tensions, the important materials and bridge concepts, and the open questions that should stay visible.\n"
+        "\n"
+        "Use the collection wiki page as the current public state of the collection. Use the staged SQL-evidence file for "
+        "the supporting materials, methodological conclusions, main content learnings, chunks, annotations, figures, and compact bridge-concept "
+        "summaries that ground the synthesis. Use the work file as the source of truth for this run and edit it in place. Preserve prior "
+        "conclusions when they still hold, but revise them when the evidence changes.\n"
+        "\n"
+        "The material-level methodological conclusions and main content learnings are the primary reusable evidence for each material. "
+        "The chunks are only secondary support. Chunks with source=search are the strongest matches to the collection evidence queries. "
+        "Chunks with source=fallback are only fill-in evidence for the same material and may be less directly relevant. "
+        "Prefer the search-sourced chunks when forming the synthesis, and keep the chunk selection compact.\n"
+        "\n"
+        "For each reflection, be specific and cumulative. Prefer concrete main takeaways over generic summaries. "
+        "Write the reflection as a synthesis, not as a list of facts. The reflection should usually cover: "
+        "the collection's central through-line, the strongest supporting materials, the most important bridge concepts, "
+        "the main tensions or ambiguities, the open questions worth tracking, and a concise statement of why this collection matters to the larger corpus.\n"
+        "If this is the first run, the scaffold in the work file already has the right shape; fill it with a strong "
+        "first synthesis instead of waiting for prior history. Keep the work file valid JSON.\n"
+        "\n"
+        "When finished, emit PROCESS_FINISHED as a stop marker."
+    )
+    user = (
+        f"Read these files:\n"
+        f"- Work file: {work_path}\n"
+        f"- Collection wiki page: {page_path}\n"
+        f"- SQL evidence file: {evidence_path}\n"
+        "\n"
+        "The collection wiki page is the current public page and already contains the materials, key concepts, and any previous reflection.\n"
+        "The SQL evidence file contains staged material packets split into new_materials and old_materials.\n"
+        "new_materials are the materials that were not present in the previous collection reflection and therefore carry the strongest evidence.\n"
+        "old_materials are materials already present in the previous collection reflection; they are only compact continuity context.\n"
+        "The chunks inside new_materials are ordered by usefulness; source=search is the strongest match to the collection queries, while source=fallback is only secondary support.\n"
+        "The chunks are only secondary support.\n"
+        "The bridge_concepts entries are short synthesized cues from the concept reflections, not raw membership ids.\n"
+        "Treat the new_materials as the main evidence for this run and the old_materials as compact background continuity.\n"
+        "Treat the methodological conclusions and main content learnings as the primary material-level evidence; the chunks are only a small supporting slice.\n"
+        "The work file is the source of truth for this run; if this is the first reflection, it already has the right scaffold and field structure.\n"
+        "Update the reflection fields in that scaffold rather than inventing a new shape.\n"
+        "Write a strong reflection that includes the main takeaways, main tensions, important materials, important bridge concepts, open questions, and why this collection matters.\n"
+        "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
+        "Do not leave the work file as a mere summary of the page. Use the evidence to surface the collection's role, stakes, and unresolved questions.\n"
         f"Edit {work_path} in place.\n"
         "After editing the work file, emit PROCESS_FINISHED as a stop marker.\n"
     )
@@ -2441,7 +2364,7 @@ def _graph_reflection_scaffold() -> str:
         {
             "findings": [],
         },
-        indent=2,
+        separators=(',', ':'),
         ensure_ascii=False,
     )
 
@@ -2555,13 +2478,13 @@ def _graph_reflection_prompt(
     )
     user = (
         f"Read these files:\n"
-        f"- Graph-state packet: {packet_path}\n"
         f"- Work file: {work_path}\n"
+        f"- Graph-state packet: {packet_path}\n"
         "\n"
         "The packet is ultra-compact graph state: summary counts, bridge-graph shape, cluster reviews, "
         "concept threads, and collection threads.\n"
         "The work file is JSON. If this is the first run, it already has the right scaffold with a findings array; "
-        "fill it with the current unresolved maintenance items instead of inventing a new shape.\n"
+        "update it with the current unresolved items instead of inventing a new shape.\n"
         "Write a prioritized maintenance record, not a raw list of everything. Focus on the few unresolved "
         "semantic problems that matter most: weak bridge areas, missing concept homes, collection synthesis gaps, "
         "and the next questions or sources that would move the graph forward.\n"
@@ -2570,216 +2493,8 @@ def _graph_reflection_prompt(
         "After editing the work file, emit PROCESS_FINISHED as a stop marker.\n"
     )
     return system, user
-
-
-def _bridge_maintenance_prompt(
-    maintenance_input_path: Path,
-    maintenance_output_path: Path,
-) -> tuple[str, str]:
-    system = (
-        "You are an architecture research librarian maintaining the bridge-concept graph. "
-        "Return JSON only. Read the bridge-maintenance packet file and use the cluster reviews as maintainer feedback. "
-        "If the reviews indicate that two bridge concepts are duplicates or should merge, "
-        "propose a merge action. If a bridge concept has a better canonical name, propose a rename. "
-        "If a bridge concept is clearly over-merged or internally inconsistent, propose a split. "
-        "If a bridge concept is indefensible, propose a delete. "
-        "Only propose safe actions that preserve the underlying evidence and prior work whenever possible. "
-        "You will get only one read-only context round, so request everything you need at once."
-    )
-    user = (
-        f"Read the bridge-maintenance packet file from {maintenance_input_path}.\n"
-        "Review the bridge clusters and cluster audit findings in that file, then return a JSON object "
-        "with keys: actions, context_requests.\n"
-        "actions must be a JSON array. context_requests is optional and must be a JSON array of "
-        "read-only SQL-index lookups if you need more context.\n"
-        "Each action must include: action_type (merge|rename|split|delete|keep), target_cluster_ids, "
-        "canonical_name, aliases, reason, confidence.\n"
-        "Only use action_type=merge when the target clusters are truly the same cross-material concept.\n"
-        "Only use action_type=rename when the cluster is correct but badly named.\n"
-        "Use action_type=split when one bridge cluster should become two or more bridge clusters; include split_clusters.\n"
-        "Use action_type=delete only when the cluster is clearly invalid.\n"
-        f"Write the updated bridge-maintenance JSON to {maintenance_output_path} using the Write tool.\n"
-        "Do not stream JSON into the response.\n"
-        "Confirm with a single line when done.\n"
-    )
-    return system, user
-
-
-def _bridge_discovery_prompt(
-    local_packets_path: Path,
-    bridge_work_path: Path,
-) -> tuple[str, str]:
-    system = (
-        "You are an architecture research librarian discovering new bridge concepts from concepts. "
-        "Return JSON only. Preserve the existing bridge graph and only propose genuinely new bridge concepts "
-        "when the concepts clearly connect multiple materials. Do not recreate the existing bridge graph "
-        "from scratch; build on the bridge memory file you are given. "
-        "You will get only one read-only context round, so request everything you need at once."
-    )
-    user = (
-        f"Read the concept packet file from {local_packets_path}.\n"
-        f"Read the duplicated bridge memory work file from {bridge_work_path}.\n"
-        "Use the concepts as discovery material and propose only genuinely new bridge concepts.\n"
-        "Do not duplicate bridge concepts already represented in the bridge memory work file.\n"
-        "Bridge clusters must connect at least two materials.\n"
-        f"Edit {bridge_work_path} in place to add only the new bridge clusters.\n"
-        "Do not stream JSON into the response.\n"
-        "Confirm with a single line when done.\n\n"
-        "Return a JSON object with keys: clusters, context_requests.\n"
-        "clusters must be a JSON array of bridge cluster objects.\n"
-        "Each cluster object should include: canonical_name, aliases, source_concepts, confidence.\n"
-        "source_concepts must be a JSON array of {material_id, concept_name} entries.\n"
-        "context_requests is optional and must be a JSON array of read-only SQL-index lookups if you need more context."
-    )
-    return system, user
-
-
-def _run_reflection_prompt_with_context(
-    llm_fn,
-    system: str,
-    user: str,
-    schema_description: str,
-    tool: ReflectionIndexTool | None,
-) -> Any:
-    raw = llm_fn(system, [{"role": "user", "content": user}])
-    parsed = parse_json_or_repair(llm_fn, raw, schema_description)
-    requests = _extract_context_requests(parsed)
-    if requests and tool is not None:
-        tool_results = _execute_context_requests(tool, requests)
-        followup_user = (
-            f"{user}\n\n"
-            "You requested more context from the read-only SQL-index tool.\n"
-            "Tool results:\n"
-            f"{_format_context_tool_results(tool_results)}\n\n"
-            "Revise your answer using the added context. Return final JSON only."
-        )
-        raw = llm_fn(system, [{"role": "user", "content": followup_user}])
-        parsed = parse_json_or_repair(llm_fn, raw, schema_description)
-    if isinstance(parsed, dict):
-        parsed.pop("context_requests", None)
-    return parsed
-
-
 def _run_file_editing_prompt(llm_fn, system: str, user: str) -> str:
     return str(llm_fn(system, [{"role": "user", "content": user}]))
-
-
-def _merge_bridge_clusters(
-    bridge_clusters: list[dict],
-    action: dict,
-) -> dict | None:
-    target_ids = []
-    seen_ids: set[str] = set()
-    for cid in _safe_list(action.get("target_cluster_ids", [])):
-        if cid and cid not in seen_ids:
-            seen_ids.add(cid)
-            target_ids.append(cid)
-    if len(target_ids) < 2:
-        return None
-
-    by_id = {cluster.get("cluster_id", ""): cluster for cluster in bridge_clusters if cluster.get("cluster_id", "")}
-    selected = [by_id[cid] for cid in target_ids if cid in by_id]
-    if len(selected) < 2:
-        return None
-
-    survivor = selected[0]
-    merged_source: list[dict] = []
-    merged_material_ids: list[str] = []
-    merged_aliases = []
-    seen_pairs: set[tuple[str, str]] = set()
-    for cluster in selected:
-        merged_aliases.extend(_safe_list(cluster.get("aliases", [])))
-        for mid in _safe_list(cluster.get("material_ids", [])):
-            if mid and mid not in merged_material_ids:
-                merged_material_ids.append(mid)
-        for source in cluster.get("source_concepts", []):
-            if not isinstance(source, dict):
-                continue
-            pair = (str(source.get("material_id", "")).strip(), str(source.get("concept_name", "")).strip())
-            if not pair[0] or not pair[1] or pair in seen_pairs:
-                continue
-            seen_pairs.add(pair)
-            merged_source.append({
-                "material_id": pair[0],
-                "concept_name": pair[1],
-                "relevance": source.get("relevance", ""),
-                "source_pages": source.get("source_pages", []),
-                "evidence_spans": source.get("evidence_spans", []),
-                "confidence": source.get("confidence", 0.0),
-            })
-
-    canonical_name = str(action.get("canonical_name", "")).strip() or survivor.get("canonical_name", "")
-    aliases = _dedupe_strings([
-        canonical_name,
-        *merged_aliases,
-        *[src["concept_name"] for src in merged_source],
-        *(_safe_list(action.get("aliases", []))),
-    ])
-
-    merged = {
-        **survivor,
-        "canonical_name": canonical_name,
-        "slug": slugify(canonical_name),
-        "aliases": aliases,
-        "material_ids": merged_material_ids,
-        "source_concepts": merged_source,
-        "confidence": float(action.get("confidence", survivor.get("confidence", 0.0)) or 0.0),
-        "wiki_path": f"wiki/shared/bridge-concepts/{slugify(canonical_name)}.md",
-    }
-    return merged
-
-
-def _split_bridge_clusters(
-    bridge_clusters: list[dict],
-    action: dict,
-) -> list[dict] | None:
-    target_ids = [cid for cid in _safe_list(action.get("target_cluster_ids", [])) if cid]
-    if len(target_ids) != 1:
-        return None
-    target_id = target_ids[0]
-    existing = {cluster.get("cluster_id", ""): cluster for cluster in bridge_clusters if cluster.get("cluster_id", "")}
-    if target_id not in existing:
-        return None
-    split_clusters = action.get("split_clusters", [])
-    if not isinstance(split_clusters, list) or not split_clusters:
-        return None
-
-    target = existing[target_id]
-    concept_index: dict[tuple[str, str], dict] = {}
-    for source in target.get("source_concepts", []) or []:
-        if not isinstance(source, dict):
-            continue
-        material_id = str(source.get("material_id", "")).strip()
-        concept_name = str(source.get("concept_name", "")).strip()
-        if not material_id or not concept_name:
-            continue
-        concept_key = str(source.get("concept_key", "")).strip() or concept_name.lower().strip()
-        concept_index[(material_id, concept_key)] = {
-            "concept_name": concept_name,
-            "concept_key": concept_key,
-            "material_id": material_id,
-            "relevance": source.get("relevance", ""),
-            "source_pages": source.get("source_pages", []),
-            "evidence_spans": source.get("evidence_spans", []),
-            "confidence": source.get("confidence", 0.0),
-        }
-
-    validated = _validate_bridge_and_attach_provenance(split_clusters, concept_index, {})
-    if not validated:
-        return None
-
-    remaining = [cluster for cluster in bridge_clusters if cluster.get("cluster_id", "") != target_id]
-    start = _next_bridge_cluster_index(remaining)
-    reassigned = []
-    for idx, cluster in enumerate(validated, start=start):
-        reassigned.append({
-            **cluster,
-            "cluster_id": f"bridge_{idx:04d}",
-            "wiki_path": f"wiki/shared/bridge-concepts/{cluster.get('slug', '')}.md" if cluster.get("slug", "") else "",
-        })
-    return remaining + reassigned
-
-
 def _next_bridge_cluster_index(clusters: list[dict]) -> int:
     max_idx = 0
     for cluster in clusters:
@@ -2827,93 +2542,6 @@ def _cover_pairs_from_clusters(clusters: list[dict]) -> set[tuple[str, str]]:
             if material_id and concept_key:
                 covered.add((material_id, concept_key))
     return covered
-
-
-def _apply_bridge_cluster_maintenance(
-    root: Path,
-    bridge_clusters: list[dict],
-    actions: list[dict],
-) -> tuple[list[dict], int]:
-    """Apply safe bridge-cluster maintenance actions and persist them."""
-    if not actions:
-        return bridge_clusters, 0
-
-    working = {cluster.get("cluster_id", ""): cluster for cluster in bridge_clusters if cluster.get("cluster_id", "")}
-    changed = 0
-
-    for action in actions:
-        if not isinstance(action, dict):
-            continue
-        action_type = str(action.get("action_type", "")).strip().lower()
-        target_ids = [cid for cid in _safe_list(action.get("target_cluster_ids", [])) if cid in working]
-        if action_type == "merge":
-            if len(target_ids) < 2:
-                continue
-            merged = _merge_bridge_clusters([working[cid] for cid in target_ids], action)
-            if merged is None:
-                continue
-            survivor_id = target_ids[0]
-            for cid in target_ids[1:]:
-                working.pop(cid, None)
-            working[survivor_id] = merged
-            changed += 1
-        elif action_type == "rename":
-            if len(target_ids) != 1:
-                continue
-            cid = target_ids[0]
-            cluster = working[cid]
-            canonical_name = str(action.get("canonical_name", "")).strip() or cluster.get("canonical_name", "")
-            cluster = {
-                **cluster,
-                "canonical_name": canonical_name,
-                "slug": slugify(canonical_name),
-                "aliases": _dedupe_strings([
-                    canonical_name,
-                    *(_safe_list(cluster.get("aliases", []))),
-                    *(_safe_list(action.get("aliases", []))),
-                ]),
-                "wiki_path": f"wiki/shared/bridge-concepts/{slugify(canonical_name)}.md",
-            }
-            working[cid] = cluster
-            changed += 1
-        elif action_type == "delete":
-            if len(target_ids) != 1:
-                continue
-            working.pop(target_ids[0], None)
-            changed += 1
-        elif action_type == "split":
-            split = _split_bridge_clusters(list(working.values()), action)
-            if split is None:
-                continue
-            working = {cluster.get("cluster_id", ""): cluster for cluster in split if cluster.get("cluster_id", "")}
-            changed += 1
-        elif action_type == "keep":
-            continue
-
-    if changed <= 0:
-        return bridge_clusters, 0
-
-    updated = sorted(working.values(), key=lambda c: c.get("cluster_id", ""))
-    derived_dir = root / "derived"
-    derived_dir.mkdir(exist_ok=True)
-    bridge_path = derived_dir / "bridge_concept_clusters.jsonl"
-    with bridge_path.open("w", encoding="utf-8") as f:
-        for cluster in updated:
-            f.write(json.dumps(cluster, ensure_ascii=False) + "\n")
-
-    stamp_path = derived_dir / "bridge_cluster_stamp.json"
-    stamp_path.write_text(
-        json.dumps({
-            "clustered_at": datetime.now(timezone.utc).isoformat(),
-            "fingerprint": bridge_cluster_fingerprint(None),
-            "bridge_concepts": sum(len(c.get("source_concepts", [])) for c in updated),
-            "clusters": len(updated),
-        }, indent=2),
-        encoding="utf-8",
-    )
-    return updated, changed
-
-
 def _build_material_info(root: Path, manifest_records: list[dict]) -> dict[str, dict]:
     metas = _load_all_metas(root, manifest_records)
     info: dict[str, dict] = {}
@@ -3157,7 +2785,7 @@ def _run_cluster_audit(
             "fingerprint": bridge_cluster_fingerprint(None),
             "bridge_concepts": sum(len(c.get("source_concepts", [])) for c in bridge_work),
             "clusters": len(bridge_work),
-        }, indent=2),
+        }, separators=(',', ':')),
         encoding="utf-8",
     )
     _cleanup_paths(input_path, bridge_work_path, reviews_work_path, bridge_packets_path or Path())
@@ -3189,7 +2817,7 @@ def _run_concept_reflections(
         _stage_reflection_page_copy(page_path, page_copy_path)
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         _write_json(evidence_path, evidence_payload)
-        scaffold = _concept_reflection_scaffold(cluster, existing_record, fingerprint, root)
+        scaffold = _concept_reflection_scaffold(cluster, fingerprint, root)
         _write_json(work_path, scaffold)
         llm_fn = llm_factory("cluster")
         system, user = _concept_reflection_prompt(cluster, page_copy_path, evidence_path, work_path)
@@ -3272,7 +2900,7 @@ def _run_collection_reflections(
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_payload = _build_collection_reflection_evidence_payload(root, domain, collection, metas, clusters, existing_record, tool)
         _write_json(evidence_path, evidence_payload)
-        scaffold = _collection_reflection_scaffold(domain, collection, existing_record, fingerprint, root)
+        scaffold = _collection_reflection_scaffold(domain, collection, fingerprint, root)
         _write_json(work_path, scaffold)
         llm_fn = llm_factory("cluster")
         system, user = _collection_reflection_prompt(domain, collection, page_copy_path, evidence_path, work_path)
@@ -3420,235 +3048,6 @@ def _run_graph_reflection(
         "graph_skipped": False,
         "graph_skip_reason": "",
     }
-
-
-def _run_bridge_cluster_maintenance(
-    root: Path,
-    bridge_clusters: list[dict],
-    cluster_reviews: list[dict],
-    material_info: dict[str, dict],
-    llm_factory=None,
-    tool: ReflectionIndexTool | None = None,
-) -> tuple[list[dict], int]:
-    """Ask the maintainer LLM whether bridge clusters should be merged/renamed."""
-    if not bridge_clusters or not cluster_reviews:
-        return bridge_clusters, 0
-
-    prompt_reviews = [
-        review for review in cluster_reviews
-        if str(review.get("finding_type", "")).strip().lower() in {"merge", "duplicate", "missed_equivalence", "over_merged"}
-        or str(review.get("severity", "")).strip().lower() in {"high", "medium"}
-    ]
-    if not prompt_reviews:
-        return bridge_clusters, 0
-
-    payload = {
-        "bridge_clusters": [
-            {
-                "cluster_id": cluster.get("cluster_id", ""),
-                "canonical_name": cluster.get("canonical_name", ""),
-                "slug": cluster.get("slug", ""),
-                "aliases": cluster.get("aliases", []),
-                "material_ids": cluster.get("material_ids", []),
-                "source_concepts": cluster.get("source_concepts", []),
-                "confidence": cluster.get("confidence", 0.0),
-                "wiki_path": cluster.get("wiki_path", ""),
-            }
-            for cluster in bridge_clusters
-        ],
-        "cluster_reviews": prompt_reviews,
-        "material_info": material_info,
-    }
-    maintenance_input_path = root / "derived" / "tmp" / "bridge_maintenance_input.json"
-    maintenance_output_path = root / "derived" / "tmp" / "bridge_maintenance_output.json"
-    _write_json(maintenance_input_path, payload)
-
-    existing_path = root / LINT_DIR / "bridge_maintenance.jsonl"
-    existing = _load_jsonl(existing_path)
-    fingerprint = canonical_hash(payload)
-    if existing and all(row.get("input_fingerprint") == fingerprint for row in existing):
-        return bridge_clusters, 0
-
-    if maintenance_output_path.exists():
-        maintenance_output_path.unlink()
-
-    llm_fn = llm_factory("lint")
-    system, user = _bridge_maintenance_prompt(maintenance_input_path, maintenance_output_path)
-    parsed = _run_reflection_prompt_with_context(
-        llm_fn,
-        system,
-        user,
-        "JSON object with keys: actions (array) and optional context_requests (array of read-only SQL-index lookups)",
-        tool,
-    )
-    if maintenance_output_path.exists() and maintenance_output_path.stat().st_size > 0:
-        try:
-            parsed = json.loads(maintenance_output_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            pass
-    actions = parsed.get("actions", []) if isinstance(parsed, dict) else parsed
-    if not isinstance(actions, list):
-        raise EnrichmentError("Bridge maintenance returned non-list actions")
-
-    applied_actions = []
-    updated_clusters = bridge_clusters
-    changed = 0
-    if actions:
-        updated_clusters, changed = _apply_bridge_cluster_maintenance(root, bridge_clusters, actions)
-        applied_actions = [
-            {
-                "action_type": str(action.get("action_type", "")).strip().lower(),
-                "target_cluster_ids": _safe_list(action.get("target_cluster_ids", [])),
-                "canonical_name": str(action.get("canonical_name", "")).strip(),
-                "aliases": _safe_list(action.get("aliases", [])),
-                "reason": str(action.get("reason", "")).strip(),
-                "confidence": float(action.get("confidence", 0.0) or 0.0),
-            }
-            for action in actions
-            if isinstance(action, dict)
-        ]
-
-    _write_jsonl(
-        existing_path,
-        [{
-            "input_fingerprint": fingerprint,
-            "actions": applied_actions,
-            "applied": bool(changed),
-            "bridge_cluster_count": len(updated_clusters),
-        }],
-    )
-    return updated_clusters, changed
-
-
-def _run_bridge_cluster_discovery(
-    root: Path,
-    bridge_clusters: list[dict],
-    llm_factory=None,
-    tool: ReflectionIndexTool | None = None,
-) -> tuple[list[dict], int]:
-    """Ask the maintainer LLM for genuinely new bridge concepts from local concepts."""
-    local_rows, material_rows = _local_rows_not_in_bridge(root, bridge_clusters)
-    if not local_rows or not material_rows:
-        return bridge_clusters, 0
-
-    existing_path = root / LINT_DIR / "bridge_discovery.jsonl"
-    existing = _load_jsonl(existing_path)
-
-    bridge_packets_path = _stage_bridge_packet_input(root, local_rows, material_rows)
-    work_bridge_path = root / "derived" / "tmp" / "bridge_concept_clusters.discovery.work.jsonl"
-    _stage_work_copy(root / "derived" / "bridge_concept_clusters.jsonl", work_bridge_path)
-
-    payload = {
-        "bridge_clusters": bridge_clusters,
-        "local_rows": local_rows,
-        "material_rows": material_rows,
-    }
-    fingerprint = canonical_hash(payload)
-    if existing and all(row.get("input_fingerprint") == fingerprint for row in existing):
-        return bridge_clusters, 0
-
-    llm_fn = llm_factory("lint")
-    system, user = _bridge_discovery_prompt(bridge_packets_path, work_bridge_path)
-    raw = llm_fn(system, [{"role": "user", "content": user}])
-    clusters = _load_jsonl(work_bridge_path)
-    if not clusters:
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            parsed = {}
-        clusters = parsed.get("clusters", []) if isinstance(parsed, dict) else parsed
-    elif raw:
-        try:
-            parsed = json.loads(raw)
-        except (TypeError, json.JSONDecodeError):
-            parsed = {}
-        if isinstance(parsed, dict) and isinstance(parsed.get("clusters", []), list) and parsed.get("clusters"):
-            clusters = parsed.get("clusters", [])
-    if not isinstance(clusters, list):
-        raise EnrichmentError("Bridge discovery returned non-list clusters")
-
-    concept_index: dict[tuple[str, str], dict] = {}
-    for row in local_rows:
-        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type, descriptor = _split_concept_row(row)
-        concept_index[(material_id, concept_key)] = {
-            "concept_name": concept_name,
-            "concept_key": concept_key,
-            "material_id": material_id,
-            "concept_type": concept_type,
-            "relevance": relevance,
-            "source_pages": source_pages,
-            "evidence_spans": evidence_spans,
-            "confidence": confidence,
-            "descriptor": descriptor,
-        }
-
-    validated = _validate_bridge_and_attach_provenance(clusters, concept_index, {})
-    covered_pairs = _cover_pairs_from_clusters(bridge_clusters)
-    new_clusters: list[dict] = []
-    for cluster in validated:
-        filtered_sources = [
-            source for source in cluster.get("source_concepts", [])
-            if (source.get("material_id", ""), source.get("concept_key", "")) not in covered_pairs
-        ]
-        material_ids = list(dict.fromkeys(source.get("material_id", "") for source in filtered_sources if source.get("material_id", "")))
-        if len(material_ids) < 2:
-            continue
-        canonical_name = cluster.get("canonical_name", "").strip()
-        aliases = _dedupe_strings([
-            canonical_name,
-            *(_safe_list(cluster.get("aliases", []))),
-            *[source.get("concept_name", "") for source in filtered_sources if source.get("concept_name", "")],
-        ])
-        new_clusters.append({
-            "canonical_name": canonical_name or filtered_sources[0].get("concept_name", ""),
-            "slug": slugify(canonical_name or filtered_sources[0].get("concept_name", "")),
-            "aliases": aliases,
-            "material_ids": material_ids,
-            "source_concepts": filtered_sources,
-            "confidence": float(cluster.get("confidence", 0.0) or 0.0),
-        })
-
-    if not new_clusters:
-        _write_jsonl(existing_path, [{
-            "input_fingerprint": fingerprint,
-            "new_clusters": 0,
-            "applied": False,
-            "bridge_cluster_count": len(bridge_clusters),
-        }])
-        _cleanup_paths(work_bridge_path, bridge_packets_path)
-        return bridge_clusters, 0
-
-    assigned = _assign_new_bridge_ids(new_clusters, bridge_clusters)
-    updated = sorted([*bridge_clusters, *assigned], key=lambda c: c.get("cluster_id", ""))
-
-    derived_dir = root / "derived"
-    derived_dir.mkdir(exist_ok=True)
-    bridge_path = derived_dir / "bridge_concept_clusters.jsonl"
-    with bridge_path.open("w", encoding="utf-8") as f:
-        for cluster in updated:
-            f.write(json.dumps(cluster, ensure_ascii=False) + "\n")
-
-    stamp_path = derived_dir / "bridge_cluster_stamp.json"
-    stamp_path.write_text(
-        json.dumps({
-            "clustered_at": datetime.now(timezone.utc).isoformat(),
-            "fingerprint": bridge_cluster_fingerprint(None),
-            "bridge_concepts": sum(len(c.get("source_concepts", [])) for c in updated),
-            "clusters": len(updated),
-        }, indent=2),
-        encoding="utf-8",
-    )
-
-    _write_jsonl(existing_path, [{
-        "input_fingerprint": fingerprint,
-        "new_clusters": len(assigned),
-        "applied": True,
-        "bridge_cluster_count": len(updated),
-    }])
-    _cleanup_paths(work_bridge_path, bridge_packets_path)
-    return updated, len(assigned)
-
-
 def run_reflective_lint(
     config: dict,
     deterministic_report: dict,

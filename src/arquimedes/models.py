@@ -272,7 +272,7 @@ class MaterialMeta:
         path = extracted_dir / self.material_id / "meta.json"
         path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "w") as f:
-            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+            json.dump(self.to_dict(), f, separators=(',', ':'), ensure_ascii=False)
 
     @classmethod
     def load(cls, extracted_dir: Path, material_id: str) -> MaterialMeta:

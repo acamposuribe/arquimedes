@@ -192,6 +192,8 @@ class MaterialMeta:
     document_type: EnrichedField | None = None
     summary: EnrichedField | None = None
     keywords: EnrichedField | None = None
+    methodological_conclusions: EnrichedField | None = None
+    main_content_learnings: EnrichedField | None = None
     facets: ArchitectureFacets | None = None
 
     # Enrichment stamp (set by enrich stage, used for staleness checks)
@@ -221,6 +223,10 @@ class MaterialMeta:
             result["summary"] = self.summary.to_dict()
         if self.keywords is not None:
             result["keywords"] = self.keywords.to_dict()
+        if self.methodological_conclusions is not None:
+            result["methodological_conclusions"] = self.methodological_conclusions.to_dict()
+        if self.main_content_learnings is not None:
+            result["main_content_learnings"] = self.main_content_learnings.to_dict()
         if self.facets is not None:
             result["facets"] = self.facets.to_dict()
         if self._enrichment_stamp is not None:
@@ -252,6 +258,10 @@ class MaterialMeta:
             meta.summary = EnrichedField.from_dict(data["summary"])
         if "keywords" in data:
             meta.keywords = EnrichedField.from_dict(data["keywords"])
+        if "methodological_conclusions" in data:
+            meta.methodological_conclusions = EnrichedField.from_dict(data["methodological_conclusions"])
+        if "main_content_learnings" in data:
+            meta.main_content_learnings = EnrichedField.from_dict(data["main_content_learnings"])
         if "facets" in data:
             meta.facets = ArchitectureFacets.from_dict(data["facets"])
         if "_enrichment_stamp" in data:
@@ -451,12 +461,18 @@ class ConceptCandidate:
     """LLM-identified concept candidate stored in concepts.jsonl."""
 
     concept_name: str
+    descriptor: str = ""
     concept_type: str = "local"
     relevance: str = ""
     provenance: Provenance | None = None
 
     def to_dict(self) -> dict:
-        result = {"concept_name": self.concept_name, "concept_type": self.concept_type, "relevance": self.relevance}
+        result = {
+            "concept_name": self.concept_name,
+            "descriptor": self.descriptor,
+            "concept_type": self.concept_type,
+            "relevance": self.relevance,
+        }
         if self.provenance is not None:
             result["provenance"] = asdict(self.provenance)
         return result
@@ -468,6 +484,7 @@ class ConceptCandidate:
             prov = Provenance(**data["provenance"])
         return cls(
             concept_name=data["concept_name"],
+            descriptor=data.get("descriptor", ""),
             concept_type=data.get("concept_type", "local"),
             relevance=data.get("relevance", ""),
             provenance=prov,

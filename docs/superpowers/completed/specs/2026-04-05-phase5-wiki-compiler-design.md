@@ -2,17 +2,20 @@
 
 > **Status:** Complete
 > **Date:** 2026-04-05
-> **Related specs:** [Full system design](../../specs/2026-04-04-arquimedes-knowledge-system-design.md), [Connection model](2026-04-05-connection-model.md), [Phase 3 enrichment](2026-04-04-phase3-enrichment-design.md), [Phase 4 search index](2026-04-04-phase4-search-index-design.md), [Phase 5 collection pages addendum](2026-04-05-phase5-collection-pages-design.md)
+> **Related specs:** [Full system design](../../specs/2026-04-04-arquimedes-knowledge-system-design.md), [Connection model](2026-04-05-connection-model.md), [Phase 3 enrichment](2026-04-04-phase3-enrichment-design.md), [Phase 4 search index](2026-04-04-phase4-search-index-design.md)
 > **Plan:** [PLAN.md](../../../PLAN.md)
 
 ## Purpose
 
 Phase 5 turns Arquimedes from a searchable archive into an LLM-maintained wiki. It promotes the structural, semantic, and retrieval connections built in Phases 2–4 into durable, navigable markdown pages.
 
-There are two jobs:
+There are two semantic jobs and three deterministic publication jobs:
 
 1. **Concept clustering** — one LLM pass to group per-material concept candidates into canonical cross-collection concepts
-2. **Page compilation** — deterministic rendering of wiki pages from enriched artifacts + cluster data
+2. **Page compilation** — deterministic rendering of material, concept, collection, and index pages from enriched artifacts + cluster data
+3. **Memory bridge projection** — deterministic projection of bridge clusters and wiki identities into SQLite
+4. **Collection synthesis** — deterministic collection `_index.md` pages that summarize membership and recurring concepts
+5. **Graph maintenance rendering** — deterministic rendering of the SQL-backed maintenance page that summarizes unresolved semantic issues
 
 The LLM is used once (clustering). Everything else is templates and data assembly.
 
@@ -24,9 +27,11 @@ Concept clustering requires language understanding — "archival habitat" and "a
 
 Page generation is mechanical: slot enriched fields into templates, resolve links, write markdown. No LLM needed. Deterministic first.
 
+Collection pages and the memory bridge are also deterministic. They extend the published graph without adding new semantic judgments.
+
 ### The cluster file is the handoff point
 
-`derived/concept_clusters.jsonl` is the single artifact that connects clustering to compilation. Clustering writes it; compilation reads it; linting (Phase 6) audits it. Everything flows through this file.
+`derived/bridge_concept_clusters.jsonl` is the single artifact that connects clustering to compilation. Clustering writes it; compilation reads it; linting (Phase 6) audits it. Everything flows through this file.
 
 ### Incremental by default
 
@@ -43,7 +48,9 @@ Phase 5 defines the first stable set of wiki structures the future server mainta
 **Currently maintainer-owned generated pages:**
 - `wiki/{domain}/{collection}/{material_id}.md` material pages
 - `wiki/shared/concepts/{slug}.md` concept pages
+- `wiki/shared/bridge-concepts/{slug}.md` bridge concept pages
 - `wiki/shared/glossary/_index.md`
+- `wiki/shared/maintenance/graph-health.md`
 - all generated `_index.md` pages, including:
   - `wiki/_index.md`
   - `wiki/{domain}/_index.md`
@@ -82,9 +89,9 @@ With the current library (2 materials, 22 concepts), this is a small payload. At
 
 1. **Load** all concept records from the index into a flat list
 2. **Pre-group** by exact `concept_key` match (free, deterministic — merge case/plural variants)
-3. **Build prompt** listing all unique concept keys with their material titles, relevance, and evidence spans. Ask the LLM to group semantically equivalent concepts into clusters, choose a canonical name, and assign a confidence. Evidence spans are critical — for scholarly material, concept names alone are often ambiguous; the quoted passages clarify whether two similarly-named concepts actually describe the same intellectual territory.
+3. **Build prompt** listing all unique concept keys with their material titles, relevance, descriptors, and evidence spans. Ask the LLM to group semantically equivalent concepts into clusters, choose a canonical name, and assign a confidence. Evidence spans are critical — for scholarly material, concept names alone are often ambiguous; the quoted passages clarify whether two similarly-named concepts actually describe the same intellectual territory.
 4. **Parse** LLM response into cluster records
-5. **Write** `derived/concept_clusters.jsonl`
+5. **Write** `derived/bridge_concept_clusters.jsonl`
 
 ### Prompt design
 
@@ -114,13 +121,21 @@ Output schema:
   {
     "cluster_id": "concept_0001",
     "canonical_name": "archive as architectural space",
-    "aliases": ["archive as architectural space", "archival habitat"],
-    "source_concepts": [
-      {"material_id": "bbf97c1aae06", "concept_name": "archival habitat"},
-      {"material_id": "b4f8dc3a028c", "concept_name": "Archive as architectural space"}
-    ],
-    "confidence": 0.85
-  }
+  "aliases": ["archive as architectural space", "archival habitat"],
+  "source_concepts": [
+      {
+        "material_id": "bbf97c1aae06",
+        "concept_name": "archival habitat",
+        "descriptor": "archives understood as built, inhabited environments"
+      },
+      {
+        "material_id": "b4f8dc3a028c",
+        "concept_name": "Archive as architectural space",
+        "descriptor": "the archive framed as spatial and architectural form"
+      }
+  ],
+  "confidence": 0.85
+}
 ]
 ```
 
@@ -134,9 +149,9 @@ Clustering is re-run when:
 - A material is added, removed, or re-enriched (concepts changed)
 - Force flag is passed (`arq cluster --force`)
 
-Staleness is tracked via a fingerprint over everything the prompt consumes: concept keys, material IDs, material titles, relevance, evidence spans, and confidence. If the fingerprint matches the one stored in `derived/cluster_stamp.json`, clustering is skipped. This ensures that any change to the LLM's input — whether a new concept, changed evidence, or a corrected material title — triggers re-clustering.
+Staleness is tracked via a fingerprint over everything the prompt consumes: concept keys, material IDs, material titles, relevance, evidence spans, and confidence. If the fingerprint matches the one stored in `derived/bridge_cluster_stamp.json`, clustering is skipped. This ensures that any change to the LLM's input — whether a new concept, changed evidence, or a corrected material title — triggers re-clustering.
 
-### Output: `derived/concept_clusters.jsonl`
+### Output: `derived/bridge_concept_clusters.jsonl`
 
 One JSON object per line:
 ```json
@@ -149,7 +164,7 @@ Fields:
 - `slug` — stable page path, derived from `canonical_name` (lowercased, spaces to hyphens, non-alphanum stripped)
 - `aliases` — all concept names (including canonical) that map to this cluster
 - `material_ids` — derived from `source_concepts`
-- `source_concepts` — `[{material_id, concept_name, relevance, source_pages, evidence_spans, confidence}]` — full provenance from the concepts table, carried through so concept pages can render evidence without re-querying
+- `source_concepts` — `[{material_id, concept_name, descriptor, relevance, source_pages, evidence_spans, confidence}]` — full provenance from the concepts table, carried through so concept pages can render evidence without re-querying
 - `confidence` — LLM's confidence in the grouping (0.0–1.0)
 
 ### `arq cluster` CLI
@@ -160,16 +175,16 @@ arq cluster [--force]
 
 - Reads concepts from the search index
 - Runs LLM clustering pass
-- Writes `derived/concept_clusters.jsonl` + `derived/cluster_stamp.json`
+- Writes `derived/bridge_concept_clusters.jsonl` + `derived/bridge_cluster_stamp.json`
 - Reports: N concepts → M clusters (K multi-material)
 
 ---
 
 ## Part 2: Wiki Compilation (`arq compile`)
 
-### Page types
+### Publication outputs
 
-The compiler generates four kinds of pages:
+The compiler generates six kinds of pages and one deterministic projection:
 
 #### 1. Material pages
 
@@ -188,7 +203,7 @@ Content (in order):
 
 #### 2. Concept pages
 
-Location: `wiki/shared/concepts/{slug}.md` where `slug` is stored in the cluster record (derived from `canonical_name`: lowercased, spaces to hyphens, non-alphanum stripped). Using `slug` from the cluster — not from any single `concept_key` — ensures stability when a cluster merges multiple keys under one LLM-chosen canonical name.
+Location: `wiki/shared/bridge-concepts/{slug}.md` where `slug` is stored in the cluster record (derived from `canonical_name`: lowercased, spaces to hyphens, non-alphanum stripped). Using `slug` from the cluster — not from any single `concept_key` — ensures stability when a cluster merges multiple keys under one LLM-chosen canonical name.
 
 Content (in order):
 1. **Canonical name** as H1
@@ -196,6 +211,7 @@ Content (in order):
 3. **Overview** — one sentence: "This concept appears in N materials."
 4. **By material** — for each entry in `source_concepts`:
    - Material title (linking to material page)
+   - Descriptor from `source_concepts[].descriptor`
    - Relevance level from `source_concepts[].relevance`
    - Evidence: `source_concepts[].evidence_spans` (quoted, with page refs from `source_concepts[].source_pages`)
 5. **Related concepts** — other clusters that share materials with this one
@@ -217,11 +233,40 @@ Location: `wiki/shared/glossary/_index.md`
 
 A simple alphabetical listing of all canonical concept names linking to their concept pages. No definitions — those live on concept pages. This is a navigation aid.
 
+#### 5. Collection pages
+
+Location: `wiki/{domain}/{collection}/_index.md`
+
+Collection pages are deterministic and first-class. They summarize the current material set in each collection without introducing new LLM synthesis on every compile.
+
+Content:
+1. **Collection title**
+2. **Overview** — domain, collection slug, material count, optional document-type counts
+3. **Recent additions** — newest materials in the collection
+4. **Materials** — full material list with links and short summaries when available
+5. **Key concepts** — canonical clusters that recur across the collection
+6. **Top facets** — frequent enriched facet values
+
+Collection pages should rebuild when collection membership changes, member material inputs change, or cluster data changes. At the current scale, recompiling all collection pages during `arq compile` is acceptable.
+
+#### 6. Memory bridge
+
+`arq compile` should automatically run the deterministic memory projection after successful page generation so the machine-queryable graph stays synchronized with the wiki.
+
+`arq memory rebuild` projects bridge concepts and wiki identities into SQLite.
+`arq memory ensure` is the local-safe stale check for collaborator machines.
+
+The memory bridge writes the deterministic projection of the published graph, not new semantic judgments.
+
+#### 7. Graph maintenance page
+
+`arq compile` also renders `wiki/shared/maintenance/graph-health.md` from SQL-backed graph findings after the memory bridge projection. This keeps the semantic maintenance backlog visible in the wiki while staying queryable through SQLite.
+
 ### Compilation algorithm
 
 ```
 compile(force=False):
-    1. Load concept clusters from derived/concept_clusters.jsonl
+    1. Load bridge concept clusters from derived/bridge_concept_clusters.jsonl
     2. Load all materials from extracted/*/meta.json
     3. Determine which pages need recompilation:
        a. If force: rebuild everything
@@ -231,9 +276,10 @@ compile(force=False):
     5. If cluster_stamp changed: render ALL concept pages
        (global stamp — no per-cluster tracking)
     6. Rebuild memory bridge from the compiled wiki / cluster graph
-    7. Render index pages (always, cheap)
-    8. Remove orphan pages (materials deleted from manifest)
-    9. Write compile stamp to derived/compile_stamp.json
+    7. Render graph-maintenance page from SQL-backed findings
+    8. Render index pages (always, cheap)
+    9. Remove orphan pages (materials deleted from manifest)
+    10. Write compile stamp to derived/compile_stamp.json
 ```
 
 ### Incremental tracking
@@ -246,7 +292,7 @@ compile(force=False):
     "bbf97c1aae06": "<hash of meta.json + chunks.jsonl + annotations.jsonl + figures/*>",
     "b4f8dc3a028c": "<hash>"
   },
-  "cluster_stamp": "<hash of concept_clusters.jsonl>"
+  "cluster_stamp": "<hash of bridge_concept_clusters.jsonl>"
 }
 ```
 
@@ -275,7 +321,7 @@ Pages are rendered from Python string templates (f-strings or `str.format`). No 
 
 ### Orphan removal
 
-If a material is no longer in the manifest, its wiki page is deleted. If a concept cluster is removed (no longer in `concept_clusters.jsonl`), its concept page is deleted. Orphan detection runs on every compile.
+If a material is no longer in the manifest, its wiki page is deleted. If a bridge concept cluster is removed (no longer in `bridge_concept_clusters.jsonl`), its concept page is deleted. Orphan detection runs on every compile.
 
 ---
 
@@ -287,7 +333,7 @@ If a material is no longer in the manifest, its wiki page is deleted. If a conce
 arq cluster [--force]
 ```
 
-Runs concept clustering only. Writes `derived/concept_clusters.jsonl`.
+Runs concept clustering only. Writes `derived/bridge_concept_clusters.jsonl`.
 
 ### `arq compile`
 
@@ -299,9 +345,9 @@ arq compile [--full] [--force-cluster]
 - `--full`: recompile everything
 - `--force-cluster`: re-run clustering before compiling (equivalent to `arq cluster --force && arq compile`)
 
-`arq compile` runs `arq cluster` implicitly if `derived/concept_clusters.jsonl` is missing or stale (same staleness check). It does not re-cluster if clusters are fresh.
+`arq compile` calls `arq cluster` through the same staleness check. The clustering command no-ops when fresh unless `--force-cluster` is passed.
 
-After successful page generation, `arq compile` should automatically run the deterministic Phase 5.5 memory projection so the machine-queryable graph stays synchronized with the published wiki. This adds no extra LLM work; it only rebuilds local bridge tables from cluster/wiki artifacts.
+After successful page generation, `arq compile` automatically runs the deterministic memory projection so the machine-queryable graph stays synchronized with the published wiki. This adds no extra LLM work; it only rebuilds local bridge tables from cluster/wiki artifacts.
 
 ### Output
 
@@ -321,9 +367,12 @@ Done. wiki/ updated.
 
 ```
 derived/
-  concept_clusters.jsonl     # cluster output
-  cluster_stamp.json         # clustering staleness fingerprint
-  compile_stamp.json         # compilation staleness fingerprint
+  bridge_concept_clusters.jsonl  # cluster output
+  bridge_cluster_stamp.json      # clustering staleness fingerprint
+  compile_stamp.json             # compilation staleness fingerprint
+  memory_bridge_stamp.json       # deterministic memory projection fingerprint
+  lint/
+    graph_findings.jsonl          # SQL-backed graph maintenance output
 
 wiki/
   _index.md                  # master index
@@ -342,17 +391,24 @@ wiki/
     papers/
       _index.md
       bbf97c1aae06.md       # material page
+    thermal-mass/
+      _index.md              # collection page
     lectures/
       _index.md
     theory/
       _index.md
   shared/
     concepts/
+      _index.md              # local concepts index
+    bridge-concepts/
       _index.md
-      archival-habitat.md    # concept page
+      archival-habitat.md    # bridge concept page
       ...
     glossary/
       _index.md
+    maintenance/
+      graph-health.md         # visible maintenance page
+    ...
 ```
 
 The `derived/` directory is committed (clusters are a shared artifact). The `wiki/` directory is committed (it's the whole point).
@@ -368,11 +424,15 @@ C5.2  Material page compiler
   ↓
 C5.3  Concept page compiler
   ↓
-C5.4  Index page compiler + glossary
+C5.4  Collection page compiler
   ↓
-C5.5  arq compile CLI (orchestrator + incremental tracking)
+C5.5  Memory bridge projection
   ↓
-C5.6  Orphan removal
+C5.6  Index page compiler + glossary
+  ↓
+C5.7  arq compile CLI (orchestrator + incremental tracking)
+  ↓
+C5.8  Orphan removal
 ```
 
 C5.1 is the only step that uses the LLM. The rest are deterministic.
@@ -389,7 +449,7 @@ One test file: `tests/test_compile.py`. All tests use in-memory fixtures (fake `
 
 Test cases:
 
-1. **Cluster parsing** — mock LLM returns valid JSON → `concept_clusters.jsonl` written correctly
+1. **Cluster parsing** — mock LLM returns valid JSON → `bridge_concept_clusters.jsonl` written correctly
 2. **Material page rendering** — given enriched meta.json + chunks + annotations + figures → material page contains expected sections (title, summary, concepts, facets, annotations, related)
 3. **Concept page rendering** — given cluster with 2 materials → concept page lists both with evidence
 4. **Index pages** — master index lists correct material/concept counts
@@ -403,6 +463,6 @@ Test cases:
 
 - **No LLM for page prose.** Pages are assembled from existing enriched fields. The LLM wrote the summaries, keywords, and descriptions in Phase 3. Phase 5 just arranges them.
 - **No embedding-based clustering.** The clustering prompt receives all concepts as text. If scale demands it later, a pre-filtering step with embeddings can be added, but it's unnecessary for hundreds of concepts.
-- **No manual wiki editing support.** The compiler overwrites `wiki/`. If you want user-authored pages alongside generated ones, that's a future concern (a `wiki/custom/` directory excluded from compile, perhaps).
+- **No manual wiki editing support.** The compiler overwrites generated wiki pages. If you want user-authored pages alongside generated ones, that's a future concern (a `wiki/custom/` directory excluded from compile, perhaps).
 - **No web UI.** That's Phase 8. The wiki is markdown files browsable in any editor, GitHub, or Obsidian.
 - **No cluster auditing.** That's Phase 6 (lint). Phase 5 trusts its own clustering output.

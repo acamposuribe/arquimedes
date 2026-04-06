@@ -67,11 +67,15 @@ RAW_LLM_CLUSTERS = [
 def _concept_index_from_rows(rows):
     idx = {}
     for row in rows:
-        if len(row) == 8:
+        if len(row) >= 9:
+            concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type, descriptor = row[:9]
+        elif len(row) == 8:
             concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
+            descriptor = ""
         else:
             concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence = row
             concept_type = "local"
+            descriptor = ""
         idx[(material_id, concept_key)] = {
             "concept_name": concept_name,
             "concept_key": concept_key,
@@ -81,6 +85,7 @@ def _concept_index_from_rows(rows):
             "source_pages": source_pages,
             "evidence_spans": evidence_spans,
             "confidence": confidence,
+            "descriptor": descriptor,
         }
     return idx
 
@@ -198,17 +203,72 @@ def test_bridge_cluster_parse_and_write(tmp_path, monkeypatch):
     shutil.copy(str(db_path), str(index_dir / "search.sqlite"))
 
     def mock_llm(system, messages):
-        return json.dumps(RAW_LLM_CLUSTERS)
+        prompt = messages[0]["content"]
+        import re
+        match = re.search(r"Edit (.+) in place\.", prompt)
+        assert match is not None
+        work_path = Path(match.group(1).strip())
+        clusters = [
+            {
+                "cluster_id": "bridge_0001",
+                "canonical_name": "archive as architectural space",
+                "slug": "archive-as-architectural-space",
+                "aliases": ["archive as architectural space", "archival habitat", "archive as space"],
+                "material_ids": ["mat_aaa", "mat_bbb"],
+                "source_concepts": [
+                    {
+                        "material_id": "mat_aaa",
+                        "concept_name": "archival habitat",
+                        "relevance": "high",
+                        "source_pages": [1, 3],
+                        "evidence_spans": ["the archive as a built environment"],
+                        "confidence": 0.9,
+                    },
+                    {
+                        "material_id": "mat_bbb",
+                        "concept_name": "archive as space",
+                        "relevance": "high",
+                        "source_pages": [2, 5],
+                        "evidence_spans": ["spatial dimension of archival practice"],
+                        "confidence": 0.85,
+                    },
+                ],
+                "confidence": 0.85,
+            },
+            {
+                "cluster_id": "bridge_0002",
+                "canonical_name": "memory palace",
+                "slug": "memory-palace",
+                "aliases": ["memory palace"],
+                "material_ids": ["mat_aaa"],
+                "source_concepts": [
+                    {
+                        "material_id": "mat_aaa",
+                        "concept_name": "memory palace",
+                        "relevance": "medium",
+                        "source_pages": [4],
+                        "evidence_spans": ["structures of collective memory"],
+                        "confidence": 0.7,
+                    },
+                ],
+                "confidence": 0.9,
+            },
+        ]
+        work_path.write_text(
+            "\n".join(json.dumps(cluster) for cluster in clusters) + "\n",
+            encoding="utf-8",
+        )
+        return "PROCESS_FINISHED"
 
     config = {"llm": {"agent_cmd": "echo"}}
     clusters = cluster_mod.cluster_bridge_concepts(config, llm_fn=mock_llm, force=True)
 
-    assert clusters["clusters"] == 1
+    assert clusters["clusters"] == 2
     assert clusters["bridge_concepts"] == 3
-    assert clusters["multi_material"] == 1  # only first cluster survives validation
+    assert clusters["multi_material"] == 1
 
     written = load_bridge_clusters(tmp_path)
-    assert len(written) == 1
+    assert len(written) == 2
 
     c0 = written[0]
     assert c0["canonical_name"] == "archive as architectural space"
@@ -269,13 +329,15 @@ def test_bridge_cluster_staleness_skip(tmp_path, monkeypatch):
 def test_material_page_sections():
     """Rendered material page contains all expected sections."""
     meta = _make_meta("mat_aaa", "Necropolitics")
+    meta["methodological_conclusions"] = {"value": ["Use archives as spatial evidence."], "provenance": {}}
+    meta["main_content_learnings"] = {"value": ["Archival form shapes knowledge."], "provenance": {}}
     clusters = [{
         "cluster_id": "concept_0001",
         "canonical_name": "archive as architectural space",
         "slug": "archive-as-architectural-space",
         "aliases": [],
         "material_ids": ["mat_aaa"],
-        "source_concepts": [],
+        "source_concepts": [{"material_id": "mat_aaa", "concept_name": "archival habitat", "descriptor": "archive as built form"}],
         "confidence": 0.85,
     }]
     chunks = [{"chunk_id": "c0", "text": "Some text", "summary": "Summary", "source_pages": [1]}]
@@ -293,6 +355,9 @@ def test_material_page_sections():
     assert "Alice" in page
     assert "## Summary" in page
     assert "A test summary." in page
+    assert "## Material Conclusions" in page
+    assert "Use archives as spatial evidence." in page
+    assert "Archival form shapes knowledge." in page
     assert "## Key Concepts" in page
     assert "archive as architectural space" in page
     assert "## Architecture Facets" in page
@@ -323,6 +388,7 @@ def test_concept_page_evidence():
             {
                 "material_id": "mat_aaa",
                 "concept_name": "archival habitat",
+                "descriptor": "archive as built form",
                 "relevance": "high",
                 "source_pages": [1, 3],
                 "evidence_spans": ["the archive as a built environment"],
@@ -352,6 +418,7 @@ def test_concept_page_evidence():
     assert "archival habitat" in page  # alias
     assert "2 materials" in page
     assert "Necropolitics" in page
+    assert "archive as built form" in page
     assert "high" in page
     assert "the archive as a built environment" in page
     assert "Archival Landscapes" in page
@@ -398,6 +465,7 @@ def test_incremental_skip(tmp_path, monkeypatch):
     import arquimedes.compile as compile_mod
     import arquimedes.config as config_mod
     import arquimedes.cluster as cluster_mod
+    import arquimedes.memory as memory_mod
 
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
@@ -445,6 +513,22 @@ def test_incremental_skip(tmp_path, monkeypatch):
     }]
     clusters_text = "\n".join(json.dumps(c) for c in clusters_data) + "\n"
     (derived_dir / "bridge_concept_clusters.jsonl").write_text(clusters_text, encoding="utf-8")
+    (derived_dir / "lint").mkdir(parents=True, exist_ok=True)
+    (derived_dir / "lint" / "graph_findings.jsonl").write_text(
+        json.dumps({
+            "finding_id": "graph:0",
+            "finding_type": "bridge_gap",
+            "severity": "medium",
+            "summary": "Archive and Space needs a stronger architectural anchor.",
+            "details": "The bridge is useful but still semantically thin.",
+            "affected_material_ids": ["mat_aaa"],
+            "affected_cluster_ids": ["concept_0001"],
+            "candidate_future_sources": ["architectural typology"],
+            "candidate_bridge_links": ["spatial memory"],
+            "input_fingerprint": "graph-fp",
+        }) + "\n",
+        encoding="utf-8",
+    )
 
     cluster_stamp = compile_mod._cluster_file_stamp(tmp_path)
     mat_stamp = compile_mod._material_stamp(extracted_dir)
@@ -460,6 +544,7 @@ def test_incremental_skip(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
 
     # Patch bridge clustering to return "skipped"
     monkeypatch.setattr(
@@ -476,6 +561,9 @@ def test_incremental_skip(tmp_path, monkeypatch):
     assert result["material_pages"] == 0
     assert result["material_pages_skipped"] == 1
     assert result["concept_pages"] == 0  # cluster stamp unchanged
+    graph_page = tmp_path / "wiki" / "shared" / "maintenance" / "graph-health.md"
+    assert graph_page.exists()
+    assert "Archive and Space needs a stronger architectural anchor." in graph_page.read_text(encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
@@ -621,6 +709,7 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     import arquimedes.compile as compile_mod
     import arquimedes.config as config_mod
     import arquimedes.cluster as cluster_mod
+    import arquimedes.memory as memory_mod
     import arquimedes.index as index_mod
     import arquimedes.memory as memory_mod
     from arquimedes.index import rebuild_index
@@ -905,6 +994,7 @@ def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
     import arquimedes.compile as compile_mod
     import arquimedes.config as config_mod
     import arquimedes.cluster as cluster_mod
+    import arquimedes.memory as memory_mod
 
     (tmp_path / "config").mkdir()
     (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
@@ -936,6 +1026,7 @@ def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(cluster_mod, "cluster_bridge_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
     monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
 

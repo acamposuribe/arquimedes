@@ -213,7 +213,7 @@ def _render_reflection_section(title: str, reflection: dict | None) -> list[str]
     takeaways = reflection.get("main_takeaways") or []
     tensions = reflection.get("main_tensions") or []
     questions = reflection.get("open_questions") or []
-    prose = reflection.get("why_this_concept_matters") or ""
+    prose = reflection.get("why_this_concept_matters") or reflection.get("why_this_collection_matters") or ""
     if prose:
         lines.append(prose)
         lines.append("")
@@ -307,6 +307,21 @@ def render_material_page(
         lines.append("## Summary\n")
         lines.append(summary)
         lines.append("")
+
+    methodological_conclusions = _meta_val(meta.get("methodological_conclusions"))
+    main_content_learnings = _meta_val(meta.get("main_content_learnings"))
+    if methodological_conclusions or main_content_learnings:
+        lines.append("## Material Conclusions\n")
+        if methodological_conclusions:
+            lines.append("**Methodological conclusions**")
+            for item in [line.strip() for line in methodological_conclusions.splitlines() if line.strip()]:
+                lines.append(f"- {item}")
+            lines.append("")
+        if main_content_learnings:
+            lines.append("**Main content learnings**")
+            for item in [line.strip() for line in main_content_learnings.splitlines() if line.strip()]:
+                lines.append(f"- {item}")
+            lines.append("")
 
     # --- Key concepts ---
     if clusters:
@@ -472,6 +487,7 @@ def render_concept_page(
             relevance = sc.get("relevance") or ""
             source_pages = sc.get("source_pages") or []
             evidence_spans = sc.get("evidence_spans") or []
+            descriptor = sc.get("descriptor") or ""
 
             # Link back to material page (if path is known)
             page_from = page_path
@@ -483,7 +499,8 @@ def render_concept_page(
 
             page_refs = f" (p. {', '.join(str(p) for p in source_pages)})" if source_pages else ""
             rel_str = f" · _{relevance}_" if relevance else ""
-            lines.append(f"### {mat_heading}{rel_str}{page_refs}\n")
+            desc_str = f" · {descriptor}" if descriptor else ""
+            lines.append(f"### {mat_heading}{rel_str}{desc_str}{page_refs}\n")
 
             for span in evidence_spans[:3]:  # up to 3 spans
                 lines.append(f'> "{span}"')

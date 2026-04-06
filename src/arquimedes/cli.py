@@ -397,7 +397,7 @@ def lint(quick: bool, full: bool, report: bool, fix: bool, as_json: bool):
             click.echo(f"  cluster reviews:      {reflection.get('cluster_reviews', 0)}")
             click.echo(f"  concept reflections:  {reflection.get('concept_reflections', 0)}")
             click.echo(f"  collection reflections: {reflection.get('collection_reflections', 0)}")
-            click.echo(f"  graph findings:       {reflection.get('graph_findings', 0)}")
+            click.echo(f"  graph maintenance:    {reflection.get('graph_maintenance', 0)}")
 
         click.echo(f"Lint report: {result.get('report_path')}")
 

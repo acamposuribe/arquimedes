@@ -1,7 +1,8 @@
 """Document enrichment stage — Phase 3.
 
-Enriches document-level metadata: summary, document_type, keywords, facets, concepts.
-All enriched fields carry provenance (model, prompt_version, confidence, source_pages, evidence_spans).
+Enriches document-level metadata: summary, document_type, keywords, methodological conclusions,
+main content learnings, facets, and concepts. All enriched fields carry provenance
+(model, prompt_version, confidence, source_pages, evidence_spans).
 """
 
 from __future__ import annotations
@@ -85,6 +86,7 @@ def _make_concept(concept_data: dict, model: str, prompt_version: str) -> Concep
     )
     return ConceptCandidate(
         concept_name=concept_data.get("concept_name", ""),
+        descriptor=concept_data.get("descriptor", ""),
         concept_type=concept_data.get("concept_type", "local"),
         relevance=concept_data.get("relevance", ""),
         provenance=provenance,
@@ -112,9 +114,11 @@ _DOCUMENT_SCHEMA_DESC = """\
   "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "document_type": {"value": "regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+  "methodological_conclusions": {"value": ["short method takeaway 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+  "main_content_learnings": {"value": ["short content learning 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "facets": {<facet_name>: {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}},
-    "concepts_local": [{"concept_name": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}],
-    "concepts_bridge_candidates": [{"concept_name": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}]
+    "concepts_local": [{"concept_name": "...", "descriptor": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}],
+    "concepts_bridge_candidates": [{"concept_name": "...", "descriptor": "...", "relevance": "...", "source_pages": [...], "evidence_spans": ["..."]}]
 }"""
 
 
@@ -206,6 +210,12 @@ def enrich_document_stage(
         ef = _make_enriched_field(parsed["keywords"], actual_model, prompt_version)
         meta_out["keywords"] = ef.to_dict()
         enriched_count["keywords"] = len(ef.value) if isinstance(ef.value, list) else 1
+
+        for field_name in ("methodological_conclusions", "main_content_learnings"):
+            field_data = parsed.get(field_name)
+            if isinstance(field_data, dict) and "value" in field_data:
+                meta_out[field_name] = _make_enriched_field(field_data, actual_model, prompt_version).to_dict()
+                enriched_count[field_name] = len(meta_out[field_name]["value"]) if isinstance(meta_out[field_name].get("value"), list) else 1
 
         facets_data = parsed.get("facets", {})
         if facets_data and isinstance(facets_data, dict):
@@ -310,6 +320,12 @@ def enrich_document_stage(
         parts.append("summary")
     if enriched_count["keywords"]:
         parts.append(f"{enriched_count['keywords']} keywords")
+    for field_name, label in (
+        ("methodological_conclusions", "methodological conclusions"),
+        ("main_content_learnings", "main content learnings"),
+    ):
+        if enriched_count.get(field_name):
+            parts.append(f"{enriched_count[field_name]} {label}")
     if enriched_count["facets"]:
         parts.append(f"{enriched_count['facets']} facets")
     if enriched_count["concepts"]:

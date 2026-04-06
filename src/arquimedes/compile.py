@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import sqlite3
+from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -137,6 +138,161 @@ def _update_extracted_meta_bridge_feedback(extracted_root: Path, bridge_clusters
             except Exception:
                 pass
     return updated
+
+
+def _load_graph_maintenance_rows(db_path: Path, lint_dir: Path | None = None) -> list[dict]:
+    if not db_path.exists():
+        return []
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        rows = con.execute(
+            """
+            SELECT finding_id, finding_type, severity, summary, details,
+                   affected_material_ids, affected_cluster_ids,
+                   candidate_future_sources, candidate_bridge_links
+            FROM graph_findings
+            ORDER BY
+                CASE lower(severity)
+                    WHEN 'high' THEN 0
+                    WHEN 'medium' THEN 1
+                    WHEN 'low' THEN 2
+                    ELSE 3
+                END,
+                finding_type,
+                finding_id
+            """
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    finally:
+        con.close()
+
+    findings: list[dict] = []
+    for row in rows:
+        findings.append({
+            "finding_id": row[0],
+            "finding_type": row[1],
+            "severity": row[2],
+            "summary": row[3],
+            "details": row[4],
+            "affected_material_ids": json.loads(row[5] or "[]"),
+            "affected_cluster_ids": json.loads(row[6] or "[]"),
+            "candidate_future_sources": json.loads(row[7] or "[]"),
+            "candidate_bridge_links": json.loads(row[8] or "[]"),
+        })
+    if findings or lint_dir is None:
+        return findings
+
+    graph_path = lint_dir / "graph_findings.jsonl"
+    if not graph_path.exists():
+        return findings
+    for row in _load_jsonl(graph_path):
+        finding_id = str(row.get("finding_id", "")).strip()
+        if not finding_id:
+            continue
+        findings.append({
+            "finding_id": finding_id,
+            "finding_type": str(row.get("finding_type", "")).strip(),
+            "severity": str(row.get("severity", "")).strip(),
+            "summary": str(row.get("summary", "")).strip(),
+            "details": str(row.get("details", "")).strip(),
+            "affected_material_ids": _safe_list(row.get("affected_material_ids", [])),
+            "affected_cluster_ids": _safe_list(row.get("affected_cluster_ids", [])),
+            "candidate_future_sources": _safe_list(row.get("candidate_future_sources", [])),
+            "candidate_bridge_links": _safe_list(row.get("candidate_bridge_links", [])),
+        })
+    return findings
+
+
+def _render_graph_maintenance_page(
+    db_path: Path,
+    lint_dir: Path,
+    bridge_clusters: list[dict],
+    material_titles: dict[str, str],
+    material_paths: dict[str, str],
+) -> str | None:
+    findings = _load_graph_maintenance_rows(db_path, lint_dir)
+    if not findings:
+        return None
+
+    cluster_lookup = {
+        str(cluster.get("cluster_id", "")).strip(): {
+            "name": str(cluster.get("canonical_name", "")).strip() or str(cluster.get("cluster_id", "")).strip(),
+            "path": cluster.get("wiki_path") or f"wiki/shared/bridge-concepts/{cluster.get('slug', '')}.md",
+        }
+        for cluster in bridge_clusters
+        if str(cluster.get("cluster_id", "")).strip()
+    }
+
+    page_path = "wiki/shared/maintenance/graph-health.md"
+    lines: list[str] = [
+        "# Graph Maintenance\n",
+        "This page is compiled from SQL-backed graph findings and surfaces unresolved semantic maintenance items.\n",
+        "",
+    ]
+
+    severity_counts = Counter(str(row.get("severity", "")).strip().lower() or "unspecified" for row in findings)
+    lines.append("## Overview\n")
+    lines.append(f"- Findings: {len(findings)}")
+    for severity in ("high", "medium", "low", "unspecified"):
+        if severity_counts.get(severity):
+            label = severity.title() if severity != "unspecified" else "Unspecified"
+            lines.append(f"- {label}: {severity_counts[severity]}")
+    lines.append("")
+
+    for severity in ("high", "medium", "low", "unspecified"):
+        severity_rows = [row for row in findings if (str(row.get("severity", "")).strip().lower() or "unspecified") == severity]
+        if not severity_rows:
+            continue
+        heading = severity.title() if severity != "unspecified" else "Unspecified"
+        lines.append(f"## {heading} Priority\n")
+        for row in severity_rows:
+            title = str(row.get("summary", "")).strip() or str(row.get("finding_type", "")).strip() or row["finding_id"]
+            finding_type = str(row.get("finding_type", "")).strip()
+            details = str(row.get("details", "")).strip()
+            lines.append(f"### {title}\n")
+            if finding_type:
+                lines.append(f"**Type:** {finding_type}")
+            if details:
+                lines.append(details)
+            cluster_ids = [cid for cid in row.get("affected_cluster_ids", []) if str(cid).strip()]
+            if cluster_ids:
+                lines.append("")
+                lines.append("**Affected bridge concepts**")
+                for cid in cluster_ids:
+                    cluster = cluster_lookup.get(str(cid).strip())
+                    if cluster:
+                        rel = compile_pages._relative_link(page_path, cluster["path"])
+                        lines.append(f"- [{cluster['name']}]({rel})")
+                    else:
+                        lines.append(f"- {cid}")
+            material_ids = [mid for mid in row.get("affected_material_ids", []) if str(mid).strip()]
+            if material_ids:
+                lines.append("")
+                lines.append("**Affected materials**")
+                for mid in material_ids:
+                    title = material_titles.get(str(mid).strip(), str(mid).strip())
+                    mat_path = material_paths.get(str(mid).strip(), "")
+                    if mat_path:
+                        rel = compile_pages._relative_link(page_path, mat_path)
+                        lines.append(f"- [{title}]({rel})")
+                    else:
+                        lines.append(f"- {title}")
+            future_sources = [src for src in row.get("candidate_future_sources", []) if str(src).strip()]
+            if future_sources:
+                lines.append("")
+                lines.append("**Likely next sources**")
+                for src in future_sources:
+                    lines.append(f"- {src}")
+            bridge_links = [link for link in row.get("candidate_bridge_links", []) if str(link).strip()]
+            if bridge_links:
+                lines.append("")
+                lines.append("**Candidate bridge links**")
+                for link in bridge_links:
+                    lines.append(f"- {link}")
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +470,10 @@ def _remove_orphans(
                 removed.append(str(md_file))
             continue
 
+        # Maintenance pages are compiler outputs, not orphaned material pages.
+        if len(parts) == 3 and parts[0] == "shared" and parts[1] == "maintenance":
+            continue
+
         # Material page: {domain}/{collection}/{material_id}.md
         if len(parts) == 3:
             stem = parts[2].replace(".md", "")
@@ -334,7 +494,9 @@ def compile_wiki(
     *,
     force: bool = False,
     force_cluster: bool = False,
+    skip_cluster: bool = False,
     recompile_pages: bool = False,
+    run_quick_lint: bool = True,
     llm_fn=None,
 ) -> dict:
     """Compile the wiki from enriched materials and concept clusters.
@@ -354,9 +516,12 @@ def compile_wiki(
         ensure_index(config)
 
     # 2. Run clustering if stale or forced
-    bridge_cluster_summary = cluster_mod.cluster_bridge_concepts(
-        config, llm_fn=llm_fn, force=force or force_cluster
-    )
+    if skip_cluster:
+        bridge_cluster_summary = {"skipped": True, "skip_reason": "cluster skipped for refresh"}
+    else:
+        bridge_cluster_summary = cluster_mod.cluster_bridge_concepts(
+            config, llm_fn=llm_fn, force=force or force_cluster
+        )
 
     # 3. Load clusters
     bridge_clusters = cluster_mod.load_bridge_clusters(root)
@@ -527,6 +692,26 @@ def compile_wiki(
 
     # 9. Render index pages (always)
     manifest_records = _load_jsonl(root / "manifests" / "materials.jsonl")
+    # Make reflection tables queryable before rendering the graph-maintenance page.
+    from arquimedes.memory import memory_rebuild
+    try:
+        memory_rebuild(config)
+    except FileNotFoundError:
+        pass  # index or cluster file absent — safe to skip
+
+    maintenance_path = wiki_root / "shared" / "maintenance" / "graph-health.md"
+    graph_maintenance = _render_graph_maintenance_page(
+        db_path,
+        lint_dir,
+        bridge_page_clusters,
+        material_titles,
+        material_paths,
+    )
+    if graph_maintenance:
+        _write_page(maintenance_path, graph_maintenance)
+    elif maintenance_path.exists():
+        maintenance_path.unlink()
+
     index_pages_written = _render_index_pages(
         wiki_root,
         all_metas,
@@ -547,17 +732,9 @@ def compile_wiki(
     # 12. Write compile stamp
     _write_compile_stamp(root, current_material_stamps, current_cluster_stamp)
 
-    # 13. Rebuild full memory bridge (canonical clusters + wiki paths into SQLite).
-    # No-op if search.sqlite is absent (server always has it; collaborators rebuild via index ensure).
-    from arquimedes.memory import memory_rebuild
-    try:
-        memory_rebuild(config)
-    except FileNotFoundError:
-        pass  # index or cluster file absent — safe to skip
-
     quick_lint_summary = None
     lint_cfg = config.get("lint", {}) if isinstance(config, dict) else {}
-    if lint_cfg.get("post_compile_quick", True):
+    if run_quick_lint and lint_cfg.get("post_compile_quick", True):
         try:
             from arquimedes.lint import run_lint
 
@@ -745,11 +922,20 @@ def _render_index_pages(
     written += 1
 
     # Master index
+    maintenance_path = wiki_root / "shared" / "maintenance" / "graph-health.md"
+    maintenance_entry = None
+    if maintenance_path.exists():
+        maintenance_entry = {
+            "name": "Maintenance",
+            "path": "shared/maintenance/graph-health.md",
+            "summary": "Semantic maintenance page",
+        }
     master_content = compile_pages.render_index_page(
         "Arquimedes Wiki",
         domain_pages + [
             {"name": "Local Concepts", "path": "shared/concepts/_index.md", "summary": f"{len(concept_entries)} local concepts"},
             {"name": "Main Concepts", "path": "shared/glossary/_index.md", "summary": f"{len(bridge_clusters)} main concepts"},
+            *([maintenance_entry] if maintenance_entry else []),
         ],
     )
     _write_page(wiki_root / "_index.md", master_content)

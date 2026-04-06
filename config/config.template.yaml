@@ -72,10 +72,10 @@ library_root: "~/Arquimedes-Library"
 #         allow_all: false
 #     cluster:
 #       - provider: claude
-#         command: "claude --print"
+#         command: "claude --print --dangerously-skip-permissions"
 #         model: sonnet
 #         effort: medium
-#         tools: [Read, Write]
+#         tools: [Read, Write, Bash]
 #         permission_mode: acceptEdits
 #       - provider: codex
 #         command: "codex exec"
@@ -92,10 +92,10 @@ library_root: "~/Arquimedes-Library"
 #         allow_all: false
 #     lint:
 #       - provider: claude
-#         command: "claude --print"
+#         command: "claude --print --dangerously-skip-permissions"
 #         model: sonnet
 #         effort: medium
-#         tools: [Read, Write]
+#         tools: [Read, Write, Bash]
 #         permission_mode: acceptEdits
 #       - provider: codex
 #         command: "codex exec"

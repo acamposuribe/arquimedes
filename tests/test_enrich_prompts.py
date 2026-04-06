@@ -178,6 +178,8 @@ class TestBuildDocumentPrompt:
         assert "summary" in content and "facets" in content
         assert "concepts_local" in content
         assert "concepts_bridge_candidates" in content
+        assert "methodological_conclusions" in content
+        assert "main_content_learnings" in content
         assert "Do not force names, dates, or locations into every local concept" in content
 
     def test_small_doc_includes_all_chunks(self):
@@ -218,6 +220,8 @@ class TestBuildCombinedPrompt:
         assert "summary" in content and "chunk_id" in content
         assert "concepts_local" in content
         assert "concepts_bridge_candidates" in content
+        assert "methodological_conclusions" in content
+        assert "main_content_learnings" in content
 
     def test_includes_only_target_chunks_in_chunk_targets(self):
         _, messages = build_combined_prompt(

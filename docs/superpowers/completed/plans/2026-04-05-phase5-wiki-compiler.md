@@ -10,7 +10,7 @@
 
 | # | File | Action | Responsibility |
 |---|------|--------|---------------|
-| 1 | `src/arquimedes/cluster.py` | Create | Concept clustering: load concepts from index, build prompt, call LLM, parse clusters, write `derived/concept_clusters.jsonl` + `derived/cluster_stamp.json` |
+| 1 | `src/arquimedes/cluster.py` | Create | Concept clustering: load concepts from index, build prompt, call LLM, parse clusters, write `derived/bridge_concept_clusters.jsonl` + `derived/bridge_cluster_stamp.json` |
 | 2 | `src/arquimedes/compile.py` | Create | Wiki compiler: load clusters + materials, render material pages, concept pages, index pages, glossary; incremental tracking; orphan removal |
 | 3 | `src/arquimedes/compile_pages.py` | Create | Page renderers: `render_material_page()`, `render_concept_page()`, `render_index_page()`, `render_glossary()` — pure functions returning markdown strings |
 | 4 | `src/arquimedes/cli.py` | Modify | Add `arq cluster` and `arq compile` commands |
@@ -37,14 +37,14 @@ compile_pages.py ─────────────┘
 **Functions:**
 
 - `cluster_concepts(config, *, llm_fn=None, force=False) -> dict`
-  - Reads all concept records from search index (concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence)
+  - Reads all concept records from search index (concept_name, concept_key, descriptor, material_id, relevance, source_pages, evidence_spans, confidence)
   - Reads material titles from index for prompt context
   - Pre-groups by exact `concept_key` (deterministic dedup)
   - Builds prompt (system + user message with concept keys, material titles, relevance, truncated evidence)
   - Calls LLM, parses JSON response
   - **Validates** every `source_concepts` entry against the indexed concept rows: normalizes each `concept_name` to a key, rejects unknown `(material_id, normalized concept_name)` pairs, drops hallucinated references, logs warnings for repairs
   - Enriches each cluster record: derives `material_ids` from `source_concepts`, generates `slug` from `canonical_name`, attaches full provenance per source_concept from the index data
-  - Writes `derived/concept_clusters.jsonl` + `derived/cluster_stamp.json`
+- Writes `derived/bridge_concept_clusters.jsonl` + `derived/bridge_cluster_stamp.json`
   - Returns summary dict: `{"total_concepts": N, "clusters": M, "multi_material": K}`
 
 - `cluster_fingerprint(config) -> str`
@@ -52,11 +52,11 @@ compile_pages.py ─────────────┘
   - Uses `enrich_stamps.canonical_hash`
 
 - `is_clustering_stale(config) -> bool`
-  - Compares current fingerprint against `derived/cluster_stamp.json`
+  - Compares current fingerprint against `derived/bridge_cluster_stamp.json`
   - Returns True if missing, stale, or force
 
 - `load_clusters(project_root) -> list[dict]`
-  - Reads `derived/concept_clusters.jsonl`, returns list of cluster dicts
+- Reads `derived/bridge_concept_clusters.jsonl`, returns list of cluster dicts
   - Utility for compile.py and tests
 
 - `slugify(name: str) -> str`
@@ -207,7 +207,7 @@ All tests use in-memory fixtures (fake `extracted/` directories, mock index data
 
 | # | Test | What it covers |
 |---|------|---------------|
-| 1 | `test_cluster_parse_and_write` | Mock LLM returns valid JSON → `concept_clusters.jsonl` written with correct fields (cluster_id, canonical_name, slug, aliases, material_ids, source_concepts with full provenance, confidence) |
+| 1 | `test_cluster_parse_and_write` | Mock LLM returns valid JSON → `bridge_concept_clusters.jsonl` written with correct fields (cluster_id, canonical_name, slug, aliases, material_ids, source_concepts with full provenance, confidence) |
 | 2 | `test_cluster_staleness_skip` | Unchanged concept fingerprint → clustering skipped, no LLM call |
 | 3 | `test_material_page_sections` | Given enriched meta + chunks + annotations + figures + clusters → rendered page contains all expected sections (title, summary, concepts with links, facets, figures, annotations, related, source) |
 | 4 | `test_concept_page_evidence` | Given cluster with 2 materials → concept page lists both with relevance and quoted evidence spans |

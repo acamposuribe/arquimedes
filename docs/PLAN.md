@@ -1,14 +1,15 @@
 # Arquimedes — Implementation Plan
 
 > **Status:** Phases 1-6 complete; Phase 7 next
-> **Last updated:** 2026-04-05
+> **Last updated:** 2026-04-06
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
-> **Phase 5 spec:** [Wiki compiler design](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
-> **Phase 5.5 spec:** [Memory bridge design](superpowers/completed/specs/2026-04-05-phase5-5-memory-bridge-design.md)
-> **Phase 6 spec:** [Lint, reflection, and memory growth](superpowers/specs/2026-04-05-phase6-lint-design.md)
+> **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
+> **Phase 4 spec:** [Search index design](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md)
+> **Phase 5 spec:** [Wiki compiler, collection pages, and memory bridge](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
+> **Phase 6 spec:** [Lint, reflection, and memory growth](superpowers/completed/specs/2026-04-05-phase6-lint-design.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 > **Pipeline:** [Operational pipeline](PIPELINE.md)
-> **Phase 5 addendum:** [Collection pages spec](superpowers/completed/specs/2026-04-05-phase5-collection-pages-design.md)
+> **Supporting spec:** [Connection model](superpowers/completed/specs/2026-04-05-connection-model.md)
 > **Completed phase docs:** `docs/superpowers/completed/`
 
 ## Context
@@ -84,11 +85,11 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 5: Wiki Compiler
 
-- [x] **(concept clustering)** `arq cluster` — LLM pass over all concepts in the index (keys, titles, evidence); emit `derived/concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
+- [x] **(concept clustering)** `arq cluster` — LLM pass over bridge candidate packets and current bridge memory; emit `derived/bridge_concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, descriptor, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] `arq compile` — generate material pages, concept pages (one page per cluster), index pages
-- [x] **(collection pages addendum)** Extend `arq compile` so `wiki/{domain}/{collection}/_index.md` becomes a first-class deterministic collection page; see [collection pages spec](superpowers/completed/specs/2026-04-05-phase5-collection-pages-design.md)
+- [x] **(collection pages)** Extend `arq compile` so `wiki/{domain}/{collection}/_index.md` becomes a first-class deterministic collection page; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] Collection pages should include: overview, recent additions, material list, top canonical concepts by recurrence, top facets by frequency
-- [x] Incremental compilation (per-material stamps for material pages; global `cluster_stamp` — when clusters change, rebuild **all** concept pages)
+- [x] Incremental compilation (per-material stamps for material pages; global `bridge_cluster_stamp` — when bridge clusters change, rebuild **all** concept pages)
 - [x] Cross-referencing with standard markdown links
 - [x] Wiki tree: practice/, research/, shared/concepts/
 - [x] Define the wiki structures the future server maintainer will own and keep current: all generated material pages, concept pages, glossary pages, and directory `_index.md` pages under `wiki/`; later phases may add maintainer-owned reports/logs/filings, but collaborators should treat the generated wiki tree as compiler/server-maintainer-owned
@@ -111,7 +112,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 Deterministic lint, reflective passes, memory projection, and lint scheduling are implemented in code and verified by tests. The remaining work is Phase 7+ tooling and any future daemon wiring around these maintained layers.
 
 - [x] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment, stale index, stale memory bridge, duplicates, missing compiled pages
-- [x] **(cluster audit)** LLM review of `derived/concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
+- [x] **(cluster audit)** LLM review of `derived/bridge_concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
 - [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters`
 - [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, and open questions grounded in linked materials
 - [x] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas

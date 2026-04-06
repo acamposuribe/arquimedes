@@ -17,7 +17,7 @@ For the original conceptual pattern, see `docs/llm-wiki.md`. That file is the lo
 
 For how Arquimedes should evolve from a searchable archive into a connected memory system before the wiki compiler exists, see `docs/superpowers/completed/specs/2026-04-05-connection-model.md`. That note explains how structural, semantic, retrieval, attention, and materialized connections should emerge across phases.
 
-For the post-compile bridge that makes the wiki graph queryable for agents, see `docs/superpowers/completed/specs/2026-04-05-phase5-5-memory-bridge-design.md`. That phase turns the readable semantic graph into a machine-queryable memory layer inside SQLite.
+For the post-compile bridge that makes the wiki graph queryable for agents, see the consolidated Phase 5 wiki compiler spec in `docs/superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md`. That spec now includes the memory bridge projection into SQLite.
 
 The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer. It is responsible for ingesting new sources, enriching them, compiling and updating wiki pages, running health checks, and keeping indexes current. Semantic publication belongs to that server-maintainer path: clustering and wiki compilation are not collaborator responsibilities. Collaborator machines rebuild only deterministic local query layers from already-committed outputs. This maintainer role is assembled progressively:
 - **Wiki compilation** defines what the maintainer writes and updates
@@ -443,7 +443,9 @@ Standard markdown links: `[Thermal Mass](../shared/concepts/thermal-mass.md)`. N
 
 ## Wiki Linting & Health Checks
 
-`arq lint` is not just a broken-link checker — it's the reflective maintenance layer that improves the knowledge base over time. It runs deterministic checks first, then heavier LLM passes that deepen the graph, concept pages, collection pages, and searchable memory.
+`arq lint` is the reflective maintenance layer that keeps the knowledge base structurally healthy and semantically useful over time.
+
+Phase 6 is complete. The detailed design lives in [the archived phase-6 spec](../completed/specs/2026-04-05-phase6-lint-design.md).
 
 ### Deterministic checks (no LLM):
 - **Broken links**: wiki pages referencing materials, concepts, or files that don't exist
@@ -456,24 +458,21 @@ Standard markdown links: `[Thermal Mass](../shared/concepts/thermal-mass.md)`. N
 - **Duplicate materials**: different manifest entries pointing to the same content hash
 - **Missing compiled pages**: expected material, concept, or collection pages absent from the wiki
 
-### LLM-driven checks:
-- **Cluster audit**: over-merged concepts to split, missed equivalences to merge, weak single-material clusters, poor canonical names, missing materials in clusters
-- **Concept reflection**: cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters` for concept pages
-- **Collection reflection**: `main_takeaways`, `main_tensions`, important materials/concepts, and open questions for collection pages
-- **Missing connections**: materials or pages that should reference each other but don't
-- **Inconsistent data**: contradictory claims across materials
-- **Under-connected graph areas**: materials or clusters that are poorly connected relative to their content
-- **Research questions**: unanswered questions emerging from weakly connected areas
-- **Coverage gaps**: under-represented areas worth future collection
+### LLM-driven passes:
+- **Cluster audit**: review bridge clusters incrementally, merge or rename safely, preserve coherent bridge concepts, and keep the bridge graph current for new materials
+- **Concept reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters` for bridge concepts from staged evidence
+- **Collection reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_collection_matters` for collections, with new materials treated more richly than old ones
+- **Graph maintenance**: capture unresolved semantic maintenance concerns that deterministic lint cannot judge well, then project them into SQL-backed findings and a visible maintenance page
 
 ### Output:
 - `arq lint` → prints a report to stdout (JSON or human-readable)
 - `arq lint --report` → writes a detailed report to `wiki/_lint_report.md`
-- `arq lint --fix` → auto-applies deterministic fixes and accepted reflective page updates, then rebuilds memory
-- Each LLM suggestion includes provenance (which materials, what evidence, confidence)
+- `arq lint --fix` → auto-applies deterministic fixes and accepted reflective updates, then rebuilds memory
+- reflective passes emit structured artifacts under `derived/lint/`
+- graph maintenance is rendered into `wiki/shared/maintenance/graph-health.md` from SQL-backed findings
 
 ### Integration with the server agent:
-The watcher should run `arq lint --quick` (deterministic checks only) after each compile, and `arq lint --full` (including reflective LLM passes) on a scheduled basis.
+The watcher should run `arq lint --quick` (deterministic checks only) after each compile, and `arq lint --full` (including reflective passes with refreshes between stages) on a scheduled basis.
 
 ## Agent Tool Layer
 

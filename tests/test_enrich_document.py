@@ -34,6 +34,24 @@ MOCK_DOC_RESPONSE = json.dumps({
         "evidence_spans": ["thermal mass is key"],
         "confidence": 0.85,
     },
+    "methodological_conclusions": {
+        "value": [
+            "Treat thermal mass as a passive design variable.",
+            "Test material choices against climatic performance rather than style alone.",
+        ],
+        "source_pages": [1],
+        "evidence_spans": ["Thermal mass slows heat transfer"],
+        "confidence": 0.8,
+    },
+    "main_content_learnings": {
+        "value": [
+            "Thermal mass can stabilize residential comfort.",
+            "Architecture can leverage mass to moderate environmental swings.",
+        ],
+        "source_pages": [1],
+        "evidence_spans": ["Thermal mass slows heat transfer"],
+        "confidence": 0.82,
+    },
     "facets": {
         "building_type": {
             "value": "residential",
@@ -157,6 +175,10 @@ class TestEnrichDocumentStage:
         assert meta["document_type"]["value"] == "paper"
         assert "keywords" in meta
         assert "architecture" in meta["keywords"]["value"]
+        assert "methodological_conclusions" in meta
+        assert "passive design" in " ".join(meta["methodological_conclusions"]["value"])
+        assert "main_content_learnings" in meta
+        assert "stabilize residential comfort" in " ".join(meta["main_content_learnings"]["value"])
 
     def test_concepts_jsonl_is_written(self, tmp_path):
         """concepts.jsonl should be created with one entry per concept."""

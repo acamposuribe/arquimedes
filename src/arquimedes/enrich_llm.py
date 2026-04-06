@@ -345,7 +345,6 @@ _FAST_FAIL_RE = re.compile(
 
 _COMPLETION_SENTINELS = {"PROCESS_FINISHED", "x"}
 
-
 def _strip_nuls(text: str) -> str:
     """Remove embedded NUL bytes that break subprocess argv/stdin handling."""
     return text.replace("\x00", "")
@@ -374,9 +373,6 @@ def _run_agent_subprocess(
     env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
     env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
     env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
-    if safe_cmd and os.path.basename(safe_cmd[0]) == "claude":
-        env.setdefault("CLAUDE_CODE_MAX_OUTPUT_TOKENS", "4096")
-        env.setdefault("MAX_THINKING_TOKENS", "2048")
 
     safe_stdin = _strip_nuls(stdin_text)
 

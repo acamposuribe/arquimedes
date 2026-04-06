@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS materials (
     title             TEXT NOT NULL DEFAULT '',
     summary           TEXT NOT NULL DEFAULT '',
     keywords          TEXT NOT NULL DEFAULT '',
+    methodological_conclusions TEXT NOT NULL DEFAULT '',
+    main_content_learnings     TEXT NOT NULL DEFAULT '',
     raw_keywords      TEXT NOT NULL DEFAULT '',
     domain            TEXT NOT NULL DEFAULT '',
     collection        TEXT NOT NULL DEFAULT '',
@@ -126,6 +128,7 @@ CREATE VIRTUAL TABLE IF NOT EXISTS annotations_fts USING fts5(
 
 CREATE TABLE IF NOT EXISTS concepts (
     concept_name   TEXT NOT NULL,
+    descriptor     TEXT NOT NULL DEFAULT '',
     material_id    TEXT NOT NULL,
     concept_type   TEXT NOT NULL DEFAULT 'local',
     concept_key    TEXT NOT NULL DEFAULT '',
@@ -359,6 +362,24 @@ def _raw_kw_json(lst: list | None) -> str:
     return json.dumps(lst, ensure_ascii=False)
 
 
+def _ensure_concepts_descriptor_column(con: sqlite3.Connection) -> None:
+    """Add the concepts.descriptor column for older indexes when needed."""
+    rows = con.execute("PRAGMA table_info(concepts)").fetchall()
+    columns = {str(row[1]) for row in rows}
+    if "descriptor" not in columns:
+        con.execute("ALTER TABLE concepts ADD COLUMN descriptor TEXT NOT NULL DEFAULT ''")
+
+
+def _ensure_materials_conclusion_columns(con: sqlite3.Connection) -> None:
+    """Add material conclusion columns for older indexes when needed."""
+    rows = con.execute("PRAGMA table_info(materials)").fetchall()
+    columns = {str(row[1]) for row in rows}
+    if "methodological_conclusions" not in columns:
+        con.execute("ALTER TABLE materials ADD COLUMN methodological_conclusions TEXT NOT NULL DEFAULT ''")
+    if "main_content_learnings" not in columns:
+        con.execute("ALTER TABLE materials ADD COLUMN main_content_learnings TEXT NOT NULL DEFAULT ''")
+
+
 # --- Index build ---
 
 def rebuild_index(config: dict | None = None) -> IndexStats:
@@ -394,6 +415,8 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
     try:
         con = sqlite3.connect(tmp_path)
         con.executescript(_DDL)
+        _ensure_concepts_descriptor_column(con)
+        _ensure_materials_conclusion_columns(con)
 
         stats = IndexStats()
 
@@ -412,13 +435,15 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
             facets = meta.get("facets") or {}
             con.execute(
                 """INSERT OR REPLACE INTO materials VALUES (
-                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
+                    ?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?
                 )""",
                 (
                     mid,
                     meta.get("title", ""),
                     _val(meta.get("summary")),
                     _kw_json(meta.get("keywords")),
+                    _val(meta.get("methodological_conclusions")),
+                    _val(meta.get("main_content_learnings")),
                     _raw_kw_json(meta.get("raw_keywords")),
                     meta.get("domain", ""),
                     meta.get("collection", ""),
@@ -565,9 +590,10 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
                         concept_key = _normalize_concept_key(concept_name)
                         prov = c.get("provenance") or {}
                         con.execute(
-                            "INSERT OR REPLACE INTO concepts VALUES (?,?,?,?,?,?,?,?)",
+                            "INSERT OR REPLACE INTO concepts (concept_name, descriptor, material_id, concept_type, concept_key, relevance, source_pages, evidence_spans, confidence) VALUES (?,?,?,?,?,?,?,?,?)",
                             (
                                 concept_name,
+                                c.get("descriptor", ""),
                                 mid,
                                 concept_type,
                                 concept_key,

@@ -8,7 +8,7 @@
 
 Arquimedes is not meant to become only a searchable database. The intended long-term shape is a connected, compounding knowledge system: an artificial memory-brain whose structure grows as materials are ingested, enriched, searched, compiled, and linted.
 
-This document defines how **connections** should emerge before the wiki compiler exists. The wiki phase will materialize strong connections into pages and links, but connection formation starts earlier.
+This document defines how **connections** emerge across the implemented pipeline. The wiki compiler materializes strong connections into pages and links, but connection formation starts earlier.
 
 ## Core Principle
 
@@ -37,7 +37,7 @@ The LLM enrichment pipeline (Phase 3) emits concept candidates independently per
 
 Semantic concept clustering — inferring equivalences across phrasings, choosing canonical names, assigning aliases, grouping contributing materials — is compile-shaped work, not index-shaped. It belongs in Phase 5.
 
-The target artifact is `derived/concept_clusters.jsonl`. `arq cluster` writes it (first-class command, see [Phase 5 spec](2026-04-05-phase5-wiki-compiler-design.md)); `arq compile` consumes it for concept pages; Phase 6 lint audits and refines it. Each cluster record carries a `slug` (for stable page paths), full `source_concepts` provenance (relevance, evidence spans, confidence per material), and LLM grouping confidence.
+The target artifact is `derived/bridge_concept_clusters.jsonl`. `arq cluster` writes it (first-class command, see [Phase 5 spec](2026-04-05-phase5-wiki-compiler-design.md)); `arq compile` consumes it for concept pages; Phase 6 lint audits and refines it. Each cluster record carries a `slug` (for stable page paths), full `source_concepts` provenance (descriptor, relevance, evidence spans, confidence per material), and LLM grouping confidence.
 
 ## Connection Types
 
@@ -73,7 +73,7 @@ Examples:
 - figure -> relevance
 - annotation -> emphasis signal
 
-These are not yet explicit wiki links, but they create the semantic hooks needed for later compilation and clustering.
+These are not yet explicit wiki links, but they create the semantic hooks needed for compile-time materialization and clustering.
 
 ### 3. Retrieval connections
 
@@ -112,7 +112,7 @@ Examples:
 - cross-references between practice and research materials
 - index pages and topic maps
 
-These are produced later, primarily by compile and refined by lint.
+These are produced by compile and refined by lint.
 
 ## Phase 2: Structural Anchors
 
@@ -258,9 +258,9 @@ Arquimedes should support **content-first retrieval**:
 
 This is essential if the system is to feel like a connected memory rather than a flat catalog.
 
-## What Wiki Compilation Will Add Later
+## What Wiki Compilation Adds
 
-Phase 5 will promote selected strong connections into durable structure.
+Phase 5 promotes selected strong connections into durable structure.
 
 ### Concept clustering (Phase 5 core responsibility)
 
@@ -271,7 +271,7 @@ The clustering pass:
 2. Groups semantically equivalent concepts regardless of phrasing
 3. Chooses a canonical name for each cluster
 4. Records aliases, contributing materials, and source evidence
-5. Writes `derived/concept_clusters.jsonl`
+5. Writes `derived/bridge_concept_clusters.jsonl`
 
 **Cluster artifact schema:**
 ```json
@@ -285,8 +285,16 @@ The clustering pass:
   ],
   "material_ids": ["bbf97c1aae06", "b4f8dc3a028c"],
   "source_concepts": [
-    {"material_id": "bbf97c1aae06", "concept_name": "archival habitat"},
-    {"material_id": "b4f8dc3a028c", "concept_name": "archive as architectural space"}
+    {
+      "material_id": "bbf97c1aae06",
+      "concept_name": "archival habitat",
+      "descriptor": "archives understood as built, inhabited environments"
+    },
+    {
+      "material_id": "b4f8dc3a028c",
+      "concept_name": "archive as architectural space",
+      "descriptor": "the archive framed as spatial and architectural form"
+    }
   ],
   "confidence": 0.82
 }
@@ -297,10 +305,11 @@ This file is the single handoff point between Phase 5 clustering and all downstr
 ### Other Phase 5 materialized connections
 
 - related material sections on wiki pages (using cluster membership + structural signals)
-- concept pages (one per cluster with `canonical_name`, aliases, contributing materials, evidence)
+- concept pages (one per cluster with `canonical_name`, aliases, contributing materials, evidence, descriptor)
 - glossary pages
 - backlinks
 - master indexes and topic maps
+- `wiki/shared/maintenance/graph-health.md` compiled from SQL-backed graph findings
 
 Compile is the first phase that should write explicit narrative links like:
 - "related materials"
@@ -311,9 +320,9 @@ Compile is the first phase that should write explicit narrative links like:
 
 But compile should be using earlier connection layers, not inventing everything from scratch.
 
-## What Linting Will Add Later
+## What Linting Adds
 
-Phase 6 should inspect and improve the connection network. By Phase 6, `derived/concept_clusters.jsonl` already exists. Lint audits the quality of what compile produced.
+Phase 6 inspects and improves the connection network. By Phase 6, `derived/bridge_concept_clusters.jsonl` already exists. Lint audits the quality of what compile produced.
 
 ### Deterministic lint
 
@@ -370,6 +379,6 @@ At the current state of the project:
 - **Phase 3** has already created semantic hooks and attention signals.
 - **Phase 4** has already begun creating retrieval connections through content-first search, chunk ranking, and annotation-aware results.
 
-This means Arquimedes is already on the path toward a connected memory system before the wiki compiler exists.
+This means Arquimedes is already on the path toward a connected memory system before the wiki compiler runs.
 
 That is the intended direction.

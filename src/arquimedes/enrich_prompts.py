@@ -156,6 +156,8 @@ _DOCUMENT_SCHEMA = """\
   "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "document_type": {"value": "one of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+  "methodological_conclusions": {"value": ["short method takeaway 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+  "main_content_learnings": {"value": ["short content learning 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
   "bibliography": {
     "journal_name": "...",
     "volume": "...",
@@ -185,10 +187,10 @@ _DOCUMENT_SCHEMA = """\
     "studio_project": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
   },
     "concepts_local": [
-        {"concept_name": "specific, reusable concept phrase", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
+        {"concept_name": "specific, reusable concept phrase", "descriptor": "one short sentence describing the concept", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
     ],
     "concepts_bridge_candidates": [
-        {"concept_name": "broader reusable umbrella phrase", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
+        {"concept_name": "broader reusable umbrella phrase", "descriptor": "one short sentence describing the concept", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
     ]
 }\
 """
@@ -218,6 +220,12 @@ For "keywords": return 6-12 strong terms or short phrases that maximize retrieva
 named actors, places, archives, projects, methods, institutional conditions, and core concepts when they \
 are central. Avoid generic filler and avoid repeating the broadest document theme in multiple synonymous \
 forms. \
+For "methodological_conclusions": return 2-4 short, reusable statements about how the document says \
+methods should be used, why they matter, and what methodological stance or procedure it contributes. \
+Keep them concrete and archival/architectural rather than generic. \
+For "main_content_learnings": return 2-4 short, reusable statements about what the document contributes \
+to architectural knowledge. Focus on the main claims, conceptual contributions, or historically useful \
+learnings that another reader could reuse across materials. \
 For "facets": infer only concrete, useful indexing values grounded in the document. Prefer specific values \
 over vague ones, and do not force every facet field. Use facets to capture real scope and context rather \
 than abstract interpretation. \
@@ -233,7 +241,8 @@ dense and multi-word; do not reduce them to thin generic labels or ultra-narrow 
 architecture-, spatial-, material-, institutional-, and visual-culture-relevant concepts when present. \
 Avoid near-duplicate concepts and incidental topics mentioned only in passing. Avoid generic labels \
 like "history", "power", "space", or "memory" unless they are sharply qualified into a real \
-concept phrase. 
+concept phrase. For each concept, also provide a short one-sentence descriptor that explains what \
+the concept means in this document.
 
 If a historical qualifier helps distinguish the concept, use only the minimum needed. Do not force \
 names, dates, or locations into every local concept; keep the label reusable unless the detail adds \
@@ -243,7 +252,8 @@ For "concepts_bridge_candidates": extract 4-8 broader umbrella candidates that c
 material to related materials. Favor larger frameworks, problematics, fields of inquiry, spatial or \
 institutional conditions, and reusable analytic umbrellas grounded in this document. These may be \
 broad but still meaningful. Avoid vague one-word abstractions, chapter themes, or trivial paraphrases \
-of the title.
+of the title. For each candidate, also provide a short one-sentence descriptor that explains the \
+umbrella idea.
 Return ONLY valid JSON, no markdown fences, no explanations.
 
 {schema}\
@@ -386,6 +396,8 @@ _COMBINED_SCHEMA = """\
     "summary": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
     "document_type": {"value": "one of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
     "keywords": {"value": ["term1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+    "methodological_conclusions": {"value": ["short method takeaway 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
+    "main_content_learnings": {"value": ["short content learning 1", ...], "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0},
     "bibliography": {
       "journal_name": "...",
       "volume": "...",
@@ -415,7 +427,7 @@ _COMBINED_SCHEMA = """\
       "studio_project": {"value": "...", "source_pages": [...], "evidence_spans": ["..."], "confidence": 0.0-1.0}
     },
     "concepts": [
-      {"concept_name": "specific, reusable concept phrase", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
+      {"concept_name": "specific, reusable concept phrase", "descriptor": "one short sentence describing the concept", "relevance": "one of: high|medium|low", "source_pages": [...], "evidence_spans": ["..."]}
     ]
   },
   "chunks": [
@@ -459,6 +471,12 @@ For "document.summary": capture the document's distinctive argument or contribut
 not just a generic topic sentence. \
 For "document.keywords": maximize retrieval value with a mix of entities, methods, institutions, and \
 core concepts. \
+For "document.methodological_conclusions": return 2-4 short, reusable statements about how the \
+document says methods should be used, why they matter, and what methodological stance or procedure \
+it contributes. Keep them concrete and archival/architectural rather than generic. \
+For "document.main_content_learnings": return 2-4 short, reusable statements about what the document \
+contributes to architectural knowledge. Focus on the main claims, conceptual contributions, or \
+historically useful learnings that another reader could reuse across materials. \
 For "document.facets": provide concrete, grounded indexing values rather than vague themes. \
 For "document.concepts_local": extract 8-15 strong material-level concept candidates that this \
 material genuinely contributes to. A good local concept is a reusable intellectual unit with strong \
@@ -469,7 +487,8 @@ theoretically dense and multi-word; do not reduce them to thin generic labels or
 fragments. Prefer architecture-, spatial-, material-, institutional-, and visual-culture-relevant \
 concepts when present. Avoid near-duplicate concepts and incidental topics mentioned only in \
 passing. Avoid generic labels like "history", "power", "space", or "memory" unless they are \
-sharply qualified into a real concept phrase.
+sharply qualified into a real concept phrase. For each concept, also provide a short one-sentence \
+descriptor that explains what the concept means in this document.
 
 If a historical qualifier helps distinguish the concept, use only the minimum needed. Do not force \
 names, dates, or locations into every local concept; keep the label reusable unless the detail adds \
@@ -479,7 +498,8 @@ For "document.concepts_bridge_candidates": extract 4-8 broader umbrella candidat
 this material to related materials. Favor larger frameworks, problematics, fields of inquiry, \
 spatial or institutional conditions, and reusable analytic umbrellas grounded in this document. These \
 may be broad but still meaningful. Avoid vague one-word abstractions, chapter themes, or trivial \
-paraphrases of the title.
+paraphrases of the title. For each candidate, also provide a short one-sentence descriptor that \
+explains the umbrella idea.
 
 For "chunks": provide a list entry only for each chunk_id listed in "Chunk Targets", with a \
 one-line summary and keywords specific to that chunk's content.

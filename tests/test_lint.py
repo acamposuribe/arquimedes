@@ -324,8 +324,13 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
         root / "derived" / "lint" / "cluster_audit_output.json",
         root / "derived" / "tmp" / "cluster_audit_bridge_output.json",
     )
+    assert "## TODO" in prompt_system
+    assert "- [ ] Return JSON only." in prompt_system
     assert "Prefer ambitious, useful connections" in prompt_system
     assert "Treat splitting as a last resort" in prompt_system
+    assert "## FILES TO READ" in prompt_user
+    assert "## JSON TO RETURN" in prompt_user
+    assert "## WRITE FILES" in prompt_user
     assert "PROCESS_FINISHED" in prompt_user
     for record in first:
         assert {"review_id", "cluster_id", "finding_type", "severity", "recommendation", "affected_material_ids", "affected_concept_names", "evidence", "input_fingerprint", "wiki_path"} <= set(record)

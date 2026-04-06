@@ -1,7 +1,7 @@
 # Arquimedes — Operational Pipeline
 
 > **Purpose:** quick reference for what happens when a new file is added, which steps use an LLM, and what the final published outputs are.
-> **Related docs:** [Implementation plan](PLAN.md), [Global spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md), [Phase 5 wiki compiler, collection pages, and memory bridge](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md), [Phase 6 lint](superpowers/completed/specs/2026-04-05-phase6-lint-design.md), [Connection model](superpowers/completed/specs/2026-04-05-connection-model.md)
+> **Related docs:** [Plan](PLAN.md), [Full system design](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md), [Phase 3 enrichment](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md), [Phase 4 search index](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md), [Phase 5 wiki compiler](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md), [Phase 6 lint](superpowers/completed/specs/2026-04-05-phase6-lint-design.md), [Connection model](superpowers/completed/specs/2026-04-05-connection-model.md)
 
 ## End Product
 

@@ -326,6 +326,8 @@ LLM-dependent. Reads raw extraction artifacts and adds semantic metadata. Every 
 - document_type: regulation | catalogue | monograph | paper | lecture_note | precedent | technical_spec | site_document (refines or fills raw_document_type when deterministic pass returned "")
 - summary: ~200 words, with provenance (weighted toward annotated sections when present)
 - keywords: 5-15 terms, with provenance (refines raw_keywords — may reorder, add domain-specific terms, or remove noise)
+- methodological_conclusions: 2-4 short reusable statements about how the document says methods should be used, why they matter, and what methodological stance it contributes
+- main_content_learnings: 2-4 short reusable statements about what the document contributes to architectural knowledge
 - Architecture facets (each with provenance):
   - building_type, scale (detail | building | urban | territorial)
   - location, jurisdiction, climate
@@ -344,6 +346,7 @@ LLM-dependent. Reads raw extraction artifacts and adds semantic metadata. Every 
 **Concept candidates** (new file: `concepts.jsonl`):
 - LLM-identified concepts that this material contributes to
 - These should be rich, reusable concept phrases: broad enough to connect materials across the corpus, but specific enough to retain analytical meaning
+- Each concept also carries a short descriptor sentence, plus relevance and provenance
 - Used by the wiki compiler to build/update concept pages
 
 ### Why this split matters:
@@ -357,7 +360,7 @@ LLM-dependent. Reads raw extraction artifacts and adds semantic metadata. Every 
 ### Token-efficient 3-layer retrieval:
 
 **Layer 1 — Card search** (~100 tokens per result):
-- Query SQLite FTS5 over: title, summary, keywords, facets
+- Query SQLite FTS5 over: title, summary, keywords, methodological conclusions, main content learnings, facets
 - Returns material cards: material_id, title, summary snippet, domain, type
 - Typical: 10-20 cards returned
 

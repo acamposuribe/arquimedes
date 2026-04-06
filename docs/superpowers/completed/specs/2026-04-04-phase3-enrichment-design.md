@@ -5,13 +5,8 @@
 > **Parent spec:** [Full system design](2026-04-04-arquimedes-knowledge-system-design.md)
 
 ## Overview
-      - provider: codex
-        command: "codex exec"
-        model: gpt-5.4-mini
-        effort: high
 
-`arq enrich` adds LLM-generated semantic metadata to extracted materials. Every enriched field carries full provenance. Enrichment is split into three independent stages per material — document, chunk, and figure — each with its own staleness tracking, so stages can rerun selectively without invalidating each other.
-        agent: copilot-no-tools-json
+`arq enrich` adds LLM-generated semantic metadata to extracted materials. Every enriched field carries full provenance. Enrichment is split into three independent stages per material — document, chunk, and figure — each with its own staleness tracking, so stages can rerun selectively without invalidating each other. The document stage now also produces reusable methodological conclusions and main content learnings, and concept candidates carry short descriptors so later clustering and reflection stages can reuse them without re-reading source prose.
 ## Enrichment Stages
 
 ### Stage 1: Document Enrichment
@@ -21,36 +16,20 @@
 **Outputs added to `meta.json`:**
 - `summary` (EnrichedField) — ~200 words, weighted toward annotated sections
 - `document_type` (EnrichedField) — from fixed enum: regulation | catalogue | monograph | paper | lecture_note | precedent | technical_spec | site_document. Refines `raw_document_type`.
-        agent: copilot-no-tools-json
 - `facets` (ArchitectureFacets) — each sub-field is an EnrichedField or None. Only set where confident. Fields: building_type, scale, location, jurisdiction, climate, program, material_system, structural_system, historical_period, course_topic, studio_project.
+- `methodological_conclusions` (EnrichedField) — 2-4 short reusable statements about how the document says methods should be used, why they matter, and what methodological stance or procedure it contributes
+- `main_content_learnings` (EnrichedField) — 2-4 short reusable statements about what the document contributes to architectural knowledge
 - `_enrichment_stamp` — see Staleness section
 
 **Outputs written to `concepts.jsonl`:**
 - Concept candidates owned exclusively by this stage
-- Each entry: `{concept_name, relevance, provenance}`
+- Each entry: `{concept_name, descriptor, relevance, provenance}`
 
-      - provider: codex
-        command: "codex exec"
-        model: gpt-5.4-mini
-        effort: medium
 **LLM call strategy:**
 - For small/moderate materials (all chunk text fits within ~80k tokens alongside the document prompt): combined with chunk enrichment in one call. The LLM response contains both document-level and chunk-level output in a single structured response.
 - For large materials: separate document call with curated context (see below), chunk enrichment runs in its own batched calls
 
-        silent: true
-        no_ask_user: true
-        no_auto_update: true
-        no_custom_instructions: true
-        allow_all: false
 **Combined call failure semantics:** When document and chunk enrichment share one LLM call, the response is parsed into document output and chunk output independently. If the document portion is valid but the chunk portion is malformed (or vice versa), the valid portion commits and the invalid portion triggers a schema-repair retry for just that portion. If the retry also fails, only the failed stage is marked as failed. The stages remain independent even when they share a transport call.
-      - provider: claude
-        command: "claude --print"
-        model: sonnet
-        effort: medium
-      - provider: codex
-        command: "codex exec"
-        model: gpt-5.4-mini
-        effort: high
 
 **Context sent to LLM:**
 - Document header: title, authors, year, raw_keywords, raw_document_type, domain, collection
@@ -168,7 +147,7 @@ Every enriched field uses the existing `EnrichedField` wrapper:
 - Short — quoted or paraphrased supporting fragments, not full paragraphs
 - For chunk-level outputs: may also reference `chunk_id`
 
-**What the LLM returns:** `source_pages`, `evidence_spans`, `confidence` (0-1).
+**What the LLM returns:** `source_pages`, `evidence_spans`, `confidence` (0-1). Concept candidates also return `descriptor`.
 **What we stamp ourselves:** `model`, `prompt_version`, `enriched_at`.
 
 ## Annotation-Aware Enrichment
@@ -183,7 +162,6 @@ When `annotations.jsonl` exists:
 ## CLI Interface
 - With `material_id`: enrich that single material
 - `--force`: re-enrich regardless of staleness
-        agent: copilot-no-tools-json
 - `--dry-run`: report what would be enriched without calling the LLM. Does not require an API key.
 
 **Output:**
@@ -193,7 +171,6 @@ Enriching bbf97c1aae06 (Engaging the Archival Habitat)
   chunks:   enriched (47 chunks, 2 batches)
   figures:  enriched (6 figures, 1 vision batch)
 ```
-        agent: copilot-no-tools-json
 **Exit codes:**
 - 0: all requested stages succeeded
 - 1: one or more requested stages failed (partial results still printed)
@@ -203,21 +180,8 @@ Enriching bbf97c1aae06 (Engaging the Archival Habitat)
 Convenience wrapper: runs `extract-raw` then `enrich` sequentially.
 - **Agent CLI errors** (timeouts, non-zero exit): retry up to max_retries per call
 - **Invalid LLM output** (malformed JSON, missing fields): one schema-repair retry ("return valid JSON matching the schema"), then fail the stage if still invalid
-        agent: copilot-no-tools-json
 - **Partial failure:** if one stage fails, save what succeeded in other stages. Stamps track independence.
 - **Stage atomicity:** either a stage completes fully or it doesn't write. No partial enrichment within a stage.
-  chunks.jsonl                   # each chunk gains summary + keywords
-  chunk_enrichment_stamps.json   # NEW — {chunk_id: stamp} map
-        agent: copilot-no-tools-json
-        model: gpt-4.1
-        silent: true
-        no_ask_user: true
-        no_auto_update: true
-        no_custom_instructions: true
-        allow_all: false
-  figures/
-    fig_0001.json                # gains visual_type, description, caption,
-                                 #   analysis_mode, _enrichment_stamp
 ```
 
 ## Configuration

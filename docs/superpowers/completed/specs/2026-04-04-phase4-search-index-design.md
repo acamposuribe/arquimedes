@@ -34,6 +34,8 @@ Full-text search over document-level metadata. One row per material.
 | `title` | meta.json | TEXT | Raw field |
 | `summary` | meta.json → summary.value | TEXT | Enriched; empty if not enriched |
 | `keywords` | meta.json → keywords.value | TEXT | Joined with spaces for FTS |
+| `methodological_conclusions` | meta.json → methodological_conclusions.value | TEXT | Enriched reusable method takeaways |
+| `main_content_learnings` | meta.json → main_content_learnings.value | TEXT | Enriched reusable content learnings |
 | `raw_keywords` | meta.json | TEXT | Joined with spaces for FTS |
 | `domain` | meta.json | TEXT | `practice` or `research` |
 | `collection` | meta.json | TEXT | Second-level folder or `_general` |
@@ -60,7 +62,7 @@ Full-text search over document-level metadata. One row per material.
 | `course_topic` | |
 | `studio_project` | |
 
-**Implementation:** Two SQLite tables — a regular table `materials` with all columns (for exact-match facet filtering and column retrieval) and an FTS5 virtual table `materials_fts` indexing the text-searchable columns (title, summary, keywords, raw_keywords, authors). Facet filtering happens via JOIN against `materials` WHERE clauses.
+**Implementation:** Two SQLite tables — a regular table `materials` with all columns (for exact-match facet filtering and column retrieval) and an FTS5 virtual table `materials_fts` indexing the text-searchable columns (title, summary, keywords, raw_keywords, methodological_conclusions, main_content_learnings, authors). Facet filtering happens via JOIN against `materials` WHERE clauses.
 
 ### `chunks` table
 
@@ -111,6 +113,24 @@ One row per reader annotation.
 
 **Implementation:** Regular table `annotations` + FTS5 virtual table `annotations_fts` indexing (quoted_text, comment).
 
+### `concepts` table
+
+One row per concept candidate emitted by enrichment.
+
+| Column | Source | Type | Notes |
+|--------|--------|------|-------|
+| `concept_name` | concepts.jsonl | TEXT | Display label |
+| `descriptor` | concepts.jsonl | TEXT | Short one-sentence gloss for the concept |
+| `material_id` | derived | TEXT FK | |
+| `concept_type` | concepts.jsonl | TEXT | local or bridge_candidate |
+| `concept_key` | derived | TEXT | Normalized grouping key |
+| `relevance` | concepts.jsonl | TEXT | high, medium, low |
+| `source_pages` | concepts.jsonl | TEXT | JSON array as string |
+| `evidence_spans` | concepts.jsonl | TEXT | JSON array as string |
+| `confidence` | concepts.jsonl → provenance.confidence | REAL | |
+
+**Implementation:** Regular table `concepts` + FTS5 virtual table `concepts_fts` indexing (concept_name, concept_key). The descriptor, concept_type, relevance, source_pages, evidence_spans, and confidence columns remain queryable through the regular table.
+
 ### `index_state` table
 
 Single-row metadata table for staleness tracking.
@@ -132,12 +152,13 @@ Full rebuild from scratch:
    - Read `chunks.jsonl` → populate `chunks` rows
    - Read `figures/*.json` → populate `figures` rows
    - Read `annotations.jsonl` → populate `annotations` rows
+   - Read `concepts.jsonl` → populate `concepts` rows
 3. Extract `.value` from `EnrichedField` wrappers — only plain values go into the index
 4. Build FTS5 virtual tables from content tables
 5. Write `index_state` row with current snapshot metadata
 6. Write index to `indexes/search.sqlite` (atomic: write to temp, rename)
 
-**Value extraction:** For enriched fields (`summary`, `keywords`, `document_type`, facets, etc.), the indexer reads `field.value`. If the field is `null` (not yet enriched), the column gets an empty string. The index works with partially-enriched materials — unenriched materials are still findable by title, raw_keywords, and raw_document_type.
+**Value extraction:** For enriched fields (`summary`, `keywords`, `methodological_conclusions`, `main_content_learnings`, `document_type`, facets, etc.), the indexer reads `field.value`. If the field is `null` (not yet enriched), the column gets an empty string. The index works with partially-enriched materials — unenriched materials are still findable by title, raw_keywords, and raw_document_type.
 
 **Keywords handling:** `keywords.value` is a list of strings. Joined with spaces for FTS indexing: `["thermal mass", "concrete"] → "thermal mass concrete"`.
 

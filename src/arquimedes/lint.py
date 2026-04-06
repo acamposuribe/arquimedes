@@ -122,6 +122,16 @@ def _write_stamp(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _cleanup_paths(*paths: Path) -> None:
+    """Best-effort cleanup for temporary staging files."""
+    for path in paths:
+        try:
+            if path and path.exists():
+                path.unlink()
+        except OSError:
+            pass
+
+
 def _parse_iso_datetime(value: Any) -> datetime | None:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -2227,6 +2237,7 @@ def _run_cluster_audit(
         return existing_rows, bridge_discovery
 
     _write_jsonl(root / LINT_DIR / "cluster_reviews.jsonl", output)
+    _cleanup_paths(input_path, output_path, bridge_output_path, bridge_packets_path or Path())
     return output, bridge_discovery
 
 

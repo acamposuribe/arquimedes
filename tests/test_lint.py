@@ -317,9 +317,6 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     assert len(first) == 1
     assert discovery == 0
     assert len(calls) == 1
-    assert (root / "derived" / "lint" / "cluster_audit_input.json").exists()
-    assert (root / "derived" / "lint" / "cluster_audit_output.json").exists()
-    assert (root / "derived" / "tmp" / "cluster_audit_bridge_output.json").exists()
     from arquimedes.lint import _cluster_audit_prompt
     prompt_system, prompt_user = _cluster_audit_prompt(
         root,
@@ -332,6 +329,9 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     assert "PROCESS_FINISHED" in prompt_user
     for record in first:
         assert {"review_id", "cluster_id", "finding_type", "severity", "recommendation", "affected_material_ids", "affected_concept_names", "evidence", "input_fingerprint", "wiki_path"} <= set(record)
+    assert not (root / "derived" / "lint" / "cluster_audit_input.json").exists()
+    assert not (root / "derived" / "lint" / "cluster_audit_output.json").exists()
+    assert not (root / "derived" / "tmp" / "cluster_audit_bridge_output.json").exists()
 
     second, discovery2 = _run_cluster_audit(root, clusters, material_info, "test-route", llm_factory)
     assert len(second) == 1

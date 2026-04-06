@@ -47,7 +47,7 @@ from arquimedes.compile_pages import (
 )
 from arquimedes.config import get_project_root, load_config
 from arquimedes.enrich import _is_chunk_stale, _is_document_stale, _is_figure_stale
-from arquimedes.enrich_llm import EnrichmentError, LlmFn, make_cli_llm_fn, parse_json_or_repair
+from arquimedes.enrich_llm import EnrichmentError, LlmFn, get_model_id, make_cli_llm_fn, parse_json_or_repair
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import (
     _compute_extracted_snapshot,
@@ -1551,8 +1551,11 @@ def _cluster_audit_prompt(root: Path, input_path: Path, output_path: Path, bridg
         "cluster-audit packet file. If that packet points to a bridge packet file, read it too for copied "
         "material context and local concepts.\n"
         "Task 1: audit the current bridge memory for over-merges, missed equivalences, weak naming, "
-        "single-material weakness, missing materials, and bridge concepts that should merge, split, rename, or be removed.\n"
+        "single-material weakness, missing materials, and bridge concepts that should merge, rename, or be improved.\n"
         "Task 2: use the bridge packet's local concepts and material context to discover genuinely new bridge concepts.\n"
+        "Prefer ambitious, useful connections and preserve existing bridge concepts whenever they still form a coherent cross-material idea. "
+        "Treat splitting as a last resort: only split when the evidence clearly shows that one bridge cluster is conflating distinct intellectual territories that cannot remain together. "
+        "If a cluster is broad but still coherent, keep it and improve the canonical name instead of fragmenting it. "
         "Respect prior bridge memory and prior cluster findings whenever possible. "
         f"If you need more context, include a context_requests array with up to "
         f"{MAX_CONTEXT_REQUESTS_PER_PASS} read-only SQL-index lookups from the allowed toolset. "
@@ -2055,6 +2058,7 @@ def _run_cluster_audit(
     root: Path,
     clusters: list[dict],
     material_info: dict[str, dict],
+    route_signature: str = "",
     llm_factory=None,
     tool: ReflectionIndexTool | None = None,
 ) -> tuple[list[dict], int]:
@@ -2077,6 +2081,7 @@ def _run_cluster_audit(
         "bridge_memory_count": len(clusters),
         "bridge_packet_material_count": len(material_rows) if bridge_packets_path else 0,
         "bridge_packet_local_concept_count": len(local_rows) if bridge_packets_path else 0,
+        "lint_route_signature": route_signature,
     }
     fingerprint = canonical_hash(packet)
     if existing_rows and all(row.get("input_fingerprint") == fingerprint for row in existing_rows):
@@ -2695,9 +2700,17 @@ def run_reflective_lint(
 
         def llm_factory(stage: str) -> LlmFn:
             return make_cli_llm_fn(config, "lint", state=shared_llm_state)
+    lint_route_signature = get_model_id(config, "lint")
 
     with ReflectionIndexTool(root) as tool:
-        cluster_reviews, bridge_discovery = _run_cluster_audit(root, clusters, material_info, llm_factory, tool)
+        cluster_reviews, bridge_discovery = _run_cluster_audit(
+            root,
+            clusters,
+            material_info,
+            lint_route_signature,
+            llm_factory,
+            tool,
+        )
         if apply:
             bridge_clusters, bridge_changes = _run_bridge_cluster_maintenance(
                 root,

@@ -1544,11 +1544,12 @@ def _collection_prompt_payload(
     }
 
 
-def _cluster_audit_prompt(root: Path, input_path: Path, output_path: Path) -> tuple[str, str]:
+def _cluster_audit_prompt(root: Path, input_path: Path, output_path: Path, bridge_output_path: Path) -> tuple[str, str]:
     system = (
         "You are an architecture research librarian auditing the bridge concept graph. "
         "Return JSON only. Read the bridge memory file and the cluster findings file directly, then read the "
-        "cluster-audit packet file for material context. Find over-merges, missed equivalences, weak naming, "
+        "cluster-audit packet file. If that packet points to a bridge packet file, read it too for copied "
+        "material context and local concepts. Find over-merges, missed equivalences, weak naming, "
         "single-material weakness, missing materials, and bridge concepts that should merge, split, rename, or be removed. "
         "Respect prior bridge memory and prior cluster findings whenever possible. "
         f"If you need more context, include a context_requests array with up to "
@@ -1559,14 +1560,16 @@ def _cluster_audit_prompt(root: Path, input_path: Path, output_path: Path) -> tu
         f"Read the current bridge memory from {root / 'derived' / 'bridge_concept_clusters.jsonl'}.\n"
         f"Read the current cluster findings from {root / LINT_DIR / 'cluster_reviews.jsonl'}.\n"
         f"Read the cluster-audit packet file from {input_path}.\n"
-        "That packet includes the material context copied for this audit.\n"
-        "Return a JSON object with keys: findings, context_requests.\n"
+        "That packet may include the path to a bridge packet file containing copied material context and local concepts.\n"
+        "Return a JSON object with keys: findings, new_clusters, context_requests.\n"
         "findings must be a JSON array. Each finding may include cluster_id or target_cluster_ids if it applies "
         "to specific bridge clusters. context_requests is optional and must be a JSON array of "
         "read-only SQL-index lookups if you need more context.\n"
+        "new_clusters must be a JSON array of proposed new bridge clusters discovered from the local concepts.\n"
         "Each finding must include: finding_type, severity, recommendation, "
         "affected_material_ids, affected_concept_names, evidence.\n"
         f"Write the findings JSON to {output_path} using the Write tool.\n"
+        f"Write the updated bridge_concept_clusters JSON to {bridge_output_path} using the Write tool.\n"
         "Do not stream JSON into the response.\n"
         "Confirm with a single line when done.\n"
     )
@@ -2053,7 +2056,7 @@ def _run_cluster_audit(
     material_info: dict[str, dict],
     llm_factory=None,
     tool: ReflectionIndexTool | None = None,
-) -> list[dict]:
+) -> tuple[list[dict], int]:
     existing_rows = _load_jsonl(root / LINT_DIR / "cluster_reviews.jsonl")
     existing_by_cluster: dict[str, list[dict]] = defaultdict(list)
     for row in existing_rows:
@@ -2061,55 +2064,32 @@ def _run_cluster_audit(
         if cluster_id:
             existing_by_cluster[cluster_id].append(row)
     output: list[dict] = []
-    cluster_material_sets: dict[str, set[str]] = {}
-    cluster_concept_sets: dict[str, set[str]] = {}
-
-    audit_clusters = []
-    for cluster in clusters:
-        cluster_id = str(cluster.get("cluster_id", "")).strip()
-        source_concepts = cluster.get("source_concepts", [])
-        material_count = len(dict.fromkeys(str(sc.get("material_id", "")).strip() for sc in source_concepts if str(sc.get("material_id", "")).strip()))
-        if material_count == 0:
-            continue
-        page_path = root / _concept_page_path(cluster)
-        cluster_material_sets[cluster_id] = {
-            str(sc.get("material_id", "")).strip()
-            for sc in source_concepts
-            if str(sc.get("material_id", "")).strip()
-        }
-        cluster_concept_sets[cluster_id] = {
-            str(sc.get("concept_name", "")).strip().casefold()
-            for sc in source_concepts
-            if str(sc.get("concept_name", "")).strip()
-        }
-        payload = _cluster_prompt_payload(
-            cluster,
-            material_info,
-            _read_text(page_path) or "",
-            tool,
-        )
-        payload["audit_scope"] = "full" if material_count >= 2 else "light"
-        payload["material_count"] = material_count
-        audit_clusters.append({
-            "cluster_id": cluster.get("cluster_id", ""),
-            "wiki_path": str(page_path.relative_to(root)),
-            "fingerprint": canonical_hash(payload),
-            "packet": payload,
-        })
+    local_rows, material_rows = _load_local_concepts(root)
+    bridge_packets_path = None
+    if local_rows and material_rows:
+        bridge_packets_path = _stage_bridge_packet_input(root, local_rows, material_rows)
 
     packet = {
-        "clusters": audit_clusters,
+        "bridge_memory_path": str(root / "derived" / "bridge_concept_clusters.jsonl"),
+        "cluster_reviews_path": str(root / LINT_DIR / "cluster_reviews.jsonl"),
+        "bridge_packets_path": str(bridge_packets_path) if bridge_packets_path else "",
+        "bridge_memory_count": len(clusters),
+        "bridge_packet_material_count": len(material_rows) if bridge_packets_path else 0,
+        "bridge_packet_local_concept_count": len(local_rows) if bridge_packets_path else 0,
     }
     fingerprint = canonical_hash(packet)
     if existing_rows and all(row.get("input_fingerprint") == fingerprint for row in existing_rows):
-        return existing_rows
+        return existing_rows, 0
 
     input_path, output_path = _cluster_audit_paths(root)
+    bridge_output_path = root / "derived" / "tmp" / "cluster_audit_bridge_output.json"
     _write_json(input_path, packet)
     if output_path.exists():
         output_path.unlink()
+    bridge_output_path.parent.mkdir(parents=True, exist_ok=True)
+    bridge_output_path.write_text("", encoding="utf-8")
     llm_fn = llm_factory("lint")
-    system, user = _cluster_audit_prompt(root, input_path, output_path)
+    system, user = _cluster_audit_prompt(root, input_path, output_path, bridge_output_path)
     parsed = _run_reflection_prompt_with_context(
         llm_fn,
         system,
@@ -2122,56 +2102,105 @@ def _run_cluster_audit(
             parsed = json.loads(output_path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             pass
+    bridge_output: dict[str, Any] | list[Any] | None = None
+    if bridge_output_path.exists() and bridge_output_path.stat().st_size > 0:
+        try:
+            bridge_output = json.loads(bridge_output_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            bridge_output = None
     if parsed is not None:
         _write_json(output_path, parsed if isinstance(parsed, (dict, list)) else {"findings": parsed})
     findings = parsed.get("findings", []) if isinstance(parsed, dict) else parsed
     if not isinstance(findings, list):
         raise EnrichmentError("Cluster audit returned non-list findings")
 
+    bridge_discovery = 0
     for idx, finding in enumerate(findings):
         if not isinstance(finding, dict):
             continue
-        affected_material_ids = {
-            str(mid).strip()
-            for mid in _safe_list(finding.get("affected_material_ids", []))
-            if str(mid).strip()
+        cluster_id = str(finding.get("cluster_id", "")).strip()
+        record = {
+            "review_id": f"{cluster_id or 'cluster'}:{idx}:{finding.get('finding_type','')}",
+            "cluster_id": cluster_id,
+            "finding_type": finding.get("finding_type", ""),
+            "severity": finding.get("severity", ""),
+            "recommendation": finding.get("recommendation", ""),
+            "affected_material_ids": _safe_list(finding.get("affected_material_ids", [])),
+            "affected_concept_names": _safe_list(finding.get("affected_concept_names", [])),
+            "evidence": _safe_list(finding.get("evidence", [])),
+            "input_fingerprint": fingerprint,
+            "wiki_path": str(_concept_page_path(next((c for c in clusters if str(c.get("cluster_id", "")).strip() == cluster_id), clusters[0] if clusters else {}))),
         }
-        affected_concepts = {
-            str(name).strip().casefold()
-            for name in _safe_list(finding.get("affected_concept_names", []))
-            if str(name).strip()
-        }
-        target_cluster_ids = _safe_list(finding.get("cluster_id", []))
-        target_cluster_ids.extend(_safe_list(finding.get("target_cluster_ids", [])))
-        if not target_cluster_ids:
-            for cluster in clusters:
-                cluster_id = str(cluster.get("cluster_id", "")).strip()
-                if not cluster_id:
-                    continue
-                if affected_material_ids and affected_material_ids & cluster_material_sets.get(cluster_id, set()):
-                    target_cluster_ids.append(cluster_id)
-                    continue
-                if affected_concepts and affected_concepts & cluster_concept_sets.get(cluster_id, set()):
-                    target_cluster_ids.append(cluster_id)
-        if not target_cluster_ids and clusters:
-            target_cluster_ids = [str(clusters[0].get("cluster_id", "")).strip()]
+        output.append(record)
 
-        for cluster_id in _dedupe_strings(target_cluster_ids):
-            cluster = next((c for c in clusters if str(c.get("cluster_id", "")).strip() == cluster_id), clusters[0] if clusters else {})
-            page_path = root / _concept_page_path(cluster) if cluster else root / "wiki" / "_index.md"
-            record = {
-                "review_id": f"{cluster_id or 'cluster'}:{idx}:{finding.get('finding_type','')}",
-                "cluster_id": cluster_id,
-                "finding_type": finding.get("finding_type", ""),
-                "severity": finding.get("severity", ""),
-                "recommendation": finding.get("recommendation", ""),
-                "affected_material_ids": _safe_list(finding.get("affected_material_ids", [])),
-                "affected_concept_names": _safe_list(finding.get("affected_concept_names", [])),
-                "evidence": _safe_list(finding.get("evidence", [])),
-                "input_fingerprint": fingerprint,
-                "wiki_path": str(page_path.relative_to(root)),
+    new_clusters = parsed.get("new_clusters", []) if isinstance(parsed, dict) else []
+    if not new_clusters and isinstance(bridge_output, dict):
+        new_clusters = bridge_output.get("clusters", [])
+    elif not new_clusters and isinstance(bridge_output, list):
+        new_clusters = bridge_output
+    if isinstance(new_clusters, list):
+        _write_json(bridge_output_path, {"clusters": new_clusters})
+    if isinstance(new_clusters, list) and local_rows and material_rows:
+        concept_index: dict[tuple[str, str], dict] = {}
+        for row in local_rows:
+            concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type = row
+            concept_index[(material_id, concept_key)] = {
+                "concept_name": concept_name,
+                "concept_key": concept_key,
+                "material_id": material_id,
+                "concept_type": concept_type,
+                "relevance": relevance,
+                "source_pages": source_pages,
+                "evidence_spans": evidence_spans,
+                "confidence": confidence,
             }
-            output.append(record)
+
+        validated = _validate_bridge_and_attach_provenance(new_clusters, concept_index, {})
+        covered_pairs = _cover_pairs_from_clusters(clusters)
+        discovered: list[dict] = []
+        for cluster in validated:
+            filtered_sources = [
+                source for source in cluster.get("source_concepts", [])
+                if (source.get("material_id", ""), source.get("concept_key", "")) not in covered_pairs
+            ]
+            material_ids = list(dict.fromkeys(source.get("material_id", "") for source in filtered_sources if source.get("material_id", "")))
+            if len(material_ids) < 2:
+                continue
+            canonical_name = cluster.get("canonical_name", "").strip()
+            aliases = _dedupe_strings([
+                canonical_name,
+                *(_safe_list(cluster.get("aliases", []))),
+                *[source.get("concept_name", "") for source in filtered_sources if source.get("concept_name", "")],
+            ])
+            discovered.append({
+                "canonical_name": canonical_name or filtered_sources[0].get("concept_name", ""),
+                "slug": slugify(canonical_name or filtered_sources[0].get("concept_name", "")),
+                "aliases": aliases,
+                "material_ids": material_ids,
+                "source_concepts": filtered_sources,
+                "confidence": float(cluster.get("confidence", 0.0) or 0.0),
+            })
+
+        if discovered:
+            assigned = _assign_new_bridge_ids(discovered, clusters)
+            updated = sorted([*clusters, *assigned], key=lambda c: c.get("cluster_id", ""))
+            derived_dir = root / "derived"
+            derived_dir.mkdir(exist_ok=True)
+            bridge_path = derived_dir / "bridge_concept_clusters.jsonl"
+            with bridge_path.open("w", encoding="utf-8") as f:
+                for cluster in updated:
+                    f.write(json.dumps(cluster, ensure_ascii=False) + "\n")
+            stamp_path = derived_dir / "bridge_cluster_stamp.json"
+            stamp_path.write_text(
+                json.dumps({
+                    "clustered_at": datetime.now(timezone.utc).isoformat(),
+                    "fingerprint": bridge_cluster_fingerprint(None),
+                    "bridge_concepts": sum(len(c.get("source_concepts", [])) for c in updated),
+                    "clusters": len(updated),
+                }, indent=2),
+                encoding="utf-8",
+            )
+            bridge_discovery = len(assigned)
     if not output:
         for cluster in clusters:
             review_id = cluster.get("cluster_id", "")
@@ -2189,10 +2218,10 @@ def _run_cluster_audit(
                 "wiki_path": str(page_path.relative_to(root)),
             })
     if not output:
-        return existing_rows
+        return existing_rows, bridge_discovery
 
     _write_jsonl(root / LINT_DIR / "cluster_reviews.jsonl", output)
-    return output
+    return output, bridge_discovery
 
 
 def _run_concept_reflections(
@@ -2667,7 +2696,7 @@ def run_reflective_lint(
             return make_cli_llm_fn(config, "lint", state=shared_llm_state)
 
     with ReflectionIndexTool(root) as tool:
-        cluster_reviews = _run_cluster_audit(root, clusters, material_info, llm_factory, tool)
+        cluster_reviews, bridge_discovery = _run_cluster_audit(root, clusters, material_info, llm_factory, tool)
         if apply:
             bridge_clusters, bridge_changes = _run_bridge_cluster_maintenance(
                 root,
@@ -2677,15 +2706,8 @@ def run_reflective_lint(
                 llm_factory,
                 tool,
             )
-            bridge_clusters, bridge_discovery = _run_bridge_cluster_discovery(
-                root,
-                bridge_clusters,
-                llm_factory,
-                tool,
-            )
         else:
             bridge_changes = 0
-            bridge_discovery = 0
         concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool)
         collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool)
         graph_due, graph_reason = _graph_reflection_due(

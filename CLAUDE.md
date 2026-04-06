@@ -4,7 +4,7 @@
 
 Collaborative LLM knowledge base for architecture (building design) practice and research.
 
-Raw materials live in a shared iCloud folder (`~/Arquimedes-Library`). The repo contains extracted artifacts, wiki, indexes, and tools. Python tooling via `arq` CLI (Click). SQLite FTS5 for search (gitignored, rebuilt locally).
+Raw materials live in a shared iCloud folder. The repo contains extracted artifacts, wiki, indexes, and tools. Python tooling via `arq` CLI (Click). SQLite FTS5 for search (gitignored, rebuilt locally).
 
 The high-level conceptual inspiration is Karpathy's "LLM wiki" pattern, captured locally in `docs/llm-wiki.md`. Treat that file as the reference for the original idea: an LLM-maintained, compounding wiki that sits between raw sources and query-time retrieval. Treat the Arquimedes spec and plan as the implementation-specific adaptation for architecture, collaboration, provenance, and server-agent operation.
 
@@ -27,27 +27,4 @@ Never use an LLM for something a deterministic program can do reliably. LLMs are
 
 When implementation changes affect the spec or plan, update those documents immediately — never let them drift. The spec and plan are the source of truth for collaborators and other LLM agents picking up work. After any code change that alters the contract, update `docs/superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md` and `docs/PLAN.md` in the same batch of work.
 
-### Batch-first pipeline operation
-
-All `arq` pipeline commands default to batch mode (no arguments = process everything pending). **Never loop over individual material IDs** — the commands handle multi-material orchestration internally, including parallel LLM enrichment. Single-material mode exists only for debugging.
-
-Server-maintainer pipeline: `arq ingest` → `arq extract` → `arq index rebuild` → `arq cluster` → `arq compile`
-
 See `docs/PIPELINE.md` for the full operational reference.
-
-## Key Files
-
-| File | Purpose |
-|------|---------|
-| `docs/PLAN.md` | Implementation plan with phase checkboxes |
-| `docs/superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md` | Full design spec |
-| `docs/superpowers/specs/2026-04-04-phase3-enrichment-design.md` | Phase 3 enrichment design (complete) |
-| `docs/superpowers/specs/2026-04-04-phase4-search-index-design.md` | Phase 4 search index & retrieval design |
-| `docs/llm-wiki.md` | Original conceptual reference for the Karpathy-style LLM-maintained wiki pattern |
-| `config/config.yaml` | Default configuration |
-| `src/arquimedes/cli.py` | `arq` CLI entrypoint |
-| `src/arquimedes/enrich.py` | Enrichment orchestrator (parallel stages, combined call, staleness) |
-| `src/arquimedes/enrich_llm.py` | LLM abstraction: agent CLI adapter, ordered fallback, fast-fail |
-| `src/arquimedes/enrich_stamps.py` | Fingerprinting, staleness tracking, stamp I/O |
-| `src/arquimedes/enrich_prompts.py` | Prompt builders for document, chunk, figure stages |
-| `src/arquimedes/models.py` | Data models (Material, Chunk, Figure, EnrichedField, Provenance) |

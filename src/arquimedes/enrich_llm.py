@@ -27,6 +27,8 @@ import signal
 import subprocess
 import threading
 import sys
+import urllib.request
+import urllib.error
 from typing import Callable
 
 # ---------------------------------------------------------------------------
@@ -60,6 +62,92 @@ def _coerce_timeout_seconds(value, default: int | None = None) -> int | None:
     if timeout_seconds is None:
         return None
     return max(timeout_seconds, 1)
+
+# ---------------------------------------------------------------------------
+# Claude OAuth usage pre-flight check
+# ---------------------------------------------------------------------------
+
+_CLAUDE_USAGE_EXHAUSTED_THRESHOLD = float(
+    os.getenv("ARQ_CLAUDE_USAGE_THRESHOLD", "90")
+)
+
+
+def check_claude_oauth_usage() -> dict | None:
+    """Fetch current Claude OAuth usage from the Anthropic API.
+
+    Returns the parsed JSON dict on success, or None if the check cannot be
+    performed (missing keychain, network error, etc.).
+
+    Reads credentials from the macOS keychain (``Claude Code-credentials``)
+    or falls back to ``~/.claude/.credentials.json``.
+    """
+    token = _read_claude_oauth_token()
+    if not token:
+        return None
+    try:
+        req = urllib.request.Request(
+            "https://api.anthropic.com/api/oauth/usage",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "anthropic-beta": "oauth-2025-04-20",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.loads(resp.read().decode())
+    except Exception:
+        return None
+
+
+def _read_claude_oauth_token() -> str | None:
+    """Read the Claude Code OAuth access token from keychain or file fallback."""
+    # macOS keychain
+    try:
+        result = subprocess.run(
+            ["security", "find-generic-password", "-s", "Claude Code-credentials", "-w"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            data = json.loads(result.stdout.strip())
+            token = (data.get("claudeAiOauth") or {}).get("accessToken")
+            if token:
+                return token
+    except Exception:
+        pass
+    # File fallback
+    try:
+        creds_path = os.path.expanduser("~/.claude/.credentials.json")
+        with open(creds_path) as f:
+            data = json.load(f)
+        token = (data.get("claudeAiOauth") or {}).get("accessToken")
+        if token:
+            return token
+    except Exception:
+        pass
+    return None
+
+
+def _claude_usage_over_threshold(threshold: float = _CLAUDE_USAGE_EXHAUSTED_THRESHOLD) -> bool:
+    """Return True if any Claude usage window is at or above *threshold* percent.
+
+    Checks ``five_hour`` and ``seven_day`` windows. Returns False if the usage
+    data cannot be fetched (fail open — let the provider attempt run normally).
+    """
+    usage = check_claude_oauth_usage()
+    if not usage:
+        return False
+    for window in ("five_hour", "seven_day"):
+        entry = usage.get(window)
+        if isinstance(entry, dict):
+            util = entry.get("utilization")
+            if isinstance(util, (int, float)) and util >= threshold:
+                _llm_debug(
+                    f"claude usage pre-flight: {window} utilization={util}% >= threshold={threshold}% — skipping claude"
+                )
+                return True
+    return False
+
 
 # ---------------------------------------------------------------------------
 # Custom exception
@@ -364,18 +452,18 @@ def _run_agent_subprocess(
     (e.g. codex), which would otherwise cause false-positive kills on
     document content containing words like 'unauthorized' or 'exceeded'.
     """
-    # Enrichment prompts fit well within 200K — disable 1M context to avoid
-    # the drastically higher token consumption of extended context windows.
     safe_cmd = [_strip_nuls(part) for part in cmd]
     env = os.environ.copy()
-    env["CLAUDE_CODE_DISABLE_1M_CONTEXT"] = "1"
-    env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
-    env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
-    env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
-    env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
-    env["CLAUDE_CODE_DISABLE_HOOKS"] = "1"
-    env["MAX_THINKING_TOKENS"] = "0"
-    env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+    if "--bare" not in safe_cmd:
+        # Legacy env-var suppression — not needed in --bare mode (handled natively).
+        env["CLAUDE_CODE_DISABLE_1M_CONTEXT"] = "1"
+        env["CLAUDE_CODE_DISABLE_CLAUDE_MDS"] = "1"
+        env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] = "1"
+        env["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
+        env["CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING"] = "1"
+        env["CLAUDE_CODE_DISABLE_HOOKS"] = "1"
+        env["MAX_THINKING_TOKENS"] = "0"
+        env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
 
     safe_stdin = _strip_nuls(stdin_text)
 
@@ -540,10 +628,21 @@ def _build_agent_cmd(
         cmd = list(base_parts)
         if bare and "--bare" not in cmd:
             cmd.append("--bare")
-        if "--no-session-persistence" not in cmd:
-            cmd.append("--no-session-persistence")
-        if disable_slash_commands and "--disable-slash-commands" not in cmd:
-            cmd.append("--disable-slash-commands")
+        if bare:
+            # --bare handles sessions, hooks, memory natively — inject settings
+            # for OAuth (apiKeyHelper) and skip-permissions for headless use.
+            if "--settings" not in cmd:
+                _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                _settings_path = os.path.join(_project_root, "scripts", "claude_bare_settings.json")
+                cmd.extend(["--settings", _settings_path])
+            if "--dangerously-skip-permissions" not in cmd:
+                cmd.append("--dangerously-skip-permissions")
+        else:
+            # Legacy non-bare flags
+            if "--no-session-persistence" not in cmd:
+                cmd.append("--no-session-persistence")
+            if disable_slash_commands and "--disable-slash-commands" not in cmd:
+                cmd.append("--disable-slash-commands")
         tools_value = _tools_arg(tools if tools is not None else ["Read", "Write", "Bash"])
         if "--tools" not in cmd and "--allowedTools" not in cmd and "--allowed-tools" not in cmd:
             if tools_value is None:
@@ -557,9 +656,11 @@ def _build_agent_cmd(
             # Replace existing default model with stage-specific override
             idx = cmd.index("--model")
             cmd[idx + 1] = model_override
-        # Control thinking budget — lower = cheaper + faster
-        if "--effort" not in cmd and effort:
-            cmd.extend(["--effort", effort])
+        # Control thinking budget — bare defaults to low (no thinking)
+        if "--effort" not in cmd:
+            effective_effort = effort or ("low" if bare else None)
+            if effective_effort:
+                cmd.extend(["--effort", effective_effort])
         cmd.extend(["--system-prompt", system])
         return cmd
     if exe == "codex":
@@ -739,6 +840,16 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
     state = state if isinstance(state, dict) else {}
     exhausted_providers: set[str] = state.setdefault("exhausted_providers", set())
     exhausted_lock: threading.RLock = state.setdefault("exhausted_lock", threading.RLock())
+
+    # Pre-flight: skip Claude entirely if usage is already near the limit.
+    has_claude_route = any(
+        str(r.get("provider") or _provider_from_parts(r.get("command_parts", []))) == "claude"
+        for r in resolved
+    )
+    has_fallback = len(resolved) > 1
+    if has_claude_route and has_fallback and _claude_usage_over_threshold():
+        with exhausted_lock:
+            exhausted_providers.add("claude")
 
     def llm_fn(system: str, messages: list[dict]) -> str:
         system_prompt, user_prompt = _build_prompt_text(system, messages)

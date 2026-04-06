@@ -91,6 +91,12 @@ library_root: "~/Arquimedes-Library"
 #         no_custom_instructions: true
 #         allow_all: false
 #     lint:
+#       - provider: claude
+#         command: "claude --print"
+#         model: sonnet
+#         effort: medium
+#         tools: [Read, Write]
+#         permission_mode: acceptEdits
 #       - provider: codex
 #         command: "codex exec"
 #         model: gpt-5.4-mini

@@ -292,6 +292,7 @@ class Page:
 
     page_number: int
     text: str
+    footnote_text: str = ""
     headings: list[str] = field(default_factory=list)
     section_boundaries: list[str] = field(default_factory=list)
     figure_refs: list[str] = field(default_factory=list)

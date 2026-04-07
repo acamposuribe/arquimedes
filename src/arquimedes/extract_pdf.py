@@ -11,6 +11,7 @@ import pdfplumber
 
 from arquimedes.classify import classify_document_type, extract_keywords
 from arquimedes.models import Annotation, MaterialMeta, Page, Table
+from arquimedes.text_normalization import normalize_extracted_pages
 
 
 def _strip_nuls(text: str) -> str:
@@ -29,27 +30,26 @@ def _sanitize_strings(value):
     return value
 
 
-def extract_text_and_pages(pdf_path: Path) -> tuple[str, list[Page], list[dict]]:
-    """Extract raw text and page-level data from a PDF.
+def extract_text_and_pages(pdf_path: Path) -> tuple[list[Page], list[dict]]:
+    """Extract page-level data from a PDF.
 
     Returns:
-        (full_text, pages, toc)
+        (pages, toc)
     """
     doc = fitz.open(str(pdf_path))
     pages: list[Page] = []
-    full_text_parts: list[str] = []
 
     for page_num in range(len(doc)):
         page = doc[page_num]
-        text = _strip_nuls(page.get_text("text"))
-        full_text_parts.append(text)
+        raw_text = _strip_nuls(page.get_text("text"))
 
         # Extract headings heuristically from text blocks
         headings = _extract_headings(page)
 
         pages.append(Page(
             page_number=page_num + 1,  # 1-indexed
-            text=text,
+            text=raw_text,
+            footnote_text="",
             headings=headings,
         ))
 
@@ -63,8 +63,7 @@ def extract_text_and_pages(pdf_path: Path) -> tuple[str, list[Page], list[dict]]
     _assign_section_boundaries(pages, toc)
 
     doc.close()
-    full_text = "\n\n".join(full_text_parts)
-    return full_text, pages, toc
+    return pages, toc
 
 
 def _extract_headings(page: fitz.Page) -> list[str]:
@@ -312,7 +311,8 @@ def extract_raw_pdf(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Text and pages
-    full_text, pages, toc = extract_text_and_pages(pdf_path)
+    pages, toc = extract_text_and_pages(pdf_path)
+    pages, full_text = normalize_extracted_pages(pages)
 
     # 2. Annotations
     annotations = extract_annotations(pdf_path)
@@ -384,7 +384,6 @@ def extract_raw_pdf(
     # 6. Write artifacts
     meta.save(output_dir.parent)  # saves to output_dir/meta.json via material_id
 
-    # full text
     (output_dir / "text.md").write_text(_strip_nuls(full_text), encoding="utf-8")
 
     # pages

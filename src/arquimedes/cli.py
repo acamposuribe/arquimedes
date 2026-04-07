@@ -37,13 +37,14 @@ def ingest(path: str | None):
 
 @cli.command("extract-raw")
 @click.argument("material_id", required=False)
-def extract_raw(material_id: str | None):
+@click.option("--force", is_flag=True, help="Re-extract even if output already exists.")
+def extract_raw(material_id: str | None, force: bool):
     """Deterministic extraction: text, pages, figures, tables, TOC, annotations."""
     from arquimedes.extract import extract_raw as do_extract
 
     click.echo("Running deterministic extraction...")
     try:
-        extracted = do_extract(material_id=material_id)
+        extracted = do_extract(material_id=material_id, force=force)
     except (ValueError, FileNotFoundError) as e:
         raise click.ClickException(str(e))
 

@@ -13,6 +13,7 @@ from pathlib import Path
 
 from arquimedes.classify import classify_document_type, extract_keywords
 from arquimedes.models import Figure, MaterialMeta, Page
+from arquimedes.text_normalization import normalize_extracted_pages
 
 
 def _tesseract_available() -> bool:
@@ -106,7 +107,6 @@ def extract_raw_image(
     )
 
     # OCR for scanned documents
-    text = ""
     pages: list[Page] = []
 
     if is_scanned and ocr_fallback:
@@ -134,6 +134,9 @@ def extract_raw_image(
                 import warnings
                 warnings.warn(f"OCR failed for {image_path}: {e}", stacklevel=2)
 
+    # Normalize OCR text before classification and persistence.
+    pages, normalized_text = normalize_extracted_pages(pages)
+
     # Deterministic classification (only useful if OCR produced text)
     raw_keywords: list[str] = []
     raw_document_type = ""
@@ -160,7 +163,7 @@ def extract_raw_image(
 
     # Write artifacts
     meta.save(output_dir.parent)
-    (output_dir / "text.md").write_text(text, encoding="utf-8")
+    (output_dir / "text.md").write_text(normalized_text, encoding="utf-8")
 
     if pages:
         with open(output_dir / "pages.jsonl", "w", encoding="utf-8") as f:

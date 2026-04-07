@@ -19,6 +19,7 @@ from arquimedes.thumbnails import generate_thumbnails
 def extract_raw(
     material_id: str | None = None,
     config: dict | None = None,
+    force: bool = False,
 ) -> list[str]:
     """Run deterministic extraction for one or all materials.
 
@@ -56,7 +57,7 @@ def extract_raw(
         to_process = {}
         for mid, entry in manifest.items():
             output_dir = extracted_dir / mid
-            if not (output_dir / "meta.json").exists():
+            if force or not (output_dir / "meta.json").exists():
                 to_process[mid] = entry
 
     extracted_ids: list[str] = []
@@ -71,6 +72,14 @@ def extract_raw(
         entry_dict = asdict(entry)
 
         print(f"  Extracting {entry.relative_path} ({entry.file_type})...")
+
+        if force and output_dir.exists():
+            for child in output_dir.iterdir():
+                if child.is_dir():
+                    import shutil
+                    shutil.rmtree(child)
+                else:
+                    child.unlink()
 
         if entry.file_type == "pdf":
             _extract_pdf_material(

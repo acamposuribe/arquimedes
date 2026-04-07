@@ -20,6 +20,7 @@ from arquimedes.config import get_project_root, load_config
 from arquimedes.enrich_llm import (
     EnrichmentError,
     LlmFn,
+    get_model_id,
     make_cli_llm_fn,
 )
 
@@ -178,6 +179,16 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     path.write_text(text, encoding="utf-8")
 
 
+def _attach_run_provenance(records: list[dict], route_signature: str, run_at: str) -> list[dict]:
+    """Stamp each record with a _provenance block (non-destructive: preserves existing fields)."""
+    for record in records:
+        record["_provenance"] = {
+            "route_signature": route_signature,
+            "run_at": run_at,
+        }
+    return records
+
+
 def _load_jsonl(path: Path) -> list[dict]:
     """Read a JSONL file into a list of dicts."""
     if not path.exists():
@@ -197,12 +208,30 @@ def _load_jsonl(path: Path) -> list[dict]:
 
 
 def _stage_work_copy(source: Path, target: Path) -> Path:
-    """Duplicate a canonical file into tmp so the LLM can edit the copy in place."""
+    """Duplicate a canonical file into tmp so the LLM can edit the copy in place.
+
+    For JSONL files, strips _provenance from each record so the LLM doesn't see
+    or corrupt internal bookkeeping fields. Provenance is re-attached at promotion.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
-    if source.exists():
-        shutil.copyfile(source, target)
-    else:
+    if not source.exists():
         target.write_text("", encoding="utf-8")
+        return target
+    if source.suffix == ".jsonl":
+        lines = []
+        for line in source.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                record.pop("_provenance", None)
+                lines.append(json.dumps(record, ensure_ascii=False))
+            except json.JSONDecodeError:
+                lines.append(line)
+        target.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    else:
+        shutil.copyfile(source, target)
     return target
 
 
@@ -889,14 +918,18 @@ def cluster_bridge_concepts(
     derived_dir = root / "derived"
     derived_dir.mkdir(exist_ok=True)
     bridge_path = derived_dir / "bridge_concept_clusters.jsonl"
+    run_at = datetime.now(timezone.utc).isoformat()
+    route_signature = get_model_id(config, "cluster")
+    _attach_run_provenance(clusters, route_signature, run_at)
     _write_jsonl(bridge_path, clusters)
 
     fingerprint = bridge_cluster_fingerprint(config)
     stamp_path = derived_dir / "bridge_cluster_stamp.json"
     stamp_path.write_text(
         json.dumps({
-            "clustered_at": datetime.now(timezone.utc).isoformat(),
+            "clustered_at": run_at,
             "fingerprint": fingerprint,
+            "route_signature": route_signature,
             "bridge_concepts": bridge_concept_count,
             "clusters": len(clusters),
         }, indent=2),

@@ -11,11 +11,13 @@ Output is JSON by default; callers pass human=True for pretty-printed tables.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from arquimedes.classify import STOP_WORDS
 from arquimedes.config import get_project_root, load_config
 from arquimedes.index import get_index_path
 
@@ -193,6 +195,44 @@ class SearchResult:
 
     def to_json(self, indent: int | None = 2) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+
+
+# --- FTS query sanitization ---
+
+_FTS5_SPECIAL = re.compile(r'["\(\)\*\:\^]')
+
+
+def safe_fts_query(query: str) -> str:
+    """Sanitize and expand a user query for FTS5 MATCH.
+
+    - Empty → empty phrase match.
+    - Contains FTS5 special chars or bare AND/OR/NOT → phrase search (quoted).
+    - Single token → passed through as-is.
+    - Multiple plain tokens → stop words filtered out, remainder OR-expanded.
+      BM25 naturally ranks full-match documents highest.
+      e.g. "buildings for the thermal mass" → "buildings OR thermal OR mass"
+    - If filtering removes all tokens → fall back to phrase search on original.
+    """
+    stripped = query.strip()
+    if not stripped:
+        return '""'
+    # Fall back to phrase search when query contains FTS5 syntax chars or operators
+    if _FTS5_SPECIAL.search(stripped) or re.search(r'\b(AND|OR|NOT)\b', stripped):
+        escaped = stripped.replace('"', '""')
+        return f'"{escaped}"'
+    tokens = stripped.split()
+    if len(tokens) == 1:
+        return stripped
+    meaningful = [t for t in tokens if t.lower() not in STOP_WORDS]
+    if not meaningful:
+        # All tokens were stop words — phrase search on the original
+        escaped = stripped.replace('"', '""')
+        return f'"{escaped}"'
+    return " OR ".join(meaningful)
+
+
+def _safe_fts_query(query: str) -> str:
+    return safe_fts_query(query)
 
 
 # --- Facet handling ---
@@ -387,6 +427,7 @@ def _do_search(
     figure_limit: int,
     concept_limit: int,
 ) -> SearchResult:
+    fts_query = _safe_fts_query(query)
     facet_where, facet_params = _build_facet_where(facets, collection)
 
     # --- Card-layer FTS ---
@@ -400,7 +441,7 @@ def _do_search(
             ORDER BY materials_fts.rank
             LIMIT ?
         """
-        rows = con.execute(sql, [query] + facet_params + [limit]).fetchall()
+        rows = con.execute(sql, [fts_query] + facet_params + [limit]).fetchall()
     else:
         sql = """
             SELECT m.material_id, m.title, m.summary, m.domain, m.collection,
@@ -411,7 +452,7 @@ def _do_search(
             ORDER BY materials_fts.rank
             LIMIT ?
         """
-        rows = con.execute(sql, [query, limit]).fetchall()
+        rows = con.execute(sql, [fts_query, limit]).fetchall()
 
     cards_by_id: dict[str, MaterialCard] = {}
     for i, row in enumerate(rows, 1):
@@ -420,7 +461,7 @@ def _do_search(
 
     # --- Content-first: surface materials with chunk/annotation matches at depth >= 2 ---
     if depth >= 2:
-        content_mids = _find_content_material_ids(con, query, limit)
+        content_mids = _find_content_material_ids(con, fts_query, limit)
         for mid in content_mids:
             if mid not in cards_by_id:
                 row = _fetch_material_row(con, mid, facet_where, facet_params)
@@ -434,16 +475,16 @@ def _do_search(
     if depth >= 2:
         for card in cards:
             card.chunks = _search_chunks(
-                con, query, card.material_id, chunk_limit, include_text=(depth >= 3)
+                con, fts_query, card.material_id, chunk_limit, include_text=(depth >= 3)
             )
             card.annotations = _search_annotations(
-                con, query, card.material_id, annotation_limit
+                con, fts_query, card.material_id, annotation_limit
             )
             card.figures = _search_figures(
-                con, query, card.material_id, figure_limit
+                con, fts_query, card.material_id, figure_limit
             )
             card.concepts = _search_concepts(
-                con, query, card.material_id, concept_limit
+                con, fts_query, card.material_id, concept_limit
             )
 
         # Rerank materials using annotation + emphasized-chunk evidence
@@ -452,7 +493,7 @@ def _do_search(
             card.rank = i
 
     # Always query canonical concept clusters — useful at all depths
-    canonical_clusters = _search_canonical_clusters(con, query)
+    canonical_clusters = _search_canonical_clusters(con, fts_query)
 
     return SearchResult(
         query=query,
@@ -697,16 +738,16 @@ def format_human(result: SearchResult) -> str:
                 for con_hit in card.concepts:
                     lines.append(f"      [{con_hit.relevance}] {con_hit.concept_name}")
 
-        if result.canonical_clusters:
-            lines.append("")
-            lines.append("Canonical concept clusters:")
-            for cl in result.canonical_clusters:
-                alias_str = f"  (aliases: {', '.join(cl.aliases[:3])})" if cl.aliases else ""
-                bridge_tag = " [main]" if "/bridge-concepts/" in cl.wiki_path else ""
-                lines.append(f"  • {cl.canonical_name}{bridge_tag}{alias_str}  [{cl.material_count} material(s)]")
-
         lines.append("")
         lines.append(f'{result.total} result(s) for "{result.query}" (depth {result.depth})')
+
+    if result.canonical_clusters:
+        lines.append("")
+        lines.append("Canonical concept clusters:")
+        for cl in result.canonical_clusters:
+            alias_str = f"  (aliases: {', '.join(cl.aliases[:3])})" if cl.aliases else ""
+            bridge_tag = " [main]" if "/bridge-concepts/" in cl.wiki_path else ""
+            lines.append(f"  • {cl.canonical_name}{bridge_tag}{alias_str}  [{cl.material_count} material(s)]")
 
     return "\n".join(lines)
 

@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from arquimedes.cluster import (
+    _attach_run_provenance,
     _load_concept_rows,
     _load_material_rows,
     _split_concept_row,
@@ -146,12 +147,30 @@ def _cleanup_paths(*paths: Path) -> None:
 
 
 def _stage_work_copy(source: Path, target: Path) -> Path:
-    """Duplicate a canonical file into tmp so LLM can edit the copy in place."""
+    """Duplicate a canonical file into tmp so LLM can edit the copy in place.
+
+    For JSONL files, strips _provenance from each record so the LLM doesn't see
+    or corrupt internal bookkeeping fields. Provenance is re-attached at promotion.
+    """
     target.parent.mkdir(parents=True, exist_ok=True)
-    if source.exists():
-        shutil.copyfile(source, target)
-    else:
+    if not source.exists():
         target.write_text("", encoding="utf-8")
+        return target
+    if source.suffix == ".jsonl":
+        lines = []
+        for line in source.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                record = json.loads(line)
+                record.pop("_provenance", None)
+                lines.append(json.dumps(record, ensure_ascii=False))
+            except json.JSONDecodeError:
+                lines.append(line)
+        target.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
+    else:
+        shutil.copyfile(source, target)
     return target
 
 
@@ -477,9 +496,10 @@ class ReflectionIndexTool:
         return [card.to_dict() for card in result.results[:limit]]
 
     def search_material_evidence(self, kind: str, material_id: str, query: str, limit: int = 5) -> list[dict]:
+        from arquimedes.search import safe_fts_query
         kind = (kind or "").strip().lower()
         material_id = (material_id or "").strip()
-        query = (query or "").strip()
+        query = safe_fts_query((query or "").strip())
         limit = max(1, min(int(limit or 5), 8))
         if not kind or not material_id or not query:
             return []
@@ -561,7 +581,8 @@ class ReflectionIndexTool:
         return []
 
     def search_concepts(self, query: str, limit: int = 5) -> list[dict]:
-        query = (query or "").strip()
+        from arquimedes.search import safe_fts_query
+        query = safe_fts_query((query or "").strip())
         if not query:
             return []
         with self._lock:
@@ -2776,12 +2797,15 @@ def _run_cluster_audit(
     if not isinstance(reviews_work, list) or any(not isinstance(row, dict) for row in reviews_work):
         raise EnrichmentError("Bridge audit work file returned invalid cluster reviews")
 
+    run_at = datetime.now(timezone.utc).isoformat()
+    _attach_run_provenance(reviews_work, route_signature, run_at)
+    _attach_run_provenance(bridge_work, route_signature, run_at)
     _write_jsonl(root / LINT_DIR / "cluster_reviews.jsonl", reviews_work)
     _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", bridge_work)
     stamp_path = root / "derived" / "bridge_cluster_stamp.json"
     stamp_path.write_text(
         json.dumps({
-            "clustered_at": datetime.now(timezone.utc).isoformat(),
+            "clustered_at": run_at,
             "fingerprint": bridge_cluster_fingerprint(None),
             "bridge_concepts": sum(len(c.get("source_concepts", [])) for c in bridge_work),
             "clusters": len(bridge_work),
@@ -2798,6 +2822,7 @@ def _run_concept_reflections(
     material_info: dict[str, dict],
     llm_factory=None,
     tool: ReflectionIndexTool | None = None,
+    route_signature: str = "",
 ) -> list[dict]:
     existing = _existing_by_key(root / LINT_DIR / "concept_reflections.jsonl", "cluster_id")
     output: list[dict] = []
@@ -2870,6 +2895,7 @@ def _run_concept_reflections(
                 output.append(record)
 
     output.sort(key=lambda r: r.get("cluster_id", ""))
+    _attach_run_provenance(output, route_signature, datetime.now(timezone.utc).isoformat())
     _write_jsonl(root / LINT_DIR / "concept_reflections.jsonl", output)
     return output
 
@@ -2880,6 +2906,7 @@ def _run_collection_reflections(
     clusters: list[dict],
     llm_factory=None,
     tool: ReflectionIndexTool | None = None,
+    route_signature: str = "",
 ) -> list[dict]:
     existing = _existing_by_key(root / LINT_DIR / "collection_reflections.jsonl", "collection_key")
     output: list[dict] = []
@@ -2953,6 +2980,7 @@ def _run_collection_reflections(
                 output.append(record)
 
     output.sort(key=lambda r: (r.get("domain", ""), r.get("collection", "")))
+    _attach_run_provenance(output, route_signature, datetime.now(timezone.utc).isoformat())
     _write_jsonl(root / LINT_DIR / "collection_reflections.jsonl", output)
     return output
 
@@ -2967,6 +2995,7 @@ def _run_graph_reflection(
     manifest_records: list[dict],
     llm_factory=None,
     tool: ReflectionIndexTool | None = None,
+    route_signature: str = "",
 ) -> dict:
     packet_path = _graph_reflection_packet_path(root)
     work_path = _graph_reflection_work_path(root)
@@ -3023,6 +3052,7 @@ def _run_graph_reflection(
                 "candidate_bridge_links": _dedupe_strings(_safe_list(finding.get("candidate_bridge_links", []))),
                 "input_fingerprint": fingerprint,
             })
+        _attach_run_provenance(normalized, route_signature, datetime.now(timezone.utc).isoformat())
         _write_jsonl(findings_path, normalized)
         succeeded = True
     finally:
@@ -3108,9 +3138,9 @@ def run_reflective_lint(
         )
         _refresh_sql_and_wiki()
         bridge_clusters = load_bridge_clusters(root)
-        concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool)
+        concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool, lint_route_signature)
         _refresh_sql_and_wiki()
-        collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool)
+        collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool, lint_route_signature)
         _refresh_sql_and_wiki()
         graph_due, graph_reason = _graph_reflection_due(
             root,
@@ -3133,6 +3163,7 @@ def run_reflective_lint(
                 manifest_records,
                 llm_factory,
                 tool,
+                lint_route_signature,
             )
             graph_maintenance = int(graph_result.get("graph_maintenance", 0) or 0)
             graph_skipped = bool(graph_result.get("graph_skipped", False))

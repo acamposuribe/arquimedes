@@ -60,8 +60,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS materials_fts USING fts5(
     keywords,
     raw_keywords,
     authors,
+    methodological_conclusions,
+    main_content_learnings,
     content='materials',
-    content_rowid='rowid'
+    content_rowid='rowid',
+    tokenize='porter unicode61'
 );
 
 CREATE TABLE IF NOT EXISTS chunks (

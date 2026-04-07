@@ -306,6 +306,24 @@ class TestBuildFigureBatchPrompt:
         all_text = " ".join(b["text"] for b in content_blocks if b["type"] == "text")
         assert "fig_0001" in all_text and "fig_0002" in all_text
 
+    def test_prompt_includes_bbox_and_artifact_hint(self):
+        figs = [{
+            "figure_id": "fig_0001",
+            "image_path": None,
+            "source_page_text": "Dense article text.",
+            "caption_candidates": [],
+            "artifact_hint": "very small crop; likely inline artifact, partial scan fragment, icon, or empty non-figure",
+            "sidecar": {
+                "source_page": 3,
+                "bbox": [5.0, 5.0, 18.0, 24.0],
+                "extraction_method": "embedded",
+            },
+        }]
+        _, messages = build_figure_batch_prompt(figs, "Doc context")
+        all_text = " ".join(b["text"] for b in messages[0]["content"] if b["type"] == "text")
+        assert "Bounding box:" in all_text
+        assert "Artifact hint:" in all_text
+
 
 # ---------------------------------------------------------------------------
 # estimate_tokens

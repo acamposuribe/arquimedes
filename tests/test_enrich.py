@@ -337,6 +337,86 @@ class TestEnrichOrchestrator:
 
         assert results["test123"]["title"] == "Test Doc"
 
+    def test_all_materials_run_sequentially_smallest_chunks_first(self, tmp_path):
+        project_root = _setup_project(tmp_path, material_id="small")
+
+        def _make_material(material_id: str, chunk_text: str) -> None:
+            manifest_entry = {
+                "material_id": material_id,
+                "file_hash": f"hash-{material_id}",
+                "relative_path": f"Research/test/{material_id}.pdf",
+                "file_type": "pdf",
+                "domain": "research",
+                "collection": "test",
+                "ingested_at": "2024-01-01T00:00:00+00:00",
+                "ingested_by": "",
+            }
+            with open(project_root / "manifests" / "materials.jsonl", "a", encoding="utf-8") as f:
+                f.write(json.dumps(manifest_entry) + "\n")
+
+            output_dir = project_root / "extracted" / material_id
+            output_dir.mkdir(parents=True, exist_ok=True)
+
+            meta = {
+                "material_id": material_id,
+                "title": "Test Doc",
+                "authors": ["Author A"],
+                "year": "2024",
+                "raw_keywords": ["arch"],
+                "raw_document_type": "paper",
+                "domain": "research",
+                "collection": "test",
+                "page_count": 1,
+            }
+            (output_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+            page = {
+                "page_number": 1,
+                "text": "Architecture text.",
+                "headings": ["Introduction"],
+                "section_boundaries": [],
+                "figure_refs": [],
+                "table_refs": [],
+                "thumbnail_path": "",
+                "has_annotations": False,
+                "annotation_ids": [],
+            }
+            (output_dir / "pages.jsonl").write_text(json.dumps(page) + "\n", encoding="utf-8")
+
+            chunk = {
+                "chunk_id": f"{material_id}_chunk",
+                "text": chunk_text,
+                "source_pages": [1],
+                "emphasized": False,
+            }
+            (output_dir / "chunks.jsonl").write_text(json.dumps(chunk) + "\n", encoding="utf-8")
+
+        _make_material("medium", "x" * 100)
+        _make_material("big", "x" * 500)
+
+        config = _make_config()
+        call_order: list[str] = []
+
+        def _doc_stage(output_dir, config, llm_fn, *, force=False):
+            call_order.append(output_dir.name)
+            return _make_stage_result()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=MagicMock()),
+            patch(_PATCH_DOC, side_effect=_doc_stage),
+            patch(_PATCH_CHUNK, return_value={"status": "skipped", "detail": "up to date"}),
+            patch(_PATCH_FIGURE, return_value={"status": "skipped", "detail": "up to date"}),
+            patch("arquimedes.enrich._is_document_stale", return_value=True),
+            patch("arquimedes.enrich._is_chunk_stale", return_value=False),
+            patch("arquimedes.enrich._is_figure_stale", return_value=False),
+        ):
+            results, all_succeeded = enrich(config=config, force=False)
+
+        assert all_succeeded is True
+        assert call_order == ["small", "medium", "big"]
+        assert list(results.keys()) == ["small", "medium", "big"]
+
     def test_stage_chunk_only(self, tmp_path):
         """stages=['chunk'] should only call enrich_chunks_stage."""
         project_root = _setup_project(tmp_path)
@@ -373,83 +453,52 @@ class TestParallelStages:
         config = _make_config()
         mock_llm_fn = MagicMock()
 
-        # Track which threads each stage runs on
-        stage_threads: dict[str, int] = {}
+        class TestStageScheduling:
+            """Tests for stage scheduling within a single material."""
 
-        def _doc_stage(*args, **kwargs):
-            stage_threads["document"] = threading.current_thread().ident
-            return _make_stage_result()
+            def test_doc_and_figure_still_allow_chunk_after_document(self, tmp_path):
+                project_root = _setup_project(tmp_path)
+                config = _make_config()
 
-        def _chunk_stage(*args, **kwargs):
-            stage_threads["chunk"] = threading.current_thread().ident
-            return _make_stage_result()
+                with (
+                    patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+                    patch(_PATCH_CLIENT, return_value=MagicMock()),
+                    patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+                    patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
+                    patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
+                    patch("arquimedes.enrich._is_document_stale", return_value=True),
+                    patch("arquimedes.enrich._is_chunk_stale", return_value=True),
+                    patch("arquimedes.enrich._is_figure_stale", return_value=True),
+                ):
+                    results, all_succeeded = enrich(
+                        material_id="test123",
+                        config=config,
+                        force=False,
+                    )
 
-        def _figure_stage(*args, **kwargs):
-            stage_threads["figure"] = threading.current_thread().ident
-            return _make_stage_result()
+                assert all_succeeded is True
+                mock_doc.assert_called_once()
+                mock_chunk.assert_called_once()
+                mock_figure.assert_called_once()
 
-        with (
-            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
-            patch(_PATCH_DOC, side_effect=_doc_stage),
-            patch(_PATCH_CHUNK, side_effect=_chunk_stage),
-            patch(_PATCH_FIGURE, side_effect=_figure_stage),
-        ):
-            results, all_succeeded = enrich(
-                material_id="test123",
-                config=config,
-                force=True,
-            )
+            def test_figure_failure_marks_run_failed(self, tmp_path):
+                project_root = _setup_project(tmp_path)
+                config = _make_config()
 
-        assert all_succeeded is True
-        # Figure should run on a different thread than document (parallel)
-        assert stage_threads["figure"] != stage_threads["document"]
-        # Chunk should run on the same thread as document (waits for doc)
-        assert stage_threads["chunk"] == stage_threads["document"]
+                with (
+                    patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+                    patch(_PATCH_CLIENT, return_value=MagicMock()),
+                    patch(_PATCH_DOC, return_value=_make_stage_result()),
+                    patch(_PATCH_CHUNK, return_value=_make_stage_result()),
+                    patch(_PATCH_FIGURE, return_value={"status": "failed", "detail": "boom"}),
+                    patch("arquimedes.enrich._is_document_stale", return_value=True),
+                    patch("arquimedes.enrich._is_chunk_stale", return_value=True),
+                    patch("arquimedes.enrich._is_figure_stale", return_value=True),
+                ):
+                    results, all_succeeded = enrich(
+                        material_id="test123",
+                        config=config,
+                        force=False,
+                    )
 
-    def test_parallel_not_used_when_only_doc_stale(self, tmp_path):
-        """When figure is up-to-date, no parallel scheduling — just sequential."""
-        project_root = _setup_project(tmp_path)
-        config = _make_config()
-        mock_llm_fn = MagicMock()
-
-        with (
-            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
-            patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
-            patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
-            patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
-        ):
-            results, _ = enrich(
-                material_id="test123",
-                config=config,
-                stages=["document", "chunk"],
-                force=True,
-            )
-
-        mock_doc.assert_called_once()
-        mock_chunk.assert_called_once()
-        mock_figure.assert_not_called()
-
-    def test_parallel_figure_failure_reported(self, tmp_path):
-        """If figure fails in parallel path, all_succeeded should be False."""
-        project_root = _setup_project(tmp_path)
-        config = _make_config()
-        mock_llm_fn = MagicMock()
-
-        with (
-            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
-            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
-            patch(_PATCH_DOC, return_value=_make_stage_result()),
-            patch(_PATCH_CHUNK, return_value=_make_stage_result()),
-            patch(_PATCH_FIGURE, return_value={"status": "failed", "detail": "vision error"}),
-        ):
-            results, all_succeeded = enrich(
-                material_id="test123",
-                config=config,
-                force=True,
-            )
-
-        assert all_succeeded is False
-        assert results["test123"]["document"]["status"] == "enriched"
-        assert results["test123"]["figure"]["status"] == "failed"
+                assert all_succeeded is False

@@ -87,21 +87,29 @@ class EnrichedField:
     """A value with provenance tracking."""
 
     value: Any
-    provenance: Provenance
+    provenance: Provenance | None = None
 
     def to_dict(self) -> dict:
-        prov = asdict(self.provenance)
-        if not prov.get("source_pages"):
-            prov.pop("source_pages", None)
-        if not prov.get("evidence_spans"):
-            prov.pop("evidence_spans", None)
-        return {"value": self.value, "provenance": prov}
+        result = {"value": self.value}
+        if self.provenance is not None:
+            prov = asdict(self.provenance)
+            if not prov.get("source_pages"):
+                prov.pop("source_pages", None)
+            if not prov.get("evidence_spans"):
+                prov.pop("evidence_spans", None)
+            if any(
+                prov.get(key)
+                for key in ("source_pages", "evidence_spans", "model", "prompt_version", "confidence", "enriched_at")
+            ):
+                result["provenance"] = prov
+        return result
 
     @classmethod
     def from_dict(cls, data: dict) -> EnrichedField:
+        prov_data = data.get("provenance")
         return cls(
             value=data["value"],
-            provenance=Provenance(**data["provenance"]),
+            provenance=Provenance(**prov_data) if isinstance(prov_data, dict) else None,
         )
 
 

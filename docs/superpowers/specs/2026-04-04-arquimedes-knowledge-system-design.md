@@ -270,6 +270,7 @@ Deterministic parsing — no LLM calls. Produces canonical artifacts:
   1. Embedded image extraction via PyMuPDF (photos, raster images)
   2. Page rasterization + region detection/cropping for vector drawings, composite layouts, and page-native diagrams that are not clean "images"
 - Each figure gets a JSON sidecar with deterministic fields: source_page, bbox, extraction_method (embedded | rasterized_region)
+- `source_page` is the canonical page-grounding for the figure and should be carried forward into figure-field provenance during enrichment rather than inferred later
 - Visual type classification and descriptions are deferred to enrichment
 
 **Tables** (`tables.jsonl`):
@@ -300,21 +301,15 @@ The ingest step records `file_type` in the manifest. The extract-raw step dispat
 
 ### Stage 2: Enrichment (`arq enrich`)
 
-LLM-dependent. Reads raw extraction artifacts and adds semantic metadata. Every enriched field carries provenance:
+LLM-dependent. Reads raw extraction artifacts and adds semantic metadata. Ordinary enriched fields rely on stage/run stamps for provenance; concept candidates keep explicit source provenance because clustering and search depend on it.
 
 ```json
 {
-  "value": "A comprehensive study of thermal mass in Mediterranean climate...",
-  "provenance": {
-    "source_pages": [1, 2, 3],
-    "evidence_spans": ["This paper examines...", "In the Mediterranean context..."],
-    "model": "claude-sonnet-4-6",
-    "prompt_version": "enrich-v1.2",
-    "confidence": 0.92,
-    "enriched_at": "2026-04-04T14:30:00Z"
-  }
+  "value": "A comprehensive study of thermal mass in Mediterranean climate..."
 }
 ```
+
+The corresponding stage stamp stores the model, prompt version, schema version, and input fingerprint for the whole enrichment pass.
 
 **Annotation-aware enrichment**:
 - When annotations exist, the enrichment prompt includes highlighted/noted spans as priority context
@@ -322,26 +317,27 @@ LLM-dependent. Reads raw extraction artifacts and adds semantic metadata. Every 
 - Keywords are partially derived from annotated spans
 - Annotations with user notes are treated as first-class insights and surfaced in the material's wiki page
 
-**Document-level enrichment** (added to `meta.json`):
+**Document-level enrichment** (added to `meta.json`; run provenance is stored in `_enrichment_stamp`):
 - document_type: regulation | catalogue | monograph | paper | lecture_note | precedent | technical_spec | site_document (refines or fills raw_document_type when deterministic pass returned "")
-- summary: ~200 words, with provenance (weighted toward annotated sections when present)
-- keywords: 5-15 terms, with provenance (refines raw_keywords — may reorder, add domain-specific terms, or remove noise)
+- summary: ~200 words (weighted toward annotated sections when present)
+- keywords: 5-15 terms (refines raw_keywords — may reorder, add domain-specific terms, or remove noise)
 - methodological_conclusions: 2-4 short reusable statements about how the document says methods should be used, why they matter, and what methodological stance it contributes
 - main_content_learnings: 2-4 short reusable statements about what the document contributes to architectural knowledge
-- Architecture facets (each with provenance):
+- Architecture facets:
   - building_type, scale (detail | building | urban | territorial)
   - location, jurisdiction, climate
   - program, material_system, structural_system
   - historical_period, course/topic, studio/project
 
-**Chunk-level enrichment** (added to `chunks.jsonl`):
-- summary: one-line summary per chunk, with provenance
-- keywords: extracted terms, with provenance
+**Chunk-level enrichment** (added to `chunks.jsonl`; run provenance is stored in chunk stamps):
+- summary: one-line summary per chunk
+- keywords: extracted terms
 
-**Figure enrichment** (added to figure JSON sidecars):
+- **Figure enrichment** (added to figure JSON sidecars; run provenance is stored in each sidecar `_enrichment_stamp`):
 - visual_type: plan | section | elevation | detail | photo | diagram | chart | render | sketch
-- description: LLM-generated visual description, with provenance
+- description: LLM-generated visual description
 - caption: extracted or inferred caption
+- non-figures such as scan artifacts, empty images, page-edge slivers, and low-information inline fragments should be marked by the LLM as `decorative` or `front_matter` so they can be deleted during cleanup
 
 **Concept candidates** (new file: `concepts.jsonl`):
 - LLM-identified concepts that this material contributes to

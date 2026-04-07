@@ -385,6 +385,43 @@ class TestMakeCliLlmFn:
         assert "--model" in args and args[args.index("--model") + 1] == "gpt-4.1"
         assert "--effort" in args and args[args.index("--effort") + 1] == "high"
 
+    def test_stage_routes_fall_back_when_first_provider_returns_empty_stdout(self, tmp_path, monkeypatch):
+        copilot = tmp_path / "copilot"
+        copilot.write_text(
+            '#!/bin/bash\n'
+            'echo "no content produced" >&2\n'
+            'exit 0\n'
+        )
+        copilot.chmod(0o755)
+
+        codex = tmp_path / "codex"
+        codex.write_text(
+            '#!/bin/bash\n'
+            'cat - > /dev/null\n'
+            'echo \'{"ok": true}\'\n'
+        )
+        codex.chmod(0o755)
+
+        monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+
+        config = {
+            "enrichment": {
+                "max_retries": 1,
+                "llm_routes": {
+                    "figure": [
+                        {"provider": "copilot", "command": "copilot", "model": "gpt-4o"},
+                        {"provider": "codex", "command": "codex exec", "model": "gpt-5.4-mini"},
+                    ]
+                },
+            }
+        }
+        fn = make_cli_llm_fn(config, "figure")
+
+        result = fn("system", [{"role": "user", "content": "hi"}])
+
+        assert '{"ok": true}' in result
+        assert fn.last_model == "codex:gpt-5.4-mini"
+
     def test_stage_route_timeout_seconds_is_honored(self, tmp_path, monkeypatch):
         hanging = tmp_path / "sleep-agent"
         hanging.write_text(

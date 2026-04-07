@@ -61,11 +61,11 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 3: LLM Enrichment
 
-- [x] `arq enrich` — LLM enrichment with provenance on every field
+- [x] `arq enrich` — LLM enrichment with stage/run stamps; concepts keep source provenance
   - [x] Annotation-aware: weight highlighted/noted sections in summaries and keywords
   - [x] Document-level: summary, document_type (refine raw_document_type), keywords (refine raw_keywords), architecture facets
   - [x] Chunk-level: one-line summaries, keywords
-  - [x] Figure-level: visual_type, descriptions, captions
+  - [x] Figure-level: visual_type, descriptions, captions, deterministic source_page on the sidecar, and LLM-guided artifact deletion for non-figures
   - [x] Concept candidates for wiki compiler
   - [x] Copilot enrichment routes use a shared no-tools custom agent with programmatic prompt mode
 - [x] `arq extract` convenience command (extract-raw + enrich)

@@ -8,11 +8,12 @@ Processes stale figures per-figure, batched into groups.
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
 from arquimedes.enrich_llm import get_model_id
-from arquimedes.models import EnrichedField, Provenance
+from arquimedes.models import EnrichedField
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,14 @@ _SCAN_ARTIFACT_PHRASES = (
     "scanned article text page",
     "scanned page of",
     "text-only page",
+    "empty image",
+    "blank image",
+    "blank scan",
+    "scanner artifact",
+    "scan artifact",
+    "page-edge artifact",
+    "cropped sliver",
+    "tiny cropped fragment",
     "body-text page",
     "dense prose",
     "continuous prose",
@@ -93,6 +102,33 @@ def _is_full_page_bbox(bbox: list[float]) -> bool:
     return x0 <= 1.0 and y0 <= 1.0 and width >= 400 and height >= 700
 
 
+def _bbox_dimensions(bbox: list[float]) -> tuple[float, float]:
+    if len(bbox) != 4:
+        return 0.0, 0.0
+    x0, y0, x1, y1 = bbox
+    return max(x1 - x0, 0.0), max(y1 - y0, 0.0)
+
+
+def _is_tiny_bbox(bbox: list[float]) -> bool:
+    """Heuristic: bbox is too small to plausibly contain substantial figure content."""
+    width, height = _bbox_dimensions(bbox)
+    if width <= 0 or height <= 0:
+        return False
+    return width < 48 or height < 48 or (width * height) < 3500
+
+
+def _artifact_hint(sidecar: dict, page_text: str) -> str:
+    """Deterministic hint describing likely artifact behavior for the prompt."""
+    bbox = sidecar.get("bbox", [])
+    if _is_full_page_bbox(bbox):
+        return "near-full-page capture; likely scan artifact or text page rather than a standalone figure"
+    if _is_tiny_bbox(bbox):
+        return "very small crop; likely inline artifact, partial scan fragment, icon, or empty non-figure"
+    if sidecar.get("extraction_method") == "embedded" and len((page_text or "").strip()) > 1200:
+        return "embedded image on text-heavy page; check whether this is merely an inline scan fragment or artifact"
+    return ""
+
+
 def _should_delete_figure(sidecar: dict) -> bool:
     """Return True if the enriched figure is safe to delete as non-substantive."""
     relevance = str(sidecar.get("relevance", "")).strip().lower()
@@ -101,6 +137,13 @@ def _should_delete_figure(sidecar: dict) -> bool:
 
     if sidecar.get("extraction_method") != "embedded":
         return False
+    if _is_tiny_bbox(sidecar.get("bbox", [])):
+        description = sidecar.get("description")
+        if isinstance(description, dict):
+            description = description.get("value", "")
+        description_text = str(description or "").strip().lower()
+        if any(phrase in description_text for phrase in _SCAN_ARTIFACT_PHRASES):
+            return True
     if not _is_full_page_bbox(sidecar.get("bbox", [])):
         return False
 
@@ -162,6 +205,93 @@ _VALID_VISUAL_TYPES = frozenset(
 )
 _VALID_RELEVANCE = frozenset({"substantive", "decorative", "front_matter"})
 
+_FENCE_RE = re.compile(r"```(?:json)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+
+
+def _extract_json_objects(raw_text: str) -> list[dict]:
+    """Recover figure response objects from JSONL, arrays, or wrapped JSON.
+
+    The live figure routes sometimes return valid JSON in shapes other than
+    strict one-object-per-line JSONL, especially for multimodal requests.
+    """
+    text = raw_text.strip()
+    if not text:
+        return []
+
+    match = _FENCE_RE.search(text)
+    if match:
+        text = match.group(1).strip()
+
+    objects: list[dict] = []
+
+    def _extend_from_value(value) -> bool:
+        if isinstance(value, dict):
+            if any(key in value for key in ("id", "figure_id", "vt", "visual_type", "figures", "items")):
+                seq = value.get("figures") or value.get("items")
+                if isinstance(seq, list):
+                    for item in seq:
+                        if isinstance(item, dict):
+                            objects.append(item)
+                    return True
+                if "id" in value or "figure_id" in value:
+                    objects.append(value)
+                    return True
+            return False
+        if isinstance(value, list):
+            appended = False
+            for item in value:
+                if isinstance(item, dict):
+                    objects.append(item)
+                    appended = True
+            return appended
+        return False
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if parsed is not None and _extend_from_value(parsed):
+        return objects
+
+    for line in text.splitlines():
+        line = line.strip().rstrip(",")
+        if not line:
+            continue
+        if line.startswith("[") or line.startswith("]"):
+            continue
+        try:
+            parsed_line = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        _extend_from_value(parsed_line)
+
+    return objects
+
+
+def _normalize_figure_response(obj: dict) -> tuple[str, dict] | None:
+    """Normalize a parsed figure response object into the internal schema."""
+    figure_id = str(obj.get("id") or obj.get("figure_id") or "").strip()
+    if not figure_id:
+        return None
+
+    visual_type = str(obj.get("vt") or obj.get("visual_type") or "").strip()
+    if visual_type not in _VALID_VISUAL_TYPES:
+        visual_type = ""
+
+    relevance = str(obj.get("rel") or obj.get("relevance") or "substantive").strip()
+    if relevance not in _VALID_RELEVANCE:
+        relevance = "substantive"
+
+    description = str(obj.get("desc") or obj.get("description") or "")
+    caption = str(obj.get("cap") or obj.get("caption") or "")
+
+    return figure_id, {
+        "visual_type": visual_type,
+        "relevance": relevance,
+        "description": description,
+        "caption": caption,
+    }
+
 
 def _parse_figure_jsonl(raw_text: str) -> dict[str, dict]:
     """Parse compact JSONL figure response into figure_id → fields dict.
@@ -170,36 +300,26 @@ def _parse_figure_jsonl(raw_text: str) -> dict[str, dict]:
     Malformed lines are skipped.
     """
     result: dict[str, dict] = {}
-    for line in raw_text.splitlines():
-        line = line.strip()
-        if not line or not line.startswith("{"):
+    for obj in _extract_json_objects(raw_text):
+        normalized = _normalize_figure_response(obj)
+        if normalized is None:
             continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        figure_id = obj.get("id", "")
-        if not figure_id:
-            continue
-        result[figure_id] = {
-            "visual_type": obj.get("vt", "") if obj.get("vt", "") in _VALID_VISUAL_TYPES else "",
-            "relevance": obj.get("rel", "substantive") if obj.get("rel", "") in _VALID_RELEVANCE else "substantive",
-            "description": obj.get("desc", ""),
-            "caption": obj.get("cap", ""),
-        }
+        figure_id, payload = normalized
+        result[figure_id] = payload
     return result
 
 
-def _make_enriched_field_value(value: str, model: str, prompt_version: str) -> dict:
-    """Build an EnrichedField dict with deterministic confidence from a plain value."""
-    return EnrichedField(
-        value=value,
-        provenance=Provenance.create(
-            model=model,
-            prompt_version=prompt_version,
-            confidence=1.0,
-        ),
-    ).to_dict()
+def _make_enriched_field_value(
+    value: str,
+    model: str,
+    prompt_version: str,
+    *,
+    source_page: int,
+    evidence_spans: list[str] | None = None,
+) -> dict:
+    """Build a value-only figure field; provenance lives in the figure stamp."""
+    del model, prompt_version, source_page, evidence_spans
+    return EnrichedField(value=value).to_dict()
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +474,7 @@ def enrich_figures_stage(
                 "image_path": str(image_path) if image_path else "",
                 "source_page_text": fig["page_text"],
                 "caption_candidates": fig["caption_candidates"],
+                "artifact_hint": _artifact_hint(sidecar, fig["page_text"]),
                 "sidecar": sidecar,
             })
 
@@ -400,10 +521,25 @@ def enrich_figures_stage(
             # Build enriched sidecar fields
             enriched: dict = dict(sidecar)
             enriched["analysis_mode"] = analysis_mode
-            enriched["visual_type"] = _make_enriched_field_value(fig_response["visual_type"], actual_model, prompt_version)
-            enriched["description"] = _make_enriched_field_value(fig_response["description"], actual_model, prompt_version)
-            enriched["caption"] = _make_enriched_field_value(fig_response["caption"], actual_model, prompt_version)
             enriched["relevance"] = fig_response["relevance"]
+            enriched["visual_type"] = _make_enriched_field_value(
+                fig_response["visual_type"],
+                actual_model,
+                prompt_version,
+                source_page=0,
+            )
+            enriched["description"] = _make_enriched_field_value(
+                fig_response["description"],
+                actual_model,
+                prompt_version,
+                source_page=0,
+            )
+            enriched["caption"] = _make_enriched_field_value(
+                fig_response["caption"],
+                actual_model,
+                prompt_version,
+                source_page=0,
+            )
             enriched["_enrichment_stamp"] = fig["stamp"]
             enriched["_enrichment_stamp"]["model"] = actual_model
             enriched_by_path[fig["path"]] = enriched

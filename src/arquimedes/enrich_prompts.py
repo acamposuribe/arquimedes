@@ -195,60 +195,108 @@ _DOCUMENT_WORK_SCAFFOLD = {
 }
 
 _DOCUMENT_FILE_SYSTEM_PROMPT = """\
-You are an expert architecture librarian enriching structured metadata for a document in a research knowledge base.
+You are an expert architecture librarian enriching structured metadata for a document in a research knowledge base. 
 
-Your job is to read the source files, fill the null fields in the work file with enriched values, and edit the work file in place.
+You will read:
+1. a work metadata JSON object containing raw fields and null enrichment fields
+2. the document text
+
+Your job is to produce a JSON patch object, not a rewritten file.
+
+Rules:
+- Do not reproduce unchanged fields.
+- Omitted fields mean unchanged.
+- Include only fields that should be set or replaced.
+- "title" may be included only if the existing title is clearly incorrect, truncated, placeholder-like, or contradicted by the document.
+- Be conservative. Prefer omission over guessing.
+- Use valid JSON only.
+- End with "_finished": true.
+
+Output schema:
+{
+  "title": "... optional, only if replacing ...",
+  "summary": "... optional ...",
+  "document_type": "... optional ...",
+  "keywords": ["..."],
+  "methodological_conclusions": ["..."],
+  "main_content_learnings": ["..."],
+  "bibliography": {...},
+  "facets": {...},
+  "concepts_local": [...],
+  "concepts_bridge_candidates": [...],
+  "toc": [...],
+  "_finished": true
+}
 
 Field instructions:
 
-"summary": A dense but readable synthesis of the document's distinctive contribution. Do not merely restate the topic. Name the central argument, method, archive/project/case focus when important, and what the document helps the reader understand that is not obvious from the title alone. Prefer intellectual specificity and nuance over a bland generic abstract. String value.
+title:
+- Replace only if clearly wrong from document evidence.
 
-"document_type": One of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document. String value.
+summary:
+- 90-160 words.
+- State the document's distinctive contribution, central argument or purpose, method or archive/project/case focus when important, and what it helps explain beyond the title. Prefer intellectual specificity and nuance over a bland generic abstract. 
 
-"keywords": 6-12 strong terms or short phrases that maximize retrieval value. Prefer a mix of named actors, places, archives, projects, methods, institutional conditions, and core concepts when they are central. Avoid generic filler and avoid repeating the broadest document theme in multiple synonymous forms. Array of strings.
+document_type:
+- One of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document
 
-"methodological_conclusions": 2-4 short, reusable statements about how the document says methods should be used, why they matter, and what methodological stance or procedure it contributes. Keep them concrete and archival/architectural rather than generic. Array of strings.
+keywords:
+- 6-10 terms or short phrases with retrieval value.
+- Prefer a mix of actors, places, archives, projects, methods, institutions, and core concepts.
+- Avoid generic filler and close synonyms.
 
-"main_content_learnings": 2-4 short, reusable statements about what the document contributes to architectural knowledge. Focus on the main claims, conceptual contributions, or historically useful learnings that another reader could reuse across materials. Array of strings.
+methodological_conclusions:
+- 2-4 short statements.
+- Only include if the document explicitly contributes a method, procedure, or methodological stance. Keep them concrete and archival/architectural rather than generic.
 
-"bibliography": Extract journal name, volume, issue, page range, DOI, publisher, place, book title, and editors as they appear on the title page, header, footer, or references. Omit any sub-field you cannot find. Use keys: journal_name, volume, issue, start_page, end_page, doi, book_title, editors, publisher, place, edition. Object or null if nothing found.
+main_content_learnings:
+- 2-4 short reusable statements about the main claims or contributions to architectural knowledge. Focus on conceptual contributions or historically useful learnings.
 
-"facets": Infer only concrete, useful indexing values grounded in the document. Prefer specific values over vague ones. Do not force every facet field — set fields you cannot determine to null.
-- building_type: string or null
-- scale: one of detail|building|urban|territorial or null
-- location: string or null
-- jurisdiction: string or null
-- climate: string or null
-- program: string or null
-- material_system: string or null
-- structural_system: string or null
-- historical_period: string or null
-- course_topic: string or null
-- studio_project: string or null
+bibliography:
+- Only set subfields explicitly supported by the document.
+- Allowed keys: journal_name, volume, issue, start_page, end_page, doi, book_title, editors, publisher, place, edition
 
-"concepts_local": 8-15 strong material-level concept candidates. Each must be a reusable intellectual unit with strong textual evidence. Prefer concept phrases specific enough to carry real analytical content but still reusable across materials. Include named mechanisms, typologies, institutional logics, methods, conditions, and frameworks. Concepts may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like "history", "power", "space", or "memory" unless sharply qualified. If a historical qualifier helps distinguish the concept, use only the minimum needed.
-Naming rules: use all lowercase. Prefer compound noun phrases that carry analytical charge — patterns like "archivability as selective gatekeeping", "co-ownership of dead time", "archive as sepulchre", "chronophagy" are ideal. Avoid bare single nouns ("power", "memory", "space"). Proper nouns (people, places, institutions) may be capitalized only when central to the concept name.
-Array of objects: [{concept_name, descriptor, relevance, source_pages, evidence_spans}] where relevance is high|medium|low, descriptor is one short sentence explaining the concept in this document, source_pages is an array of page numbers where the concept appears, and evidence_spans is an array of short quoted phrases (1-6 words) from the text that ground the concept.
+facets:
+- Infer only concrete indexing values strongly grounded in the document.
+- Allowed keys:
+  building_type, scale, location, climate, program, material_system, historical_period, course_topic
+- scale must be one of detail|building|urban|territorial
 
-"concepts_bridge_candidates": 4-8 broader umbrella candidates that could connect this material to related materials. Favor larger frameworks, problematics, fields of inquiry, spatial or institutional conditions, and reusable analytic umbrellas. Avoid vague one-word abstractions, chapter themes, or trivial paraphrases of the title. Same naming rules as concepts_local: all lowercase compound phrases. Array of objects: [{concept_name, descriptor, relevance, source_pages, evidence_spans}] — same provenance fields as concepts_local.
+concepts_local:
+- Prefer concept phrases specific enough to carry real analytical content but still reusable across materials. Include named mechanisms, typologies, institutional logics, methods, conditions, and frameworks. Concepts may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels
+- Return 6-9 items max.
+- Each item:
+  {concept_name, descriptor, relevance, source_pages, evidence_spans}
+- relevance: high|medium|low
+- concept_name should be lowercase and specific, prefer compound noun phrases that carry analytical charge.
+- source_pages: max 3 pages per concept.
+- evidence_spans: 1-3 short quotes, each 1-5 words.
+- Only include concepts with strong textual support.
 
-"toc": If the "toc" field in the work file is null, extract a table of contents from the document text. Each entry: {"title": "section heading", "level": 0|1|2, "page": N}. Level 0 for top-level sections, 1 for subsections, 2 for sub-subsections. If the document has no discernible section structure, set to []. Array of objects or [].
+concepts_bridge_candidates:
+- Return 4-5 items max.
+- Same schema as concepts_local.
+- Favor larger frameworks, problematics, fields of inquiry, spatial or institutional conditions, and reusable analytic umbrellas that could connect this material to related materials. Avoid vague one-word abstractions, chapter themes, or trivial paraphrases of the title.
 
-Sections marked with [HIGHLIGHTED]...[/HIGHLIGHTED] in the document text were annotated by the reader — weight them as priority context. [NOTE: ...] markers contain the reader's own comments.
+toc:
+- Only include if the current work metadata has toc = null and the document text contains a recoverable table of contents or stable section headings.
+- Each entry: {"title": "...", "level": 0|1|2, "page": N}
 
-When finished editing the work file, emit PROCESS_FINISHED on a single line and stop.\
+Reader annotations:
+- Treat [HIGHLIGHTED]...[/HIGHLIGHTED] as priority evidence.
+- Treat [NOTE: ...] as reader comments, not document claims.\
 """
 
 _DOCUMENT_FILE_USER_TEMPLATE = """\
-Read these files:
-- Work file (edit this): {work_meta_path}
-- Document text (full text, read-only): {work_chunks_path}
+Read these inputs:
+- METADATA JSON: {work_meta_path}
+- DOCUMENT TEXT: {work_chunks_path}
 
-The work file already contains the document's raw metadata and a scaffold of null fields.
-Fill every null field with enriched values following the field instructions in your system prompt.
-Keep all existing raw fields (title, authors, year, etc.) unchanged.
-Edit {work_meta_path} in place.
-When finished, emit PROCESS_FINISHED on a single line and stop.\
+Produce a JSON patch object following the system instructions.
+Important:
+- Do not rewrite the full metadata object.
+- Do not describe your reasoning.
+- Only output valid JSON matching the patch schema.\
 """
 
 
@@ -281,7 +329,7 @@ def build_document_work_files(
 
     work_meta_path = output_dir / "meta.work.json"
     work_meta_path.write_text(
-        json.dumps(work_meta, indent=2, ensure_ascii=False), encoding="utf-8"
+        json.dumps(work_meta, separators=(",", ":"), ensure_ascii=False), encoding="utf-8"
     )
 
     # chunks.work.txt — plain text with annotation markers injected
@@ -403,7 +451,8 @@ Field rules:
 - "rel": one of: substantive|decorative|front_matter
   - "substantive": architectural drawings, photos, diagrams, or other visual knowledge
   - "decorative": logos, publisher marks, decorative borders, page ornaments
-  - "front_matter": journal covers, title page images, platform/database artifacts
+    - "front_matter": journal covers, title page images, platform/database artifacts, scanner artifacts, empty scans, or non-figure page fragments
+- Mark tiny cropped fragments, page-edge slivers, empty images, scanner/platform artifacts, and low-information inline snippets as "decorative" or "front_matter", not "substantive".
 - "desc": concise description of what is visually present. Do not invent architectural content for non-informative images.
   If the figure is blank, partial, scanner-generated, heavily degraded, or contains no meaningful visual knowledge beyond logos, borders, watermarks, or platform artifacts, say so plainly and set rel to "decorative" or "front_matter".
   If the image is a full-page scan of article text or a title page with no standalone visual figure, set rel to "front_matter".
@@ -458,8 +507,11 @@ def build_figure_batch_prompt(
         image_path = fig.get("image_path") or ""
         source_page_text = fig.get("source_page_text", "")
         caption_candidates = fig.get("caption_candidates", [])
+        artifact_hint = fig.get("artifact_hint", "")
         sidecar = fig.get("sidecar", {})
         source_page = sidecar.get("source_page", "")
+        bbox = sidecar.get("bbox", [])
+        extraction_method = sidecar.get("extraction_method", "")
 
         captions_str = (
             "\n".join(f"  - {c}" for c in caption_candidates)
@@ -472,9 +524,13 @@ def build_figure_batch_prompt(
         header = (
             f"### Figure: {figure_id}\n"
             f"Source page: {source_page}\n"
+            f"Extraction method: {extraction_method}\n"
+            f"Bounding box: {bbox}\n"
             f"Caption candidates:\n{captions_str}\n"
             f"Surrounding page text excerpt:\n{source_page_text}\n"
         )
+        if artifact_hint:
+            header += f"Artifact hint: {artifact_hint}\n"
         if not has_image:
             header += "(Image unavailable — classify from text context only)\n"
 

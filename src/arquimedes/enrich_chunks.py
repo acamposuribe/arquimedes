@@ -101,22 +101,17 @@ def _parse_chunk_jsonl(raw_text: str) -> dict[str, dict]:
 def _make_enrichment(parsed: dict, model: str, prompt_version: str) -> dict:
     """Build chunk enrichment dict from parsed JSONL entry.
 
-    Wraps summary and keywords in EnrichedField shape for compatibility with
+    Wraps summary and keywords in value-only shape for compatibility with
     index._val() and index._kw_json() which expect {"value": ...}.
     """
-    provenance = {
-        "model": model,
-        "prompt_version": prompt_version,
-        "confidence": 1.0,
-        "enriched_at": datetime.now(timezone.utc).isoformat(),
-    }
+    del model, prompt_version
     enrichment: dict = {}
     s = parsed.get("summary", "")
     if s:
-        enrichment["summary"] = {"value": s, "provenance": provenance}
+        enrichment["summary"] = {"value": s}
     kw = parsed.get("keywords", [])
     if kw:
-        enrichment["keywords"] = {"value": kw, "provenance": provenance}
+        enrichment["keywords"] = {"value": kw}
     cls = parsed.get("content_class", "")
     if cls:
         enrichment["content_class"] = cls

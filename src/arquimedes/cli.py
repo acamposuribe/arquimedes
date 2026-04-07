@@ -68,7 +68,7 @@ def extract_raw(material_id: str | None, force: bool):
 )
 @click.option("--dry-run", is_flag=True, help="Report staleness without calling LLM.")
 def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_run: bool):
-    """LLM enrichment: summaries, facets, descriptions (with provenance)."""
+    """LLM enrichment: summaries, facets, descriptions (stage stamps track provenance)."""
     from arquimedes.enrich import enrich as do_enrich
     from arquimedes.enrich_llm import EnrichmentError
 

@@ -1,8 +1,9 @@
 """Document enrichment stage — Phase 3.
 
 Enriches document-level metadata: summary, document_type, keywords, methodological conclusions,
-main content learnings, facets, and concepts. All enriched fields carry provenance
-(model, prompt_version, confidence, source_pages, evidence_spans).
+main content learnings, facets, and concepts. Ordinary enriched fields keep only the value;
+stage provenance lives in stamps. Concept candidates keep source provenance because clustering
+and search depend on it.
 """
 
 from __future__ import annotations
@@ -50,15 +51,9 @@ def _load_json(path: Path, default=None):
 
 
 def _make_enriched_field(llm_field: dict, model: str, prompt_version: str, *, confidence: float = 1.0) -> EnrichedField:
-    """Build an EnrichedField from the LLM response dict for a single field."""
-    provenance = Provenance.create(
-        model=model,
-        prompt_version=prompt_version,
-        confidence=confidence,
-        source_pages=[],
-        evidence_spans=[],
-    )
-    return EnrichedField(value=llm_field["value"], provenance=provenance)
+    """Build a value-only EnrichedField for ordinary document metadata."""
+    del model, prompt_version, confidence
+    return EnrichedField(value=llm_field["value"])
 
 
 def _make_facets(facets_data: dict, model: str, prompt_version: str) -> ArchitectureFacets:

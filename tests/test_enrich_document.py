@@ -238,8 +238,8 @@ class TestEnrichDocumentStage:
         assert result2["status"] == "enriched"
         assert llm_fn.call_count > call_count_after_first
 
-    def test_provenance_fields_present_in_enriched_field(self, tmp_path):
-        """Each enriched field should carry a provenance sub-object."""
+    def test_stage_stamp_present_and_field_provenance_omitted(self, tmp_path):
+        """Ordinary enriched fields should be value-only; run provenance lives in the stage stamp."""
         output_dir = _make_extracted_dir(tmp_path)
         llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
         config = _make_config()
@@ -247,10 +247,11 @@ class TestEnrichDocumentStage:
         enrich_document_stage(output_dir, config, llm_fn, force=True)
 
         meta = json.loads((output_dir / "meta.json").read_text(encoding="utf-8"))
-        prov = meta["summary"]["provenance"]
-        assert prov["model"] == "test-agent"
-        assert prov["prompt_version"] == "enrich-v1.0"
-        assert prov["confidence"] == pytest.approx(1.0)
+        assert meta["summary"] == {"value": MOCK_ENRICHMENT["summary"]}
+        assert "provenance" not in meta["summary"]
+        stamp = meta["_enrichment_stamp"]
+        assert stamp["model"] == "test-agent"
+        assert stamp["prompt_version"] == "enrich-v1.0"
 
     def test_failed_status_on_llm_error(self, tmp_path):
         """If the LLM call raises EnrichmentError, status should be 'failed'."""

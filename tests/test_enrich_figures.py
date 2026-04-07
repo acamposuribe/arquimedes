@@ -147,6 +147,49 @@ def _make_config(figure_batch_size: int = 6) -> dict:
 
 
 class TestEnrichFiguresStage:
+    def test_accepts_json_array_response(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
+        resp = json.dumps([
+            {
+                "id": "fig_0001",
+                "vt": "plan",
+                "rel": "substantive",
+                "desc": "Floor plan in array form",
+                "cap": "Figure 1",
+            }
+        ])
+        llm_fn = _make_llm_fn([resp])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "enriched", result["detail"]
+        sidecar = json.loads((output_dir / "figures" / "fig_0001.json").read_text())
+        assert sidecar["description"]["value"] == "Floor plan in array form"
+
+    def test_accepts_long_form_keys_in_wrapped_object(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
+        resp = json.dumps({
+            "figures": [
+                {
+                    "figure_id": "fig_0001",
+                    "visual_type": "photo",
+                    "relevance": "substantive",
+                    "description": "Wrapped response using long-form keys",
+                    "caption": "Wrapped caption",
+                }
+            ]
+        })
+        llm_fn = _make_llm_fn([resp])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "enriched", result["detail"]
+        sidecar = json.loads((output_dir / "figures" / "fig_0001.json").read_text())
+        assert sidecar["visual_type"]["value"] == "photo"
+        assert sidecar["caption"]["value"] == "Wrapped caption"
+
     def test_vision_path_has_analysis_mode_vision(self, tmp_path):
         """When figure has an image file, analysis_mode should be 'vision'."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
@@ -208,6 +251,56 @@ class TestEnrichFiguresStage:
         assert "caption" in sidecar
         assert "Figure 1" in sidecar["caption"]["value"]
         assert sidecar.get("relevance") == "substantive"
+
+    def test_figure_source_page_stays_on_sidecar_and_field_provenance_omitted(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
+        llm_fn = _make_llm_fn([_make_figure_response(["fig_0001"])])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "enriched"
+        sidecar = json.loads((output_dir / "figures" / "fig_0001.json").read_text())
+        assert sidecar["source_page"] == 1
+        assert sidecar["visual_type"] == {"value": "plan"}
+        assert "provenance" not in sidecar["visual_type"]
+        assert sidecar["_enrichment_stamp"]["model"] == "test-agent"
+
+    def test_figure_fields_are_value_only(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
+        llm_fn = _make_llm_fn([_make_figure_response(["fig_0001"])])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "enriched"
+        sidecar = json.loads((output_dir / "figures" / "fig_0001.json").read_text())
+        assert sidecar["visual_type"] == {"value": "plan"}
+        assert sidecar["description"] == {"value": "Floor plan of building for fig_0001"}
+        assert sidecar["caption"] == {"value": "Figure 1: Plan view"}
+
+    def test_tiny_artifact_with_artifact_description_is_deleted(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
+        sidecar_path = output_dir / "figures" / "fig_0001.json"
+        sidecar = json.loads(sidecar_path.read_text())
+        sidecar["bbox"] = [5.0, 5.0, 28.0, 33.0]
+        sidecar_path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+
+        resp = json.dumps({
+            "id": "fig_0001",
+            "vt": "photo",
+            "rel": "substantive",
+            "desc": "Tiny cropped fragment near the page edge; likely scanner artifact rather than a standalone figure.",
+            "cap": "",
+        })
+        llm_fn = _make_llm_fn([resp])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "enriched"
+        assert "1 deleted" in result["detail"]
+        assert not sidecar_path.exists()
 
     def test_relevance_stored_on_sidecar(self, tmp_path):
         """relevance from LLM response should be stored as a plain string on the sidecar."""

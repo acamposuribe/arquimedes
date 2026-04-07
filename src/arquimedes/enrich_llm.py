@@ -953,8 +953,18 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                             f"stderr_chars={len(result.stderr)} model={get_agent_model_name(cmd)} "
                             f"stdout_preview={_llm_debug_preview(result.stdout)}"
                         )
+                    normalized_output = _normalize_completion_output(result.stdout)
+                    if not normalized_output.strip():
+                        detail = result.stderr.strip() or "empty stdout"
+                        if debug_enabled:
+                            _llm_debug(
+                                f"provider={provider} returned no usable output; "
+                                f"stderr_preview={_llm_debug_preview(detail, 200)}"
+                            )
+                        last_exc = EnrichmentError(f"{provider} returned no output: {detail[:500]}")
+                        break
                     llm_fn.last_model = get_agent_model_name(cmd)
-                    return _normalize_completion_output(result.stdout)
+                    return normalized_output
                 except subprocess.TimeoutExpired:
                     if debug_enabled:
                         _llm_debug(

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from arquimedes import enrich_stamps
@@ -225,6 +225,17 @@ def _has_extraction(output_dir: Path) -> bool:
     return (output_dir / "meta.json").exists()
 
 
+def _material_chunk_bytes(output_dir: Path) -> int:
+    """Return chunks.jsonl size in bytes for deterministic smallest-first ordering."""
+    chunks_path = output_dir / "chunks.jsonl"
+    if not chunks_path.exists():
+        return 0
+    try:
+        return chunks_path.stat().st_size
+    except OSError:
+        return 0
+
+
 
 
 # ---------------------------------------------------------------------------
@@ -304,9 +315,6 @@ def enrich(
                 any_stale = True
             if force or any_stale:
                 to_process[mid] = entry
-
-    results: dict[str, dict] = {}
-    all_succeeded = True
 
     def _enrich_one_material(mid: str) -> tuple[str, dict, bool]:
         """Process a single material. Returns (mid, results_dict, succeeded)."""
@@ -457,24 +465,15 @@ def enrich(
 
     results: dict[str, dict] = {}
     all_succeeded = True
-    material_ids = list(to_process.keys())
-    parallel = config.get("enrichment", {}).get("parallel", 4)
+    material_ids = sorted(
+        to_process.keys(),
+        key=lambda mid: (_material_chunk_bytes(extracted_dir / mid), mid),
+    )
 
-    if len(material_ids) <= 1 or dry_run or parallel <= 1:
-        # Sequential
-        for mid in material_ids:
-            mid, mat_result, ok = _enrich_one_material(mid)
-            results[mid] = mat_result
-            if not ok:
-                all_succeeded = False
-    else:
-        # Parallel — each thread gets its own llm_fn via _get_llm_fn()
-        with ThreadPoolExecutor(max_workers=parallel) as pool:
-            futures = {pool.submit(_enrich_one_material, mid): mid for mid in material_ids}
-            for future in as_completed(futures):
-                mid, mat_result, ok = future.result()
-                results[mid] = mat_result
-                if not ok:
-                    all_succeeded = False
+    for mid in material_ids:
+        mid, mat_result, ok = _enrich_one_material(mid)
+        results[mid] = mat_result
+        if not ok:
+            all_succeeded = False
 
     return results, all_succeeded

@@ -17,34 +17,22 @@ from arquimedes.enrich_figures import enrich_figures_stage
 
 
 def _make_figure_response(figure_ids: list[str]) -> str:
-    """Build a mock figure-batch LLM response for the given figure IDs."""
-    return json.dumps({
-        "figures": [
-            {
-                "figure_id": fid,
-                "visual_type": {
-                    "value": "plan",
-                    "source_pages": [1],
-                    "evidence_spans": ["floor plan shown"],
-                    "confidence": 0.9,
-                },
-                "description": {
-                    "value": f"Floor plan of building for {fid}",
-                    "source_pages": [1],
-                    "evidence_spans": ["the plan depicts"],
-                    "confidence": 0.85,
-                },
-                "caption": {
-                    "value": "Figure 1: Plan view",
-                    "source_pages": [1],
-                    "evidence_spans": ["Figure 1"],
-                    "confidence": 0.8,
-                },
-                "relevance": "substantive",
-            }
-            for fid in figure_ids
-        ]
-    })
+    """Build a mock figure-batch LLM response for the given figure IDs.
+
+    Uses compact JSONL format: one JSON object per line.
+    Format: {"id":"fig_NNN","vt":"plan","rel":"substantive","desc":"...","cap":"..."}
+    """
+    lines = [
+        json.dumps({
+            "id": fid,
+            "vt": "plan",
+            "rel": "substantive",
+            "desc": f"Floor plan of building for {fid}",
+            "cap": "Figure 1: Plan view",
+        })
+        for fid in figure_ids
+    ]
+    return "\n".join(lines)
 
 
 # ---------------------------------------------------------------------------
@@ -224,14 +212,8 @@ class TestEnrichFiguresStage:
     def test_relevance_stored_on_sidecar(self, tmp_path):
         """relevance from LLM response should be stored as a plain string on the sidecar."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
-        # Return a substantive figure so it survives cleanup
-        resp = json.dumps({"figures": [{
-            "figure_id": "fig_0001",
-            "visual_type": {"value": "photo", "source_pages": [1], "evidence_spans": ["photo"], "confidence": 0.9},
-            "description": {"value": "Portrait photograph of an architect", "source_pages": [1], "evidence_spans": ["portrait"], "confidence": 0.8},
-            "caption": {"value": "Portrait of architect", "source_pages": [1], "evidence_spans": ["portrait"], "confidence": 0.5},
-            "relevance": "substantive",
-        }]})
+        resp = json.dumps({"id": "fig_0001", "vt": "photo", "rel": "substantive",
+                           "desc": "Portrait photograph of an architect", "cap": "Portrait of architect"})
         llm_fn = _make_llm_fn([resp])
         config = _make_config()
 
@@ -249,13 +231,8 @@ class TestEnrichFiguresStage:
             for p in pages:
                 f.write(json.dumps(p) + "\n")
 
-        resp = json.dumps({"figures": [{
-            "figure_id": "fig_0001",
-            "visual_type": {"value": "photo", "source_pages": [1], "evidence_spans": ["logo"], "confidence": 0.8},
-            "description": {"value": "Publisher logo on a blank background.", "source_pages": [1], "evidence_spans": ["logo"], "confidence": 0.8},
-            "caption": {"value": "", "source_pages": [1], "evidence_spans": [], "confidence": 0.5},
-            "relevance": "decorative",
-        }]})
+        resp = json.dumps({"id": "fig_0001", "vt": "photo", "rel": "decorative",
+                           "desc": "Publisher logo on a blank background.", "cap": ""})
         llm_fn = _make_llm_fn([resp])
         config = _make_config()
 
@@ -276,13 +253,9 @@ class TestEnrichFiguresStage:
         sidecar["extraction_method"] = "embedded"
         sidecar_path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
 
-        resp = json.dumps({"figures": [{
-            "figure_id": "fig_0001",
-            "visual_type": {"value": "photo", "source_pages": [1], "evidence_spans": ["page"], "confidence": 0.8},
-            "description": {"value": "Scanned article text page with continuous prose and no standalone illustration visible.", "source_pages": [1], "evidence_spans": ["text page"], "confidence": 0.8},
-            "caption": {"value": "", "source_pages": [1], "evidence_spans": [], "confidence": 0.5},
-            "relevance": "substantive",
-        }]})
+        resp = json.dumps({"id": "fig_0001", "vt": "photo", "rel": "substantive",
+                           "desc": "Scanned article text page with continuous prose and no standalone illustration visible.",
+                           "cap": ""})
         llm_fn = _make_llm_fn([resp])
         config = _make_config()
 
@@ -367,39 +340,28 @@ class TestEnrichFiguresStage:
         assert result["status"] == "failed"
         assert "fig_0002" in result["detail"]
 
-    def test_fails_when_required_field_missing(self, tmp_path):
-        """If a figure response lacks visual_type, stage should fail."""
+    def test_fails_when_figure_id_not_in_response(self, tmp_path):
+        """If LLM returns a line with a different figure_id, the expected one is missing."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
-        bad = json.dumps({
-            "figures": [{
-                "figure_id": "fig_0001",
-                # no visual_type
-                "description": {"value": "A plan", "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
-                "caption": {"value": "Fig 1", "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
-            }]
-        })
+        # Response references wrong figure id
+        bad = json.dumps({"id": "fig_9999", "vt": "plan", "rel": "substantive",
+                          "desc": "Wrong figure", "cap": ""})
         llm_fn = _make_llm_fn([bad])
         config = _make_config()
 
         result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "failed"
-        assert "visual_type" in result["detail"]
+        assert "fig_0001" in result["detail"]
 
-    def test_fails_when_field_dict_missing_value_key(self, tmp_path):
-        """If a field dict is present but lacks 'value', stage should fail."""
+    def test_invalid_visual_type_stored_as_empty(self, tmp_path):
+        """If LLM returns an invalid visual_type, it is stored as empty string (no failure)."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
-        bad = json.dumps({
-            "figures": [{
-                "figure_id": "fig_0001",
-                "visual_type": {"confidence": 0.9},  # dict but no 'value'
-                "description": {"value": "A plan", "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
-                "caption": {"value": "Fig 1", "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
-            }]
-        })
-        llm_fn = _make_llm_fn([bad])
+        resp = json.dumps({"id": "fig_0001", "vt": "not_a_valid_type", "rel": "substantive",
+                           "desc": "A plan", "cap": "Fig 1"})
+        llm_fn = _make_llm_fn([resp])
         config = _make_config()
 
         result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
-        assert result["status"] == "failed"
-        assert "visual_type" in result["detail"]
-        assert "value" in result["detail"]
+        assert result["status"] == "enriched"
+        sidecar = json.loads((output_dir / "figures" / "fig_0001.json").read_text())
+        assert sidecar["visual_type"]["value"] == ""

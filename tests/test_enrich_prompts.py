@@ -9,9 +9,9 @@ import pytest
 
 from arquimedes.enrich_prompts import (
     build_chunk_batch_prompt,
-    build_combined_prompt,
     build_document_context,
-    build_document_prompt,
+    build_document_file_prompt,
+    build_document_work_files,
     build_figure_batch_prompt,
     estimate_tokens,
     format_toc,
@@ -161,94 +161,80 @@ class TestBuildDocumentContext:
 
 
 # ---------------------------------------------------------------------------
-# build_document_prompt
+# build_document_work_files + build_document_file_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildDocumentPrompt:
-    def test_returns_correct_shape_with_content(self):
-        system, messages = build_document_prompt(_meta(), _toc(), _chunks(), _annotations())
-        assert isinstance(system, str) and "JSON" in system
+class TestBuildDocumentWorkFiles:
+    def test_creates_both_files(self, tmp_path):
+        # build_document_work_files requires toc.json to exist (reads it)
+        (tmp_path / "toc.json").write_text("[]", encoding="utf-8")
+        work_meta, work_chunks = build_document_work_files(
+            tmp_path, _meta(), _chunks(), _annotations()
+        )
+        assert work_meta.exists() and work_chunks.exists()
+
+    def test_work_meta_has_scaffold_fields(self, tmp_path):
+        (tmp_path / "toc.json").write_text("[]", encoding="utf-8")
+        work_meta, _ = build_document_work_files(tmp_path, _meta(), _chunks(), _annotations())
+        import json as _json
+        data = _json.loads(work_meta.read_text())
+        assert "summary" in data
+        assert "keywords" in data
+        assert "concepts_local" in data
+        assert "concepts_bridge_candidates" in data
+        assert "methodological_conclusions" in data
+        assert "main_content_learnings" in data
+        assert "facets" in data
+        # Raw meta fields preserved
+        assert data["title"] == "Urban Housing Standards"
+        assert data["material_id"] == "abc123"
+
+    def test_work_meta_preserves_existing_toc(self, tmp_path):
+        import json as _json
+        toc = [{"title": "Intro", "page": 1, "level": 0}]
+        (tmp_path / "toc.json").write_text(_json.dumps(toc), encoding="utf-8")
+        work_meta, _ = build_document_work_files(tmp_path, _meta(), _chunks(), [])
+        data = _json.loads(work_meta.read_text())
+        # When toc.json has content, the scaffold "toc" field is removed
+        assert "toc" not in data
+
+    def test_work_chunks_contains_text_with_annotations(self, tmp_path):
+        (tmp_path / "toc.json").write_text("[]", encoding="utf-8")
+        _, work_chunks = build_document_work_files(
+            tmp_path, _meta(), _chunks(), _annotations()
+        )
+        content = work_chunks.read_text()
+        assert "regulates" in content
+        assert "Maximum FAR is 2.5" in content
+        assert "[HIGHLIGHTED]" in content
+
+
+class TestBuildDocumentFilePrompt:
+    def test_shape_and_references_paths(self, tmp_path):
+        work_meta = tmp_path / "meta.work.json"
+        work_chunks = tmp_path / "chunks.work.txt"
+        work_meta.write_text("{}", encoding="utf-8")
+        work_chunks.write_text("text", encoding="utf-8")
+        system, messages = build_document_file_prompt(work_meta, work_chunks)
+        assert isinstance(system, str) and len(system) > 0
         assert len(messages) == 1 and messages[0]["role"] == "user"
         content = messages[0]["content"]
-        assert "Urban Housing Standards" in content
-        assert "abc123-c0" in content
-        assert "abc123-c1" in content
-        assert "[HIGHLIGHTED]" in content
-        assert "summary" in content and "facets" in content
-        assert "concepts_local" in content
-        assert "concepts_bridge_candidates" in content
-        assert "methodological_conclusions" in content
-        assert "main_content_learnings" in content
-        assert "Do not force names, dates, or locations into every local concept" in content
+        assert str(work_meta) in content
+        assert str(work_chunks) in content
 
-    def test_small_doc_includes_all_chunks(self):
-        _, messages = build_document_prompt(_meta(), None, _chunks(), [])
-        content = messages[0]["content"]
-        assert "This document regulates housing density." in content
-        assert "Maximum FAR is 2.5" in content
-
-    def test_large_doc_uses_curated_context(self):
-        """When chunks exceed token budget, curated context is used."""
-        big_chunks = [
-            {"chunk_id": f"c{i:04d}", "text": "x" * 2000, "source_pages": [i],
-             "emphasized": i == 0}
-            for i in range(200)
-        ]
-        _, messages = build_document_prompt(
-            _meta(), _toc(), big_chunks, [], max_context_tokens=5000
-        )
-        content = messages[0]["content"]
-        assert "Curated context:" in content
-        # Should have fewer chunks than the full 200
-        assert content.count("--- Chunk") < 200
-
-
-# ---------------------------------------------------------------------------
-# build_combined_prompt
-# ---------------------------------------------------------------------------
-
-
-class TestBuildCombinedPrompt:
-    def test_shape_and_schema(self):
-        system, messages = build_combined_prompt(
-            _meta(), _toc(), _chunks(), _chunks(), _annotations()
-        )
-        assert isinstance(system, str) and "JSON" in system
-        content = messages[0]["content"]
-        assert '"document"' in content and '"chunks"' in content
-        assert "summary" in content and "chunk_id" in content
-        assert "concepts_local" in content
-        assert "concepts_bridge_candidates" in content
-        assert "methodological_conclusions" in content
-        assert "main_content_learnings" in content
-
-    def test_includes_only_target_chunks_in_chunk_targets(self):
-        _, messages = build_combined_prompt(
-            _meta(), _toc(), _chunks(), [_chunks()[0]], _annotations()
-        )
-        content = messages[0]["content"]
-        assert "abc123-c0" in content
-        target_section = content.split("## Chunk Targets", 1)[1]
-        assert "abc123-c1" not in target_section
-        assert "[HIGHLIGHTED]" in content
-
-    def test_large_doc_uses_curated_document_context(self):
-        big_chunks = [
-            {"chunk_id": f"c{i:04d}", "text": "x" * 2000, "source_pages": [i], "emphasized": i == 0}
-            for i in range(200)
-        ]
-        _, messages = build_combined_prompt(
-            _meta(),
-            _toc(),
-            big_chunks,
-            big_chunks[:2],
-            [],
-            max_context_tokens=5000,
-        )
-        content = messages[0]["content"]
-        assert "Curated context:" in content
-        assert "## Chunk Targets" in content
+    def test_system_prompt_contains_key_field_instructions(self, tmp_path):
+        work_meta = tmp_path / "meta.work.json"
+        work_chunks = tmp_path / "chunks.work.txt"
+        work_meta.write_text("{}", encoding="utf-8")
+        work_chunks.write_text("text", encoding="utf-8")
+        system, _ = build_document_file_prompt(work_meta, work_chunks)
+        assert "summary" in system
+        assert "facets" in system
+        assert "concepts_local" in system
+        assert "concepts_bridge_candidates" in system
+        assert "methodological_conclusions" in system
+        assert "main_content_learnings" in system
 
 
 # ---------------------------------------------------------------------------
@@ -292,7 +278,7 @@ class TestBuildFigureBatchPrompt:
         assert "image" not in types
         all_text = " ".join(b["text"] for b in content_blocks if b["type"] == "text")
         assert "fig_0001" in all_text and "Figure 1" in all_text
-        assert "prioritize what is visibly present in the image itself" in all_text
+        assert "Image unavailable" in all_text
 
     def test_vision_figure_includes_base64(self, tmp_path):
         img_path = self._make_png(tmp_path / "fig_0001.png")

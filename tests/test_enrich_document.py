@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -12,58 +13,29 @@ from arquimedes.enrich_document import enrich_document_stage
 
 
 # ---------------------------------------------------------------------------
-# Shared mock response
+# Shared mock enrichment content — flat values the LLM writes into meta.work.json
 # ---------------------------------------------------------------------------
 
-MOCK_DOC_RESPONSE = json.dumps({
-    "summary": {
-        "value": "A study of thermal mass in residential architecture.",
-        "source_pages": [1],
-        "evidence_spans": ["This paper examines..."],
-        "confidence": 0.9,
-    },
-    "document_type": {
-        "value": "paper",
-        "source_pages": [1],
-        "evidence_spans": ["Published in Journal of Architecture"],
-        "confidence": 0.95,
-    },
-    "keywords": {
-        "value": ["architecture", "thermal mass"],
-        "source_pages": [1, 2],
-        "evidence_spans": ["thermal mass is key"],
-        "confidence": 0.85,
-    },
-    "methodological_conclusions": {
-        "value": [
-            "Treat thermal mass as a passive design variable.",
-            "Test material choices against climatic performance rather than style alone.",
-        ],
-        "source_pages": [1],
-        "evidence_spans": ["Thermal mass slows heat transfer"],
-        "confidence": 0.8,
-    },
-    "main_content_learnings": {
-        "value": [
-            "Thermal mass can stabilize residential comfort.",
-            "Architecture can leverage mass to moderate environmental swings.",
-        ],
-        "source_pages": [1],
-        "evidence_spans": ["Thermal mass slows heat transfer"],
-        "confidence": 0.82,
-    },
+MOCK_ENRICHMENT = {
+    "summary": "A study of thermal mass in residential architecture.",
+    "document_type": "paper",
+    "keywords": ["architecture", "thermal mass"],
+    "methodological_conclusions": [
+        "Treat thermal mass as a passive design variable.",
+        "Test material choices against climatic performance rather than style alone.",
+    ],
+    "main_content_learnings": [
+        "Thermal mass can stabilize residential comfort.",
+        "Architecture can leverage mass to moderate environmental swings.",
+    ],
     "facets": {
-        "building_type": {
-            "value": "residential",
-            "source_pages": [1],
-            "evidence_spans": ["residential housing"],
-            "confidence": 0.8,
-        }
+        "building_type": "residential",
     },
     "concepts_local": [
         {
             "concept_name": "thermal mass",
-            "relevance": "primary topic",
+            "descriptor": "The capacity of a material to absorb and release heat.",
+            "relevance": "high",
             "source_pages": [1],
             "evidence_spans": ["Thermal mass slows heat transfer"],
         }
@@ -71,12 +43,13 @@ MOCK_DOC_RESPONSE = json.dumps({
     "concepts_bridge_candidates": [
         {
             "concept_name": "thermal performance in architecture",
-            "relevance": "secondary topic",
+            "descriptor": "How buildings manage heat through material and form.",
+            "relevance": "medium",
             "source_pages": [1],
             "evidence_spans": ["Thermal mass slows heat transfer"],
         }
     ],
-})
+}
 
 
 # ---------------------------------------------------------------------------
@@ -134,9 +107,26 @@ def _make_extracted_dir(tmp_path: Path) -> Path:
     return d
 
 
-def _make_llm_fn(response_text: str) -> MagicMock:
-    """Create a mock llm_fn that returns response_text."""
-    fn = MagicMock(return_value=response_text)
+def _make_llm_fn(enrichment_content: dict) -> MagicMock:
+    """Create a mock llm_fn that writes enrichment_content into meta.work.json when called.
+
+    The file-based stage calls llm_fn(system, messages) and then reads meta.work.json.
+    The mock merges the enrichment fields into the existing scaffold so required raw
+    fields (material_id, title, etc.) are preserved.
+    """
+    def _side_effect(system, messages):
+        content = messages[0]["content"]
+        match = re.search(r'Work file \(edit this\): (.+\.work\.json)', content)
+        if match:
+            work_path = Path(match.group(1))
+            # Read the scaffold written by build_document_work_files
+            existing = json.loads(work_path.read_text(encoding="utf-8"))
+            # Merge in the enrichment fields
+            existing.update(enrichment_content)
+            work_path.write_text(json.dumps(existing), encoding="utf-8")
+        return ""
+
+    fn = MagicMock(side_effect=_side_effect)
     fn.last_model = "test-agent"
     return fn
 
@@ -162,7 +152,7 @@ class TestEnrichDocumentStage:
     def test_meta_json_gets_enriched_fields(self, tmp_path):
         """After enrichment, meta.json should contain summary, document_type, keywords."""
         output_dir = _make_extracted_dir(tmp_path)
-        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
         config = _make_config()
 
         result = enrich_document_stage(output_dir, config, llm_fn, force=True)
@@ -183,7 +173,7 @@ class TestEnrichDocumentStage:
     def test_concepts_jsonl_is_written(self, tmp_path):
         """concepts.jsonl should be created with one entry per concept."""
         output_dir = _make_extracted_dir(tmp_path)
-        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
         config = _make_config()
 
         enrich_document_stage(output_dir, config, llm_fn, force=True)
@@ -202,7 +192,7 @@ class TestEnrichDocumentStage:
     def test_enrichment_stamp_written_to_meta(self, tmp_path):
         """After enrichment, meta.json should contain _enrichment_stamp."""
         output_dir = _make_extracted_dir(tmp_path)
-        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
         config = _make_config()
 
         enrich_document_stage(output_dir, config, llm_fn, force=True)
@@ -218,7 +208,7 @@ class TestEnrichDocumentStage:
     def test_skipped_when_not_stale(self, tmp_path):
         """Running enrichment twice without force should skip the second run."""
         output_dir = _make_extracted_dir(tmp_path)
-        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
         config = _make_config()
 
         # First run
@@ -236,7 +226,7 @@ class TestEnrichDocumentStage:
     def test_force_re_enriches_even_if_not_stale(self, tmp_path):
         """force=True should re-enrich even when stamp matches."""
         output_dir = _make_extracted_dir(tmp_path)
-        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
         config = _make_config()
 
         result1 = enrich_document_stage(output_dir, config, llm_fn, force=True)
@@ -251,7 +241,7 @@ class TestEnrichDocumentStage:
     def test_provenance_fields_present_in_enriched_field(self, tmp_path):
         """Each enriched field should carry a provenance sub-object."""
         output_dir = _make_extracted_dir(tmp_path)
-        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
         config = _make_config()
 
         enrich_document_stage(output_dir, config, llm_fn, force=True)
@@ -260,7 +250,7 @@ class TestEnrichDocumentStage:
         prov = meta["summary"]["provenance"]
         assert prov["model"] == "test-agent"
         assert prov["prompt_version"] == "enrich-v1.0"
-        assert prov["confidence"] == pytest.approx(0.9)
+        assert prov["confidence"] == pytest.approx(1.0)
 
     def test_failed_status_on_llm_error(self, tmp_path):
         """If the LLM call raises EnrichmentError, status should be 'failed'."""
@@ -277,11 +267,11 @@ class TestEnrichDocumentStage:
 
     def test_fails_when_summary_missing(self, tmp_path):
         """If LLM output lacks required 'summary' field, stage should fail."""
-        incomplete = json.dumps({
-            "document_type": {"value": "paper", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
-            "keywords": {"value": ["arch"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
-        })
         output_dir = _make_extracted_dir(tmp_path)
+        incomplete = {
+            "document_type": "paper",
+            "keywords": ["arch"],
+        }
         llm_fn = _make_llm_fn(incomplete)
         config = _make_config()
 
@@ -291,11 +281,11 @@ class TestEnrichDocumentStage:
 
     def test_fails_when_document_type_missing(self, tmp_path):
         """If LLM output lacks 'document_type', stage should fail."""
-        incomplete = json.dumps({
-            "summary": {"value": "A study.", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
-            "keywords": {"value": ["arch"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
-        })
         output_dir = _make_extracted_dir(tmp_path)
+        incomplete = {
+            "summary": "A study.",
+            "keywords": ["arch"],
+        }
         llm_fn = _make_llm_fn(incomplete)
         config = _make_config()
 
@@ -304,13 +294,20 @@ class TestEnrichDocumentStage:
         assert "document_type" in result["detail"]
 
     def test_fails_when_field_missing_value_key(self, tmp_path):
-        """If a required field dict lacks 'value', stage should fail."""
-        bad = json.dumps({
-            "summary": {"source_pages": [1], "confidence": 0.9},  # no 'value'
-            "document_type": {"value": "paper", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
-            "keywords": {"value": ["arch"], "source_pages": [1], "evidence_spans": [], "confidence": 0.8},
-        })
+        """If a required field is a dict lacking 'value', stage should fail.
+
+        In the file-based flow the LLM writes plain values (str/list), which
+        are normalised to {"value": ...} automatically. This test covers the
+        edge case where the LLM writes an explicit dict with no 'value' key,
+        which cannot be normalised and should fail validation.
+        """
         output_dir = _make_extracted_dir(tmp_path)
+        # summary written as a non-normalizable dict (has keys but no 'value')
+        bad = {
+            "summary": {"source_pages": [1], "confidence": 0.9},  # no 'value'
+            "document_type": "paper",
+            "keywords": ["arch"],
+        }
         llm_fn = _make_llm_fn(bad)
         config = _make_config()
 
@@ -321,7 +318,7 @@ class TestEnrichDocumentStage:
     def test_atomic_write_no_partial_on_failure(self, tmp_path):
         """If concepts write fails, meta.json should not be modified."""
         output_dir = _make_extracted_dir(tmp_path)
-        llm_fn = _make_llm_fn(MOCK_DOC_RESPONSE)
+        llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
         config = _make_config()
 
         original_meta = (output_dir / "meta.json").read_text(encoding="utf-8")
@@ -338,5 +335,3 @@ class TestEnrichDocumentStage:
             result = enrich_document_stage(output_dir, config, llm_fn, force=True)
 
         assert result["status"] == "failed"
-        # meta.json should still have original content (meta tmp rename happens first,
-        # but that's the best we can do with sequential renames).

@@ -68,11 +68,12 @@ def document_fingerprint(output_dir: Path) -> str:
       raw_keywords, raw_document_type, domain, collection, page_count)
     - Full text of pages.jsonl
     - Full text of annotations.jsonl (empty list ``[]`` if absent)
-    - Full text of toc.json (empty list ``[]`` if absent)
-    - Full text of chunks.jsonl
+        - Raw projection of chunks.jsonl
 
-    All file contents are included verbatim (as strings) so any change to
-    extracted artifacts propagates into the fingerprint.
+        Only inputs the document-stage prompt actually consumes are included.
+        ``toc.json`` is excluded because the document stage can create or update it;
+        hashing it here would make a successful document run invalidate its own
+        stamp immediately.
     """
     # 1. Raw meta projection
     meta_path = output_dir / "meta.json"
@@ -98,11 +99,7 @@ def document_fingerprint(output_dir: Path) -> str:
     ann_path = output_dir / "annotations.jsonl"
     annotations_text = ann_path.read_text(encoding="utf-8") if ann_path.exists() else "[]"
 
-    # 4. toc.json (optional — fall back to empty list repr)
-    toc_path = output_dir / "toc.json"
-    toc_text = toc_path.read_text(encoding="utf-8") if toc_path.exists() else "[]"
-
-    # 5. chunks.jsonl — raw fields only (exclude enriched summary/keywords)
+    # 4. chunks.jsonl — raw fields only (exclude enriched summary/keywords)
     raw_chunks = []
     for line in (output_dir / "chunks.jsonl").read_text(encoding="utf-8").splitlines():
         line = line.strip()
@@ -116,7 +113,7 @@ def document_fingerprint(output_dir: Path) -> str:
             "emphasized": c.get("emphasized", False),
         })
 
-    return canonical_hash(meta_projection, pages_text, annotations_text, toc_text, raw_chunks)
+    return canonical_hash(meta_projection, pages_text, annotations_text, raw_chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -228,6 +225,38 @@ def figure_fingerprint(
     return canonical_hash(image_sha256, raw_sidecar, page_text, caption_candidates, doc_context)
 
 
+def metadata_fingerprint(output_dir: Path) -> str:
+    """Fingerprint for metadata-fix pass based on the first four page thumbnails."""
+    meta_path = output_dir / "meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+
+    pages = []
+    pages_path = output_dir / "pages.jsonl"
+    if pages_path.exists():
+        for line in pages_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                pages.append(json.loads(line))
+
+    page_projection = []
+    for page in sorted(pages, key=lambda p: int(p.get("page_number", 0) or 0))[:4]:
+        thumbnail_rel = str(page.get("thumbnail_path", "") or "")
+        image_sha256 = "missing"
+        if thumbnail_rel:
+            image_path = output_dir / thumbnail_rel
+            if image_path.exists():
+                image_sha256 = hashlib.sha256(image_path.read_bytes()).hexdigest()
+        page_projection.append(
+            {
+                "page_number": page.get("page_number", 0),
+                "thumbnail_path": thumbnail_rel,
+                "image_sha256": image_sha256,
+            }
+        )
+
+    return canonical_hash({"page_count": meta.get("page_count", 0)}, page_projection)
+
+
 # ---------------------------------------------------------------------------
 # Stamp construction and staleness
 # ---------------------------------------------------------------------------
@@ -263,6 +292,25 @@ def is_stale(existing_stamp: dict | None, current_stamp: dict) -> bool:
     return any(existing_stamp.get(f) != current_stamp.get(f) for f in fields)
 
 
+def matches_stage_version(
+    existing_stamp: dict | None,
+    prompt_version: str,
+    schema_version: str,
+) -> bool:
+    """Return True when a stage stamp matches the current version contract.
+
+    This intentionally ignores model and input fingerprint. It is used for the
+    document stage, whose outputs are treated as durable once written unless the
+    prompt/schema contract changes or the user forces a rerun.
+    """
+    if existing_stamp is None:
+        return False
+    return (
+        existing_stamp.get("prompt_version") == prompt_version
+        and existing_stamp.get("enrichment_schema_version") == schema_version
+    )
+
+
 # ---------------------------------------------------------------------------
 # Stamp I/O — document
 # ---------------------------------------------------------------------------
@@ -275,6 +323,15 @@ def read_document_stamp(output_dir: Path) -> dict | None:
         return None
     data = json.loads(meta_path.read_text(encoding="utf-8"))
     return data.get("_enrichment_stamp") or None
+
+
+def read_metadata_fix_stamp(output_dir: Path) -> dict | None:
+    """Read ``_metadata_fix_stamp`` from meta.json; return None if absent."""
+    meta_path = output_dir / "meta.json"
+    if not meta_path.exists():
+        return None
+    data = json.loads(meta_path.read_text(encoding="utf-8"))
+    return data.get("_metadata_fix_stamp") or None
 
 
 def write_document_stamp(output_dir: Path, stamp: dict) -> None:

@@ -1,13 +1,13 @@
 """Enrichment orchestrator — Phase 3.
 
-Runs document, chunk, and figure enrichment stages for one or all materials.
+Runs document, metadata, chunk, and figure enrichment stages for one or all
+materials.
 """
 
 from __future__ import annotations
 
 import json
 import sys
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from arquimedes import enrich_stamps
@@ -16,6 +16,7 @@ from arquimedes.config import get_project_root, load_config
 from arquimedes.enrich_document import enrich_document_stage
 from arquimedes.enrich_chunks import enrich_chunks_stage
 from arquimedes.enrich_figures import enrich_figures_stage
+from arquimedes.enrich_metadata import enrich_metadata_stage
 from arquimedes.ingest import load_manifest
 
 
@@ -51,20 +52,17 @@ def _progress(message: str) -> None:
 # Staleness check helpers (for dry_run and "all stale" filtering)
 # ---------------------------------------------------------------------------
 
-_ALL_STAGES = ["document", "chunk", "figure"]
+_ALL_STAGES = ["document", "metadata", "chunk", "figure"]
 
 
 def _is_document_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for document stage without calling LLM."""
     enrichment_config = config.get("enrichment", {})
-    model = get_model_id(config, "document")
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
     try:
-        fingerprint = enrich_stamps.document_fingerprint(output_dir)
-        stamp = enrich_stamps.make_stamp(prompt_version, model, schema_version, fingerprint)
         existing = enrich_stamps.read_document_stamp(output_dir)
-        return enrich_stamps.is_stale(existing, stamp)
+        return not enrich_stamps.matches_stage_version(existing, prompt_version, schema_version)
     except Exception:
         return True
 
@@ -73,6 +71,21 @@ def _is_chunk_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for chunk stage."""
     stale_ids, _total = _chunk_staleness_info(output_dir, config)
     return bool(stale_ids)
+
+
+def _is_metadata_stale(output_dir: Path, config: dict) -> bool:
+    """Quick staleness check for thumbnail-based metadata correction."""
+    enrichment_config = config.get("enrichment", {})
+    model = get_model_id(config, "metadata")
+    prompt_version = f"{enrichment_config.get('prompt_version', 'enrich-v1.0')}-metadata"
+    schema_version = enrichment_config.get("enrichment_schema_version", "1")
+    try:
+        fingerprint = enrich_stamps.metadata_fingerprint(output_dir)
+        stamp = enrich_stamps.make_stamp(prompt_version, model, schema_version, fingerprint)
+        existing = enrich_stamps.read_metadata_fix_stamp(output_dir)
+        return enrich_stamps.is_stale(existing, stamp)
+    except Exception:
+        return True
 
 
 def _chunk_staleness_info(output_dir: Path, config: dict) -> tuple[set[str], int]:
@@ -164,12 +177,15 @@ def _is_figure_stale(output_dir: Path, config: dict) -> bool:
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
         doc_context: dict = {
             "title": meta.get("title", ""),
+            "authors": meta.get("authors", []),
+            "year": meta.get("year", ""),
             "domain": meta.get("domain", ""),
+            "collection": meta.get("collection", ""),
         }
-        if "document_type" in meta and isinstance(meta["document_type"], dict):
-            dt = meta["document_type"]
-            if isinstance(dt.get("value"), str):
-                doc_context["document_type"] = dt["value"]
+        if "summary" in meta and isinstance(meta["summary"], dict):
+            summary = meta["summary"].get("value")
+            if isinstance(summary, str):
+                doc_context["summary"] = summary
 
         pages_path = output_dir / "pages.jsonl"
         pages_by_num: dict[int, str] = {}
@@ -265,8 +281,25 @@ def enrich(
 
     Returns:
         (results_dict, all_succeeded) where results_dict maps material_id to
-        {"title": ..., "document": {...}, "chunk": {...}, "figure": {...}}
+        {"title": ..., "document": {...}, "metadata": {...}, "chunk": {...}, "figure": {...}}
     """
+
+    import datetime
+    log_path = get_project_root() / "logs" / "enrich.log"
+
+    enrich_start_time = datetime.datetime.now()
+
+    def _log_value(value) -> str:
+        return str(value).replace("\t", " ").replace("\n", " ").strip()
+
+    def _append_log(*fields) -> None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("\t".join(_log_value(field) for field in fields) + "\n")
+        except Exception:
+            pass
+
     if config is None:
         config = load_config()
 
@@ -276,9 +309,18 @@ def enrich(
 
     # Normalize stages
     requested_stages = list(stages) if stages else _ALL_STAGES
+    explicit_stage_selection = stages is not None
     for s in requested_stages:
         if s not in _ALL_STAGES:
             raise ValueError(f"Unknown stage: {s!r}. Valid stages: {_ALL_STAGES}")
+
+    _append_log(
+        enrich_start_time.isoformat(),
+        "START",
+        material_id or "ALL",
+        ",".join(requested_stages) if requested_stages else "ALL",
+        force,
+    )
 
     llm_state: dict = {}
 
@@ -313,6 +355,14 @@ def enrich(
                 any_stale = True
             elif "figure" in requested_stages and _is_figure_stale(output_dir, config):
                 any_stale = True
+            elif "metadata" in requested_stages and _is_metadata_stale(output_dir, config):
+                any_stale = True
+            elif (
+                not explicit_stage_selection
+                and ("document" in requested_stages or "chunk" in requested_stages)
+                and _is_metadata_stale(output_dir, config)
+            ):
+                any_stale = True
             if force or any_stale:
                 to_process[mid] = entry
 
@@ -334,6 +384,16 @@ def enrich(
         doc_stale_now = force or (
             "document" in requested_stages and _is_document_stale(output_dir, config)
         )
+        metadata_stale_now = force or (
+            (
+                "metadata" in requested_stages
+                or (
+                    not explicit_stage_selection
+                    and ("document" in requested_stages or "chunk" in requested_stages)
+                )
+            )
+            and _is_metadata_stale(output_dir, config)
+        )
         chunk_stale_now = force or (
             "chunk" in requested_stages and _is_chunk_stale(output_dir, config)
         )
@@ -343,6 +403,8 @@ def enrich(
         effective_chunk_stale = chunk_stale_now or (
             "chunk" in requested_stages and doc_stale_now
         )
+        if not explicit_stage_selection and metadata_stale_now and "chunk" in requested_stages:
+            effective_chunk_stale = True
 
         if not dry_run:
             _progress(f"[enrich] start {mid}  {title}")
@@ -353,6 +415,8 @@ def enrich(
             for stage_name in remaining:
                 if stage_name == "document":
                     stale = _is_document_stale(output_dir, config)
+                elif stage_name == "metadata":
+                    stale = _is_metadata_stale(output_dir, config)
                 elif stage_name == "chunk":
                     stale = _is_chunk_stale(output_dir, config)
                 else:
@@ -369,7 +433,9 @@ def enrich(
                     stale_stages.add(s)
                 elif s == "document" and _is_document_stale(output_dir, config):
                     stale_stages.add(s)
-                elif s == "chunk" and _is_chunk_stale(output_dir, config):
+                elif s == "metadata" and _is_metadata_stale(output_dir, config):
+                    stale_stages.add(s)
+                elif s == "chunk" and effective_chunk_stale:
                     stale_stages.add(s)
                 elif s == "figure" and _is_figure_stale(output_dir, config):
                     stale_stages.add(s)
@@ -381,78 +447,75 @@ def enrich(
             ):
                 stale_stages.add("chunk")
 
+            metadata_needed = (not explicit_stage_selection) and metadata_stale_now and (
+                "document" in remaining or "metadata" in remaining or "chunk" in remaining
+            )
+            metadata_done = False
+
+            def _run_metadata_if_needed() -> bool:
+                nonlocal metadata_done, succeeded
+                if not metadata_needed or metadata_done:
+                    return True
+                _progress(f"[metadata] start {mid}")
+                metadata_result = enrich_metadata_stage(
+                    output_dir, config, _get_llm_fn("metadata"), force=force
+                )
+                material_results["metadata"] = metadata_result
+                _progress(f"[metadata] done {mid}: {metadata_result.get('status', '?')}")
+                metadata_done = True
+                if metadata_result["status"] == "failed":
+                    succeeded = False
+                    return False
+                return True
+
             if stale_stages:
                 _progress(
-                    f"[enrich] stages {mid}: {', '.join(s for s in ('document', 'chunk', 'figure') if s in stale_stages)}"
+                    f"[enrich] stages {mid}: {', '.join(s for s in ('document', 'metadata', 'chunk', 'figure') if s in stale_stages)}"
                 )
 
             for s in remaining:
                 if s not in stale_stages:
                     material_results[s] = {"status": "skipped", "detail": "up to date"}
 
-            # Parallel path: document + figure are independent; chunk waits for document
-            parallel_doc_fig = "document" in stale_stages and "figure" in stale_stages
-
-            if parallel_doc_fig:
-                # Separate llm_fn per thread to avoid last_model race
-                doc_fn = _get_llm_fn("document")
-                chunk_fn = _get_llm_fn("chunk")
-                fig_fn = _get_llm_fn("figure")
-
-                with ThreadPoolExecutor(max_workers=2) as stage_pool:
-                    fig_future = stage_pool.submit(
-                        enrich_figures_stage, output_dir, config, fig_fn, force=force
+            # Sequential stage order is intentional: figure uses the current
+            # document summary, and chunk must see post-metadata document fields.
+            for s in ("document", "metadata", "chunk", "figure"):
+                if s == "chunk" and not _run_metadata_if_needed():
+                    if s in stale_stages:
+                        material_results["chunk"] = {
+                            "status": "failed",
+                            "detail": "metadata prerequisite failed",
+                        }
+                    continue
+                if s not in stale_stages:
+                    continue
+                _progress(f"[{s}] start {mid}")
+                if s == "document":
+                    result = enrich_document_stage(
+                        output_dir, config, _get_llm_fn("document"), force=force
                     )
-
-                    # Document in main thread so chunk can follow immediately
-                    _progress(f"[document] start {mid}")
-                    doc_result = enrich_document_stage(
-                        output_dir, config, doc_fn, force=force
+                    if result["status"] != "failed" and metadata_needed and "chunk" not in remaining:
+                        _run_metadata_if_needed()
+                elif s == "metadata":
+                    result = enrich_metadata_stage(
+                        output_dir, config, _get_llm_fn("metadata"), force=force
                     )
-                    material_results["document"] = doc_result
-                    _progress(f"[document] done {mid}: {doc_result.get('status', '?')}")
-                    if doc_result["status"] == "failed":
-                        succeeded = False
+                    metadata_done = True
+                elif s == "chunk":
+                    result = enrich_chunks_stage(
+                        output_dir, config, _get_llm_fn("chunk"), force=force
+                    )
+                else:
+                    result = enrich_figures_stage(
+                        output_dir, config, _get_llm_fn("figure"), force=force
+                    )
+                material_results[s] = result
+                _progress(f"[{s}] done {mid}: {result.get('status', '?')}")
+                if result["status"] == "failed":
+                    succeeded = False
 
-                    # Chunk after document (uses doc summary in prompt context)
-                    if "chunk" in stale_stages:
-                        _progress(f"[chunk] start {mid}")
-                        chunk_result = enrich_chunks_stage(
-                            output_dir, config, chunk_fn, force=force
-                        )
-                        material_results["chunk"] = chunk_result
-                        _progress(f"[chunk] done {mid}: {chunk_result.get('status', '?')}")
-                        if chunk_result["status"] == "failed":
-                            succeeded = False
-
-                    # Collect figure result
-                    fig_result = fig_future.result()
-                    material_results["figure"] = fig_result
-                    _progress(f"[figure] done {mid}: {fig_result.get('status', '?')}")
-                    if fig_result["status"] == "failed":
-                        succeeded = False
-            else:
-                # Sequential: doc → chunk → figure (preserves dependency order)
-                for s in ("document", "chunk", "figure"):
-                    if s not in stale_stages:
-                        continue
-                    _progress(f"[{s}] start {mid}")
-                    if s == "document":
-                        result = enrich_document_stage(
-                            output_dir, config, _get_llm_fn("document"), force=force
-                        )
-                    elif s == "chunk":
-                        result = enrich_chunks_stage(
-                            output_dir, config, _get_llm_fn("chunk"), force=force
-                        )
-                    else:
-                        result = enrich_figures_stage(
-                            output_dir, config, _get_llm_fn("figure"), force=force
-                        )
-                    material_results[s] = result
-                    _progress(f"[{s}] done {mid}: {result.get('status', '?')}")
-                    if result["status"] == "failed":
-                        succeeded = False
+            if metadata_needed and not metadata_done and succeeded:
+                _run_metadata_if_needed()
 
         if not dry_run:
             _progress(f"[enrich] done {mid}  {title}")
@@ -470,10 +533,42 @@ def enrich(
         key=lambda mid: (_material_chunk_bytes(extracted_dir / mid), mid),
     )
 
-    for mid in material_ids:
-        mid, mat_result, ok = _enrich_one_material(mid)
-        results[mid] = mat_result
-        if not ok:
-            all_succeeded = False
+    try:
+        for mid in material_ids:
+            mid, mat_result, ok = _enrich_one_material(mid)
+            results[mid] = mat_result
+            if not ok:
+                all_succeeded = False
 
-    return results, all_succeeded
+        failed_stages: list[str] = []
+        if not all_succeeded:
+            for mid, material_result in results.items():
+                for stage_name in requested_stages:
+                    stage_result = material_result.get(stage_name)
+                    if isinstance(stage_result, dict) and stage_result.get("status") == "failed":
+                        detail = str(stage_result.get("detail", "failed")).strip()
+                        failed_stages.append(f"{mid}:{stage_name}:{detail}")
+
+        enrich_end_time = datetime.datetime.now()
+        _append_log(
+            enrich_start_time.isoformat(),
+            enrich_end_time.isoformat(),
+            material_id or "ALL",
+            ",".join(requested_stages) if requested_stages else "ALL",
+            force,
+            "DONE" if all_succeeded else "FAILED",
+            "ok" if all_succeeded else (" | ".join(failed_stages) if failed_stages else "one_or_more_materials_failed"),
+        )
+        return results, all_succeeded
+    except Exception as exc:
+        enrich_end_time = datetime.datetime.now()
+        _append_log(
+            enrich_start_time.isoformat(),
+            enrich_end_time.isoformat(),
+            material_id or "ALL",
+            ",".join(requested_stages) if requested_stages else "ALL",
+            force,
+            "FAILED",
+            exc,
+        )
+        raise

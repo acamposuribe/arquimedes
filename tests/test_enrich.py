@@ -105,6 +105,7 @@ def _make_stage_result(status: str = "enriched") -> dict:
 # ---------------------------------------------------------------------------
 
 _PATCH_DOC = "arquimedes.enrich.enrich_document_stage"
+_PATCH_METADATA = "arquimedes.enrich.enrich_metadata_stage"
 _PATCH_CHUNK = "arquimedes.enrich.enrich_chunks_stage"
 _PATCH_FIGURE = "arquimedes.enrich.enrich_figures_stage"
 # make_cli_llm_fn is imported inside the function body, so patch the source module
@@ -129,6 +130,7 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT, return_value=mock_llm_fn),
             patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+            patch(_PATCH_METADATA, return_value=_make_stage_result()) as mock_metadata,
             patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
             patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
         ):
@@ -142,6 +144,8 @@ class TestEnrichOrchestrator:
         # Each stage should have been called with force=True
         _, doc_kwargs = mock_doc.call_args
         assert doc_kwargs["force"] is True
+        _, metadata_kwargs = mock_metadata.call_args
+        assert metadata_kwargs["force"] is True
         _, chunk_kwargs = mock_chunk.call_args
         assert chunk_kwargs["force"] is True
         _, figure_kwargs = mock_figure.call_args
@@ -157,6 +161,7 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT, return_value=mock_llm_fn),
             patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+            patch(_PATCH_METADATA, return_value=_make_stage_result()) as mock_metadata,
             patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
             patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
         ):
@@ -168,6 +173,7 @@ class TestEnrichOrchestrator:
             )
 
         mock_doc.assert_called_once()
+        mock_metadata.assert_not_called()
         mock_chunk.assert_not_called()
         mock_figure.assert_not_called()
         assert all_succeeded is True
@@ -181,6 +187,7 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT) as mock_make_llm_fn,
             patch(_PATCH_DOC) as mock_doc,
+            patch(_PATCH_METADATA) as mock_metadata,
             patch(_PATCH_CHUNK) as mock_chunk,
             patch(_PATCH_FIGURE) as mock_figure,
         ):
@@ -194,6 +201,7 @@ class TestEnrichOrchestrator:
         mock_make_llm_fn.assert_not_called()
         # Stage functions should NOT have been called (dry_run path uses staleness checks only)
         mock_doc.assert_not_called()
+        mock_metadata.assert_not_called()
         mock_chunk.assert_not_called()
         mock_figure.assert_not_called()
 
@@ -224,6 +232,7 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT) as mock_make_llm_fn,
             patch("arquimedes.enrich._is_document_stale", return_value=False),
+            patch("arquimedes.enrich._is_metadata_stale", return_value=False),
             patch("arquimedes.enrich._is_chunk_stale", return_value=False),
             patch("arquimedes.enrich._is_figure_stale", return_value=False),
         ):
@@ -239,6 +248,32 @@ class TestEnrichOrchestrator:
         assert results["test123"]["chunk"]["status"] == "skipped"
         assert results["test123"]["figure"]["status"] == "skipped"
 
+    def test_failed_run_logs_failed_outcome(self, tmp_path):
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_DOC, return_value=_make_stage_result("failed")),
+            patch(_PATCH_METADATA, return_value=_make_stage_result()),
+            patch(_PATCH_CHUNK, return_value=_make_stage_result()),
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()),
+        ):
+            _results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                force=True,
+            )
+
+        assert all_succeeded is False
+        log_lines = (project_root / "logs" / "enrich.log").read_text(encoding="utf-8").splitlines()
+        assert len(log_lines) == 2
+        assert "\tSTART\t" in log_lines[0]
+        assert "\tFAILED\t" in log_lines[1]
+        assert "test123:document:ok" in log_lines[1]
+
     def test_all_stages_run_by_default(self, tmp_path):
         """With no stages filter, all three stage functions should be called."""
         project_root = _setup_project(tmp_path)
@@ -249,6 +284,7 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT, return_value=mock_llm_fn),
             patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+            patch(_PATCH_METADATA, return_value=_make_stage_result()) as mock_metadata,
             patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
             patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
         ):
@@ -259,6 +295,7 @@ class TestEnrichOrchestrator:
             )
 
         mock_doc.assert_called_once()
+        mock_metadata.assert_called_once()
         mock_chunk.assert_called_once()
         mock_figure.assert_called_once()
 
@@ -272,6 +309,7 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT, return_value=mock_llm_fn),
             patch(_PATCH_DOC, return_value={"status": "failed", "detail": "LLM error"}),
+            patch(_PATCH_METADATA, return_value=_make_stage_result()),
             patch(_PATCH_CHUNK, return_value=_make_stage_result()),
             patch(_PATCH_FIGURE, return_value=_make_stage_result()),
         ):
@@ -326,6 +364,7 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT, return_value=mock_llm_fn),
             patch(_PATCH_DOC, return_value=_make_stage_result()),
+            patch(_PATCH_METADATA, return_value=_make_stage_result()),
             patch(_PATCH_CHUNK, return_value=_make_stage_result()),
             patch(_PATCH_FIGURE, return_value=_make_stage_result()),
         ):
@@ -405,9 +444,11 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT, return_value=MagicMock()),
             patch(_PATCH_DOC, side_effect=_doc_stage),
+            patch(_PATCH_METADATA, return_value={"status": "skipped", "detail": "up to date"}),
             patch(_PATCH_CHUNK, return_value={"status": "skipped", "detail": "up to date"}),
             patch(_PATCH_FIGURE, return_value={"status": "skipped", "detail": "up to date"}),
             patch("arquimedes.enrich._is_document_stale", return_value=True),
+            patch("arquimedes.enrich._is_metadata_stale", return_value=False),
             patch("arquimedes.enrich._is_chunk_stale", return_value=False),
             patch("arquimedes.enrich._is_figure_stale", return_value=False),
         ):
@@ -427,6 +468,7 @@ class TestEnrichOrchestrator:
             patch(_PATCH_PROJECT_ROOT, return_value=project_root),
             patch(_PATCH_CLIENT, return_value=mock_llm_fn),
             patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+            patch(_PATCH_METADATA, return_value=_make_stage_result()) as mock_metadata,
             patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
             patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
         ):
@@ -438,8 +480,143 @@ class TestEnrichOrchestrator:
             )
 
         mock_doc.assert_not_called()
+        mock_metadata.assert_not_called()
         mock_chunk.assert_called_once()
         mock_figure.assert_not_called()
+
+    def test_stage_metadata_only_runs_only_metadata(self, tmp_path):
+        """stages=['metadata'] should only call enrich_metadata_stage."""
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+            patch(_PATCH_METADATA, return_value=_make_stage_result()) as mock_metadata,
+            patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                stages=["metadata"],
+                force=True,
+            )
+
+        mock_doc.assert_not_called()
+        mock_metadata.assert_called_once()
+        mock_chunk.assert_not_called()
+        mock_figure.assert_not_called()
+        assert all_succeeded is True
+
+    def test_metadata_runs_between_document_and_chunk(self, tmp_path):
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        call_order: list[str] = []
+
+        def _record(name: str):
+            def _inner(*args, **kwargs):
+                call_order.append(name)
+                return _make_stage_result()
+            return _inner
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=MagicMock()),
+            patch(_PATCH_DOC, side_effect=_record("document")),
+            patch(_PATCH_METADATA, side_effect=_record("metadata")),
+            patch(_PATCH_CHUNK, side_effect=_record("chunk")),
+            patch(_PATCH_FIGURE, return_value={"status": "skipped", "detail": "up to date"}),
+            patch("arquimedes.enrich._is_document_stale", return_value=True),
+            patch("arquimedes.enrich._is_metadata_stale", return_value=True),
+            patch("arquimedes.enrich._is_chunk_stale", return_value=True),
+            patch("arquimedes.enrich._is_figure_stale", return_value=False),
+        ):
+            results, all_succeeded = enrich(material_id="test123", config=config, force=False)
+
+        assert all_succeeded is True
+        assert call_order == ["document", "metadata", "chunk"]
+
+    def test_metadata_stale_triggers_chunk_even_if_chunk_stamp_is_current_in_full_run(self, tmp_path):
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        call_order: list[str] = []
+
+        def _record(name: str):
+            def _inner(*args, **kwargs):
+                call_order.append(name)
+                return _make_stage_result()
+            return _inner
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=MagicMock()),
+            patch(_PATCH_DOC, return_value={"status": "skipped", "detail": "up to date"}),
+            patch(_PATCH_METADATA, side_effect=_record("metadata")),
+            patch(_PATCH_CHUNK, side_effect=_record("chunk")),
+            patch(_PATCH_FIGURE, return_value={"status": "skipped", "detail": "up to date"}),
+            patch("arquimedes.enrich._is_document_stale", return_value=False),
+            patch("arquimedes.enrich._is_metadata_stale", return_value=True),
+            patch("arquimedes.enrich._is_chunk_stale", return_value=False),
+            patch("arquimedes.enrich._is_figure_stale", return_value=False),
+        ):
+            results, all_succeeded = enrich(material_id="test123", config=config, force=False)
+
+        assert all_succeeded is True
+        assert call_order == ["metadata", "chunk"]
+
+    def test_explicit_chunk_stage_does_not_trigger_metadata(self, tmp_path):
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=MagicMock()),
+            patch(_PATCH_DOC, return_value={"status": "skipped", "detail": "up to date"}),
+            patch(_PATCH_METADATA, return_value=_make_stage_result()) as mock_metadata,
+            patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
+            patch(_PATCH_FIGURE, return_value={"status": "skipped", "detail": "up to date"}),
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                stages=["chunk"],
+                force=True,
+            )
+
+        assert all_succeeded is True
+        mock_metadata.assert_not_called()
+        mock_chunk.assert_called_once()
+
+    def test_figure_runs_after_document_when_both_are_stale(self, tmp_path):
+        project_root = _setup_project(tmp_path)
+        config = _make_config()
+        call_order: list[str] = []
+
+        def _record(name: str):
+            def _inner(*args, **kwargs):
+                call_order.append(name)
+                return _make_stage_result()
+            return _inner
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=MagicMock()),
+            patch(_PATCH_DOC, side_effect=_record("document")),
+            patch(_PATCH_METADATA, return_value={"status": "skipped", "detail": "up to date"}),
+            patch(_PATCH_CHUNK, return_value={"status": "skipped", "detail": "up to date"}),
+            patch(_PATCH_FIGURE, side_effect=_record("figure")),
+            patch("arquimedes.enrich._is_document_stale", return_value=True),
+            patch("arquimedes.enrich._is_metadata_stale", return_value=False),
+            patch("arquimedes.enrich._is_chunk_stale", return_value=False),
+            patch("arquimedes.enrich._is_figure_stale", return_value=True),
+        ):
+            results, all_succeeded = enrich(material_id="test123", config=config, force=False)
+
+        assert all_succeeded is True
+        assert call_order == ["document", "figure"]
 
 
 class TestParallelStages:
@@ -464,9 +641,11 @@ class TestParallelStages:
                     patch(_PATCH_PROJECT_ROOT, return_value=project_root),
                     patch(_PATCH_CLIENT, return_value=MagicMock()),
                     patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+                    patch(_PATCH_METADATA, return_value={"status": "skipped", "detail": "up to date"}),
                     patch(_PATCH_CHUNK, return_value=_make_stage_result()) as mock_chunk,
                     patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
                     patch("arquimedes.enrich._is_document_stale", return_value=True),
+                    patch("arquimedes.enrich._is_metadata_stale", return_value=False),
                     patch("arquimedes.enrich._is_chunk_stale", return_value=True),
                     patch("arquimedes.enrich._is_figure_stale", return_value=True),
                 ):
@@ -489,9 +668,11 @@ class TestParallelStages:
                     patch(_PATCH_PROJECT_ROOT, return_value=project_root),
                     patch(_PATCH_CLIENT, return_value=MagicMock()),
                     patch(_PATCH_DOC, return_value=_make_stage_result()),
+                    patch(_PATCH_METADATA, return_value={"status": "skipped", "detail": "up to date"}),
                     patch(_PATCH_CHUNK, return_value=_make_stage_result()),
                     patch(_PATCH_FIGURE, return_value={"status": "failed", "detail": "boom"}),
                     patch("arquimedes.enrich._is_document_stale", return_value=True),
+                    patch("arquimedes.enrich._is_metadata_stale", return_value=False),
                     patch("arquimedes.enrich._is_chunk_stale", return_value=True),
                     patch("arquimedes.enrich._is_figure_stale", return_value=True),
                 ):

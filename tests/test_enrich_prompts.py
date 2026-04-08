@@ -11,8 +11,10 @@ from arquimedes.enrich_prompts import (
     build_chunk_batch_prompt,
     build_document_context,
     build_document_file_prompt,
-    build_document_work_files,
+    build_figure_context,
+    build_document_input_files,
     build_figure_batch_prompt,
+    build_metadata_fix_prompt,
     estimate_tokens,
     format_toc,
     inject_annotations,
@@ -160,81 +162,82 @@ class TestBuildDocumentContext:
         assert "Document type: regulation" in result
 
 
+class TestBuildFigureContext:
+    def test_keeps_only_minimal_figure_context(self):
+        meta = _meta()
+        meta["summary"] = {"value": "A study of urban housing density."}
+        meta["document_type"] = {"value": "regulation"}
+        meta["bridge_concepts"] = [{"canonical_name": "archive theory"}]
+        result = build_figure_context(meta)
+        assert "Urban Housing Standards" in result
+        assert "Alice Arch, Bob Build" in result
+        assert "2022" in result
+        assert "practice" in result
+        assert "regulations" in result
+        assert "Document summary:" in result
+        assert "Document type:" not in result
+        assert "Bridge concepts:" not in result
+        assert "Raw keywords:" not in result
+        assert "Table of Contents:" not in result
+
+
 # ---------------------------------------------------------------------------
-# build_document_work_files + build_document_file_prompt
+# build_document_input_files + build_document_file_prompt
 # ---------------------------------------------------------------------------
 
 
-class TestBuildDocumentWorkFiles:
-    def test_creates_both_files(self, tmp_path):
-        # build_document_work_files requires toc.json to exist (reads it)
-        (tmp_path / "toc.json").write_text("[]", encoding="utf-8")
-        work_meta, work_chunks = build_document_work_files(
-            tmp_path, _meta(), _chunks(), _annotations()
+class TestBuildDocumentInputFiles:
+    def test_returns_meta_json_and_flattened_document_file(self, tmp_path):
+        (tmp_path / "meta.json").write_text('{"title":"Urban Housing Standards"}', encoding="utf-8")
+        (tmp_path / "text.md").write_text("Line one.\n\nLine two.\nLine three.", encoding="utf-8")
+
+        meta_path, document_text_path = build_document_input_files(
+            tmp_path, _chunks(), _annotations()
         )
-        assert work_meta.exists() and work_chunks.exists()
 
-    def test_work_meta_has_scaffold_fields(self, tmp_path):
-        (tmp_path / "toc.json").write_text("[]", encoding="utf-8")
-        work_meta, _ = build_document_work_files(tmp_path, _meta(), _chunks(), _annotations())
-        import json as _json
-        data = _json.loads(work_meta.read_text())
-        assert "summary" in data
-        assert "keywords" in data
-        assert "concepts_local" in data
-        assert "concepts_bridge_candidates" in data
-        assert "methodological_conclusions" in data
-        assert "main_content_learnings" in data
-        assert "facets" in data
-        # Raw meta fields preserved
-        assert data["title"] == "Urban Housing Standards"
-        assert data["material_id"] == "abc123"
+        assert meta_path == tmp_path / "meta.json"
+        assert document_text_path.exists()
+        assert document_text_path.read_text(encoding="utf-8") == "Line one. Line two. Line three."
 
-    def test_work_meta_preserves_existing_toc(self, tmp_path):
-        import json as _json
-        toc = [{"title": "Intro", "page": 1, "level": 0}]
-        (tmp_path / "toc.json").write_text(_json.dumps(toc), encoding="utf-8")
-        work_meta, _ = build_document_work_files(tmp_path, _meta(), _chunks(), [])
-        data = _json.loads(work_meta.read_text())
-        # When toc.json has content, the scaffold "toc" field is removed
-        assert "toc" not in data
+    def test_falls_back_to_chunks_when_text_md_missing(self, tmp_path):
+        (tmp_path / "meta.json").write_text('{"title":"Urban Housing Standards"}', encoding="utf-8")
 
-    def test_work_chunks_contains_text_with_annotations(self, tmp_path):
-        (tmp_path / "toc.json").write_text("[]", encoding="utf-8")
-        _, work_chunks = build_document_work_files(
-            tmp_path, _meta(), _chunks(), _annotations()
-        )
-        content = work_chunks.read_text()
+        _, document_text_path = build_document_input_files(tmp_path, _chunks(), _annotations())
+
+        content = document_text_path.read_text(encoding="utf-8")
         assert "regulates" in content
         assert "Maximum FAR is 2.5" in content
-        assert "[HIGHLIGHTED]" in content
+        assert "\n" not in content
 
 
 class TestBuildDocumentFilePrompt:
     def test_shape_and_references_paths(self, tmp_path):
-        work_meta = tmp_path / "meta.work.json"
-        work_chunks = tmp_path / "chunks.work.txt"
-        work_meta.write_text("{}", encoding="utf-8")
-        work_chunks.write_text("text", encoding="utf-8")
-        system, messages = build_document_file_prompt(work_meta, work_chunks)
+        meta_path = tmp_path / "meta.json"
+        document_text_path = tmp_path / "document.work.md"
+        meta_path.write_text("{}", encoding="utf-8")
+        document_text_path.write_text("text", encoding="utf-8")
+        system, messages = build_document_file_prompt(meta_path, document_text_path)
         assert isinstance(system, str) and len(system) > 0
         assert len(messages) == 1 and messages[0]["role"] == "user"
         content = messages[0]["content"]
-        assert str(work_meta) in content
-        assert str(work_chunks) in content
+        assert str(meta_path) in content
+        assert str(document_text_path) in content
 
     def test_system_prompt_contains_key_field_instructions(self, tmp_path):
-        work_meta = tmp_path / "meta.work.json"
-        work_chunks = tmp_path / "chunks.work.txt"
-        work_meta.write_text("{}", encoding="utf-8")
-        work_chunks.write_text("text", encoding="utf-8")
-        system, _ = build_document_file_prompt(work_meta, work_chunks)
+        meta_path = tmp_path / "meta.json"
+        document_text_path = tmp_path / "document.work.md"
+        meta_path.write_text("{}", encoding="utf-8")
+        document_text_path.write_text("text", encoding="utf-8")
+        system, _ = build_document_file_prompt(meta_path, document_text_path)
         assert "summary" in system
         assert "facets" in system
         assert "concepts_local" in system
         assert "concepts_bridge_candidates" in system
         assert "methodological_conclusions" in system
         assert "main_content_learnings" in system
+        assert "complete JSON output object" in system
+        assert '"title": "... optional, only if replacing ..."' not in system
+        assert "Replace only if clearly wrong from document evidence." not in system
 
 
 # ---------------------------------------------------------------------------
@@ -323,6 +326,38 @@ class TestBuildFigureBatchPrompt:
         all_text = " ".join(b["text"] for b in messages[0]["content"] if b["type"] == "text")
         assert "Bounding box:" in all_text
         assert "Artifact hint:" in all_text
+
+
+class TestBuildMetadataFixPrompt:
+    def _make_png(self, path: Path) -> Path:
+        png_bytes = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwADhQGAWjR9awAAAABJRU5ErkJggg=="
+        )
+        path.write_bytes(png_bytes)
+        return path
+
+    def test_uses_first_four_page_thumbnails(self, tmp_path):
+        thumbs_dir = tmp_path / "thumbnails"
+        thumbs_dir.mkdir()
+        for i in range(1, 6):
+            self._make_png(thumbs_dir / f"page_{i:04d}.png")
+
+        pages = [
+            {
+                "page_number": i,
+                "text": f"Page {i} text",
+                "thumbnail_path": f"thumbnails/page_{i:04d}.png",
+            }
+            for i in range(1, 6)
+        ]
+
+        _, messages = build_metadata_fix_prompt(_meta(), pages, tmp_path)
+        content_blocks = messages[0]["content"]
+        assert sum(1 for block in content_blocks if block["type"] == "image") == 4
+        text_blob = " ".join(block["text"] for block in content_blocks if block["type"] == "text")
+        assert "Current metadata:" in text_blob
+        assert "Page 4" in text_blob
+        assert "Page 5" not in text_blob
 
 
 # ---------------------------------------------------------------------------

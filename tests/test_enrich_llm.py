@@ -209,6 +209,25 @@ class TestBuildAgentCmd:
         cmd = _build_agent_cmd(["claude", "--print"], "sys", effort=None)
         assert "--effort" not in cmd
 
+    def test_claude_strips_bare_flags_from_base_command(self):
+        cmd = _build_agent_cmd(
+            [
+                "claude",
+                "--bare",
+                "--settings",
+                "scripts/claude_bare_settings.json",
+                "--dangerously-skip-permissions",
+            ],
+            "sys",
+            effort="medium",
+        )
+        assert "--bare" not in cmd
+        assert "--settings" not in cmd
+        assert "--dangerously-skip-permissions" not in cmd
+        assert "--no-session-persistence" in cmd
+        assert "--disable-slash-commands" in cmd
+        assert cmd[cmd.index("--effort") + 1] == "medium"
+
     def test_claude_explicit_effort_not_overridden(self):
         cmd = _build_agent_cmd(["claude", "--print", "--effort", "high"], "sys", effort="low")
         assert cmd.count("--effort") == 1
@@ -236,7 +255,7 @@ class TestBuildAgentCmd:
 
 class TestBuildStageRequest:
     def test_copilot_uses_prompt_flag_without_broad_tools(self):
-        cmd, stdin_text, fast_fail = _build_stage_request(
+        cmd, stdin_text = _build_stage_request(
             ["copilot"],
             "copilot",
             "system",
@@ -253,7 +272,6 @@ class TestBuildStageRequest:
             },
         )
         assert stdin_text == ""
-        assert fast_fail is True
         assert "--agent" in cmd
         assert cmd[cmd.index("--agent") + 1] == "copilot-no-tools-json"
         assert "--prompt" in cmd
@@ -267,7 +285,7 @@ class TestBuildStageRequest:
         assert cmd[cmd.index("--effort") + 1] == "high"
 
     def test_codex_uses_stdin_and_model_flag(self):
-        cmd, stdin_text, fast_fail = _build_stage_request(
+        cmd, stdin_text = _build_stage_request(
             ["codex", "exec"],
             "codex",
             "system",
@@ -276,7 +294,6 @@ class TestBuildStageRequest:
             effort="medium",
         )
         assert stdin_text.startswith("[SYSTEM]")
-        assert fast_fail is False
         assert "--ephemeral" in cmd
         assert cmd[cmd.index("-m") + 1] == "gpt-5.4-mini"
 
@@ -385,6 +402,35 @@ class TestMakeCliLlmFn:
         assert "--model" in args and args[args.index("--model") + 1] == "gpt-4.1"
         assert "--effort" in args and args[args.index("--effort") + 1] == "high"
 
+    def test_claude_fallback_can_be_blocked_by_env(self, tmp_path, monkeypatch):
+        claude = tmp_path / "claude"
+        claude.write_text('#!/bin/bash\necho "Invalid API key"\nexit 1')
+        claude.chmod(0o755)
+
+        copilot = tmp_path / "copilot"
+        copilot.write_text('#!/bin/bash\ncat - > /dev/null\necho \'{"ok": true}\'\n')
+        copilot.chmod(0o755)
+
+        monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+        monkeypatch.setenv("ARQ_ABORT_ON_CLAUDE_FALLBACK", "1")
+
+        config = {
+            "enrichment": {
+                "max_retries": 1,
+                "llm_routes": {
+                    "document": [
+                        {"provider": "claude", "command": "claude", "model": "sonnet", "bare": True},
+                        {"provider": "copilot", "command": "copilot", "model": "gpt-4.1"},
+                    ]
+                },
+            }
+        }
+
+        fn = make_cli_llm_fn(config, "document")
+
+        with pytest.raises(EnrichmentError, match="claude fallback blocked"):
+            fn("system", [{"role": "user", "content": "hi"}])
+
     def test_stage_routes_fall_back_when_first_provider_returns_empty_stdout(self, tmp_path, monkeypatch):
         copilot = tmp_path / "copilot"
         copilot.write_text(
@@ -480,14 +526,11 @@ class TestMakeCliLlmFn:
         with pytest.raises(EnrichmentError, match="failed"):
             fn("system", [{"role": "user", "content": "hi"}])
 
-    def test_fast_fail_kills_hanging_agent(self, tmp_path):
-        """Agent that prints auth error to stderr then hangs is killed fast."""
+    def test_timeout_falls_back_from_hanging_agent(self, tmp_path):
         hanging = tmp_path / "hanging-agent"
-        # Prints "Not logged in" to stderr then sleeps forever
         hanging.write_text(
             '#!/bin/bash\n'
             'cat - > /dev/null\n'
-            'echo "Not logged in · Please run /login" >&2\n'
             'sleep 300\n'
         )
         hanging.chmod(0o755)
@@ -498,7 +541,7 @@ class TestMakeCliLlmFn:
 
         config = {
             "llm": {"agent_cmd": [str(hanging), str(working)]},
-            "enrichment": {"max_retries": 1},
+            "enrichment": {"max_retries": 1, "llm_timeout_seconds": 1},
         }
         fn = make_cli_llm_fn(config)
         import time
@@ -506,17 +549,15 @@ class TestMakeCliLlmFn:
         result = fn("system", [{"role": "user", "content": "hi"}])
         elapsed = time.monotonic() - t0
         assert "ok" in result
-        # Should be killed quickly, not wait 300s
-        assert elapsed < 30, f"Fast-fail took too long: {elapsed:.1f}s"
+        assert elapsed < 30, f"Timeout fallback took too long: {elapsed:.1f}s"
 
-    def test_fast_fail_rate_limit(self, tmp_path):
-        """Agent that prints rate-limit error is killed and fallback used."""
+    def test_nonzero_exit_falls_back_to_next_agent(self, tmp_path):
         limited = tmp_path / "limited-agent"
         limited.write_text(
             '#!/bin/bash\n'
             'cat - > /dev/null\n'
             'echo "Error: rate limit exceeded" >&2\n'
-            'sleep 300\n'
+            'exit 1\n'
         )
         limited.chmod(0o755)
 
@@ -532,7 +573,7 @@ class TestMakeCliLlmFn:
         result = fn("system", [{"role": "user", "content": "hi"}])
         assert "ok" in result
 
-    def test_exhausted_provider_is_not_retried_on_next_call(self, tmp_path):
+    def test_failed_provider_is_retried_on_next_call(self, tmp_path):
         limited = tmp_path / "limited-agent"
         count_path = tmp_path / "limited-count.txt"
         limited.write_text(
@@ -558,4 +599,71 @@ class TestMakeCliLlmFn:
         fn = make_cli_llm_fn(config)
         assert "ok" in fn("system", [{"role": "user", "content": "hi"}])
         assert "ok" in fn("system", [{"role": "user", "content": "hi again"}])
-        assert count_path.read_text() == "1"
+        assert count_path.read_text() == "2"
+
+    def test_copilot_nonzero_exit_falls_back(self, tmp_path, monkeypatch):
+        copilot = tmp_path / "copilot"
+        copilot.write_text(
+            '#!/bin/bash\n'
+            'echo "Error: rate limit exceeded" >&2\n'
+            'exit 1\n'
+        )
+        copilot.chmod(0o755)
+
+        codex = tmp_path / "codex"
+        codex.write_text(
+            '#!/bin/bash\n'
+            'cat - > /dev/null\n'
+            'echo \'{"ok": true}\'\n'
+        )
+        codex.chmod(0o755)
+
+        monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+
+        config = {
+            "enrichment": {
+                "max_retries": 1,
+                "llm_routes": {
+                    "document": [
+                        {"provider": "copilot", "command": "copilot", "model": "gpt-4.1", "effort": "high"},
+                        {"provider": "codex", "command": "codex exec", "model": "gpt-5.4-mini", "effort": "high"},
+                    ]
+                },
+            }
+        }
+
+        fn = make_cli_llm_fn(config, "document")
+
+        result = fn("system", [{"role": "user", "content": "hi"}])
+
+        assert '{"ok": true}' in result
+        assert fn.last_model == "codex:gpt-5.4-mini"
+
+    def test_copilot_json_output_with_unauthorized_text_is_not_marked_exhausted(self, tmp_path, monkeypatch):
+        copilot = tmp_path / "copilot"
+        copilot.write_text(
+            '#!/bin/bash\n'
+            "echo '{\"id\":\"chk_00062\",\"cls\":\"case_study\",\"kw\":[\"Frans Carl Valck\",\"archival disruption\",\"house-breaking\"],\"s\":\"European colonial archives were disrupted by unauthorized disclosures inside the archive.\"}'\n"
+            'exit 0\n'
+        )
+        copilot.chmod(0o755)
+
+        monkeypatch.setenv("PATH", f"{tmp_path}:{os.environ.get('PATH', '')}")
+
+        config = {
+            "enrichment": {
+                "max_retries": 1,
+                "llm_routes": {
+                    "chunk": [
+                        {"provider": "copilot", "command": "copilot", "model": "gpt-4.1", "effort": "high"},
+                    ]
+                },
+            }
+        }
+
+        fn = make_cli_llm_fn(config, "chunk")
+
+        result = fn("system", [{"role": "user", "content": "hi"}])
+
+        assert 'unauthorized disclosures' in result
+        assert fn.last_model == "copilot:gpt-4.1"

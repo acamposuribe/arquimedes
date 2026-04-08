@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -13,13 +12,13 @@ from arquimedes.enrich_document import enrich_document_stage
 
 
 # ---------------------------------------------------------------------------
-# Shared mock enrichment content — flat values the LLM writes into meta.work.json
+# Shared mock enrichment content — complete document JSON output
 # ---------------------------------------------------------------------------
 
 MOCK_ENRICHMENT = {
     "summary": "A study of thermal mass in residential architecture.",
     "document_type": "paper",
-    "keywords": ["architecture", "thermal mass"],
+    "keywords": ["architecture", "thermal mass", "residential design"],
     "methodological_conclusions": [
         "Treat thermal mass as a passive design variable.",
         "Test material choices against climatic performance rather than style alone.",
@@ -28,6 +27,7 @@ MOCK_ENRICHMENT = {
         "Thermal mass can stabilize residential comfort.",
         "Architecture can leverage mass to moderate environmental swings.",
     ],
+    "bibliography": None,
     "facets": {
         "building_type": "residential",
     },
@@ -49,6 +49,7 @@ MOCK_ENRICHMENT = {
             "evidence_spans": ["Thermal mass slows heat transfer"],
         }
     ],
+    "toc": [],
 }
 
 
@@ -74,6 +75,11 @@ def _make_extracted_dir(tmp_path: Path) -> Path:
         "page_count": 1,
     }
     (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+    (d / "text.md").write_text(
+        "Title line\n\nSome text about architecture.\nWith multiple line breaks.",
+        encoding="utf-8",
+    )
 
     pages = [
         {
@@ -108,23 +114,11 @@ def _make_extracted_dir(tmp_path: Path) -> Path:
 
 
 def _make_llm_fn(enrichment_content: dict) -> MagicMock:
-    """Create a mock llm_fn that writes enrichment_content into meta.work.json when called.
-
-    The file-based stage calls llm_fn(system, messages) and then reads meta.work.json.
-    The mock merges the enrichment fields into the existing scaffold so required raw
-    fields (material_id, title, etc.) are preserved.
-    """
+    """Create a mock llm_fn that returns a complete document JSON string."""
     def _side_effect(system, messages):
-        content = messages[0]["content"]
-        match = re.search(r'Work file \(edit this\): (.+\.work\.json)', content)
-        if match:
-            work_path = Path(match.group(1))
-            # Read the scaffold written by build_document_work_files
-            existing = json.loads(work_path.read_text(encoding="utf-8"))
-            # Merge in the enrichment fields
-            existing.update(enrichment_content)
-            work_path.write_text(json.dumps(existing), encoding="utf-8")
-        return ""
+        payload = dict(enrichment_content)
+        payload.setdefault("_finished", True)
+        return json.dumps(payload)
 
     fn = MagicMock(side_effect=_side_effect)
     fn.last_model = "test-agent"
@@ -169,6 +163,19 @@ class TestEnrichDocumentStage:
         assert "passive design" in " ".join(meta["methodological_conclusions"]["value"])
         assert "main_content_learnings" in meta
         assert "stabilize residential comfort" in " ".join(meta["main_content_learnings"]["value"])
+
+    def test_document_stage_ignores_llm_title(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path)
+        payload = dict(MOCK_ENRICHMENT)
+        payload["title"] = "Wrong Replacement Title"
+        llm_fn = _make_llm_fn(payload)
+        config = _make_config()
+
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "enriched"
+        meta = json.loads((output_dir / "meta.json").read_text(encoding="utf-8"))
+        assert meta["title"] == "Test Doc"
 
     def test_concepts_jsonl_is_written(self, tmp_path):
         """concepts.jsonl should be created with one entry per concept."""
@@ -238,6 +245,42 @@ class TestEnrichDocumentStage:
         assert result2["status"] == "enriched"
         assert llm_fn.call_count > call_count_after_first
 
+    def test_toc_written_by_document_stage_does_not_self_invalidate_stamp(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path)
+        payload = dict(MOCK_ENRICHMENT)
+        payload["toc"] = [{"title": "Introduction", "level": 0, "page": 1}]
+        llm_fn = _make_llm_fn(payload)
+        config = _make_config()
+
+        result1 = enrich_document_stage(output_dir, config, llm_fn, force=True)
+        assert result1["status"] == "enriched"
+
+        call_count_after_first = llm_fn.call_count
+
+        result2 = enrich_document_stage(output_dir, config, llm_fn, force=False)
+        assert result2["status"] == "skipped"
+        assert llm_fn.call_count == call_count_after_first
+
+    def test_metadata_fix_style_meta_changes_do_not_retrigger_document_stage(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path)
+        llm_fn = _make_llm_fn(MOCK_ENRICHMENT)
+        config = _make_config()
+
+        result1 = enrich_document_stage(output_dir, config, llm_fn, force=True)
+        assert result1["status"] == "enriched"
+
+        meta = json.loads((output_dir / "meta.json").read_text(encoding="utf-8"))
+        meta["title"] = "Metadata-Fixed Title"
+        meta["authors"] = ["Corrected Author"]
+        meta["year"] = "2025"
+        (output_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+        call_count_after_first = llm_fn.call_count
+
+        result2 = enrich_document_stage(output_dir, config, llm_fn, force=False)
+        assert result2["status"] == "skipped"
+        assert llm_fn.call_count == call_count_after_first
+
     def test_stage_stamp_present_and_field_provenance_omitted(self, tmp_path):
         """Ordinary enriched fields should be value-only; run provenance lives in the stage stamp."""
         output_dir = _make_extracted_dir(tmp_path)
@@ -272,6 +315,14 @@ class TestEnrichDocumentStage:
         incomplete = {
             "document_type": "paper",
             "keywords": ["arch"],
+            "methodological_conclusions": [],
+            "main_content_learnings": [],
+            "bibliography": None,
+            "facets": {},
+            "concepts_local": [],
+            "concepts_bridge_candidates": [],
+            "toc": [],
+            "_finished": True,
         }
         llm_fn = _make_llm_fn(incomplete)
         config = _make_config()
@@ -286,6 +337,14 @@ class TestEnrichDocumentStage:
         incomplete = {
             "summary": "A study.",
             "keywords": ["arch"],
+            "methodological_conclusions": [],
+            "main_content_learnings": [],
+            "bibliography": None,
+            "facets": {},
+            "concepts_local": [],
+            "concepts_bridge_candidates": [],
+            "toc": [],
+            "_finished": True,
         }
         llm_fn = _make_llm_fn(incomplete)
         config = _make_config()
@@ -308,6 +367,14 @@ class TestEnrichDocumentStage:
             "summary": {"source_pages": [1], "confidence": 0.9},  # no 'value'
             "document_type": "paper",
             "keywords": ["arch"],
+            "methodological_conclusions": [],
+            "main_content_learnings": [],
+            "bibliography": None,
+            "facets": {},
+            "concepts_local": [],
+            "concepts_bridge_candidates": [],
+            "toc": [],
+            "_finished": True,
         }
         llm_fn = _make_llm_fn(bad)
         config = _make_config()
@@ -315,6 +382,45 @@ class TestEnrichDocumentStage:
         result = enrich_document_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "failed"
         assert "summary" in result["detail"]
+
+    def test_fails_when_finished_payload_is_partial(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path)
+        partial = {
+            "summary": "A study.",
+            "document_type": "paper",
+            "keywords": ["arch"],
+            "_finished": True,
+        }
+        llm_fn = _make_llm_fn(partial)
+        config = _make_config()
+
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "missing required fields" in result["detail"]
+
+    def test_fails_on_refusal_summary(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path)
+        refusal = dict(MOCK_ENRICHMENT)
+        refusal["summary"] = (
+            "The source text is not available in this session, so the record cannot be reliably enriched."
+        )
+        llm_fn = _make_llm_fn(refusal)
+        config = _make_config()
+
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "refusal" in result["detail"] or "no-access" in result["detail"]
+
+    def test_fails_on_empty_keywords(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path)
+        refusal = dict(MOCK_ENRICHMENT)
+        refusal["keywords"] = []
+        llm_fn = _make_llm_fn(refusal)
+        config = _make_config()
+
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "failed"
+        assert "keywords are empty" in result["detail"]
 
     def test_atomic_write_no_partial_on_failure(self, tmp_path):
         """If concepts write fails, meta.json should not be modified."""

@@ -143,6 +143,30 @@ def build_document_context(
     return "\n".join(lines)
 
 
+def build_figure_context(meta: dict) -> str:
+    """Build the minimal document context string used for figure prompts."""
+    title = meta.get("title", "")
+    authors = meta.get("authors", [])
+    year = meta.get("year", "")
+    domain = meta.get("domain", "")
+    collection = meta.get("collection", "")
+
+    authors_str = ", ".join(authors) if authors else ""
+    lines = [
+        f"Title: {title}",
+        f"Authors: {authors_str}",
+        f"Year: {year}",
+        f"Domain: {domain}",
+        f"Collection: {collection}",
+    ]
+
+    enriched_summary = meta.get("summary")
+    if isinstance(enriched_summary, dict) and "value" in enriched_summary:
+        lines.append(f"Document summary: {enriched_summary['value']}")
+
+    return "\n".join(lines)
+
+
 
 def estimate_tokens(text: str) -> int:
     """Rough token estimate: ~4 characters per token."""
@@ -166,91 +190,62 @@ def _build_chunks_text(chunks: list[dict], annotations: list[dict]) -> str:
 
 
 # ---------------------------------------------------------------------------
-# File-based document enrichment (work-file approach)
+# Document enrichment input preparation
 # ---------------------------------------------------------------------------
 
-_DOCUMENT_WORK_SCAFFOLD = {
-    "summary": None,
-    "document_type": None,
-    "keywords": None,
-    "methodological_conclusions": None,
-    "main_content_learnings": None,
-    "bibliography": None,
-    "facets": {
-        "building_type": None,
-        "scale": None,
-        "location": None,
-        "jurisdiction": None,
-        "climate": None,
-        "program": None,
-        "material_system": None,
-        "structural_system": None,
-        "historical_period": None,
-        "course_topic": None,
-        "studio_project": None,
-    },
-    "concepts_local": [],        # [{concept_name, descriptor, relevance, source_pages, evidence_spans}]
-    "concepts_bridge_candidates": [],  # [{concept_name, descriptor, relevance, source_pages, evidence_spans}]
-    "toc": None,  # fill if empty: [{"title": "...", "level": 0, "page": 1}, ...]
-}
-
 _DOCUMENT_FILE_SYSTEM_PROMPT = """\
-You are an expert architecture librarian enriching structured metadata for a document in a research knowledge base. 
+You are an expert architecture librarian enriching structured metadata for a document in a research knowledge base.
 
 You will read:
-1. a work metadata JSON object containing raw fields and null enrichment fields
+1. the raw metadata JSON object
 2. the document text
 
-Your job is to produce a JSON patch object, not a rewritten file.
+Your job is to produce one complete JSON output object for document enrichment.
 
 Rules:
-- Do not reproduce unchanged fields.
-- Omitted fields mean unchanged.
-- Include only fields that should be set or replaced.
-- "title" may be included only if the existing title is clearly incorrect, truncated, placeholder-like, or contradicted by the document.
+- Do not output a partial patch.
+- Do not omit required top-level enrichment fields.
+- Set "_finished": true only when the JSON output is complete.
 - Be conservative. Prefer omission over guessing.
 - Use valid JSON only.
 - End with "_finished": true.
 
 Output schema:
 {
-  "title": "... optional, only if replacing ...",
-  "summary": "... optional ...",
-  "document_type": "... optional ...",
+  "summary": "... required ...",
+  "document_type": "... required ...",
   "keywords": ["..."],
   "methodological_conclusions": ["..."],
   "main_content_learnings": ["..."],
-  "bibliography": {...},
+  "bibliography": {...} or null,
   "facets": {...},
   "concepts_local": [...],
   "concepts_bridge_candidates": [...],
-  "toc": [...],
-  "_finished": true
+  "toc": [...] or [],
+  "_finished": true 
 }
+
 
 Field instructions:
 
-title:
-- Replace only if clearly wrong from document evidence.
-
 summary:
-- 90-160 words.
-- State the document's distinctive contribution, central argument or purpose, method or archive/project/case focus when important, and what it helps explain beyond the title. Prefer intellectual specificity and nuance over a bland generic abstract. 
+- A dense but readable synthesis of the document's distinctive contribution. Do not merely restate the topic. Name the central argument, method, archive/project/case focus when important, and what the document helps the reader understand that is not obvious from the title alone. Prefer intellectual specificity and nuance over a bland generic abstract.
 
 document_type:
 - One of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document
 
 keywords:
-- 6-10 terms or short phrases with retrieval value.
-- Prefer a mix of actors, places, archives, projects, methods, institutions, and core concepts.
-- Avoid generic filler and close synonyms.
+- 6-10 terms or short phrases that maximize retrieval value.
+- Prefer a mix of named actors, places, archives, projects, methods, institutional conditions, and core concepts when they are central. Avoid generic filler and avoid repeating the broadest document theme in multiple synonymous forms. 
+- When a distinctive in-text phrase is central, preserve it instead of replacing it with a broader paraphrase.
 
 methodological_conclusions:
-- 2-4 short statements.
-- Only include if the document explicitly contributes a method, procedure, or methodological stance. Keep them concrete and archival/architectural rather than generic.
+- 2-4 short (30-40 words each), reusable statements about how the document says methods should be used, why they matter, and what methodological stance or procedure it contributes. Keep them concrete and archival/architectural rather than generic.
+- Keep these methodological.
 
 main_content_learnings:
-- 2-4 short reusable statements about the main claims or contributions to architectural knowledge. Focus on conceptual contributions or historically useful learnings.
+- 2-4 short (30-40 words each), reusable statements about what the document contributes to architectural knowledge. Focus on the main claims, conceptual contributions, or historically useful learnings that another reader could reuse across materials.
+- Preserve the document's sharpest named concepts and formulations when they are central to the claim.
 
 bibliography:
 - Only set subfields explicitly supported by the document.
@@ -263,8 +258,10 @@ facets:
 - scale must be one of detail|building|urban|territorial
 
 concepts_local:
-- Prefer concept phrases specific enough to carry real analytical content but still reusable across materials. Include named mechanisms, typologies, institutional logics, methods, conditions, and frameworks. Concepts may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels
-- Return 6-9 items max.
+- Return 6-10 strong material-level concept candidates
+- Each must be a reusable intellectual unit with strong textual evidence. Prefer concept phrases specific enough to carry real analytical content but still reusable across materials. Include named mechanisms, typologies, institutional logics, methods, conditions, and frameworks. Concepts may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like "history", "power", "space", or "memory" unless sharply qualified.
+- Prefer compound noun phrases that carry analytical charge — patterns like "archivability as selective gatekeeping", "the city interpreted as a big house", "wooden structures for carbon-neutral construction", "chronophagy" are good, but pick what's right for the document. Avoid bare single nouns. Proper nouns (people, places, institutions) may be capitalized only when central to the concept name.
+- Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.
 - Each item:
   {concept_name, descriptor, relevance, source_pages, evidence_spans}
 - relevance: high|medium|low
@@ -277,6 +274,7 @@ concepts_bridge_candidates:
 - Return 4-5 items max.
 - Same schema as concepts_local.
 - Favor larger frameworks, problematics, fields of inquiry, spatial or institutional conditions, and reusable analytic umbrellas that could connect this material to related materials. Avoid vague one-word abstractions, chapter themes, or trivial paraphrases of the title.
+- Do not flatten a sharp source-grounded concept into a generic bridge label if the sharper phrase can still function across materials.
 
 toc:
 - Only include if the current work metadata has toc = null and the document text contains a recoverable table of contents or stable section headings.
@@ -289,76 +287,144 @@ Reader annotations:
 
 _DOCUMENT_FILE_USER_TEMPLATE = """\
 Read these inputs:
-- METADATA JSON: {work_meta_path}
-- DOCUMENT TEXT: {work_chunks_path}
+- METADATA JSON: {meta_path}
+- DOCUMENT TEXT: {document_text_path}
 
-Produce a JSON patch object following the system instructions.
+Produce one complete JSON output object following the system instructions.
 Important:
 - Do not rewrite the full metadata object.
 - Do not describe your reasoning.
-- Only output valid JSON matching the patch schema.\
+- Only output valid JSON matching the required schema.\
 """
 
 
-def build_document_work_files(
+def build_document_input_files(
     output_dir: Path,
-    meta: dict,
     chunks: list[dict],
     annotations: list[dict],
 ) -> tuple[Path, Path]:
-    """Create work files for file-based document enrichment.
+    """Prepare document enrichment inputs.
 
-    Writes:
-    - meta.work.json: meta.json + enrichment scaffold (null fields for LLM to fill).
-      Includes "toc": null only when toc.json is empty — LLM will extract it.
-    - chunks.work.txt: plain text with annotation markers injected (read-only for LLM)
-
-    Returns (work_meta_path, work_chunks_path).
+    Returns the original meta.json path and a temporary flattened markdown file
+    derived from text.md when available, falling back to chunk text otherwise.
     """
-    # meta.work.json — raw meta + enrichment scaffold
-    work_meta = dict(meta)
-    for key, empty_val in _DOCUMENT_WORK_SCAFFOLD.items():
-        if key not in work_meta:
-            work_meta[key] = empty_val
+    meta_path = output_dir / "meta.json"
+    source_text_path = output_dir / "text.md"
 
-    # Only ask LLM to extract TOC if toc.json is empty
-    toc_src = output_dir / "toc.json"
-    existing_toc = json.loads(toc_src.read_text(encoding="utf-8")) if toc_src.exists() else []
-    if existing_toc:
-        work_meta.pop("toc", None)  # already have one, don't overwrite
+    if source_text_path.exists():
+        raw_text = source_text_path.read_text(encoding="utf-8")
+    else:
+        parts = []
+        for chunk in chunks:
+            text = chunk.get("text", "")
+            for page_num in chunk.get("source_pages", []):
+                text = inject_annotations(text, annotations, page_num)
+            parts.append(text)
+        raw_text = "\n\n".join(parts)
 
-    work_meta_path = output_dir / "meta.work.json"
-    work_meta_path.write_text(
-        json.dumps(work_meta, separators=(",", ":"), ensure_ascii=False), encoding="utf-8"
-    )
+    flattened_text = " ".join(raw_text.split())
+    document_text_path = output_dir / "document.work.md"
+    document_text_path.write_text(flattened_text, encoding="utf-8")
 
-    # chunks.work.txt — plain text with annotation markers injected
-    work_chunks_path = output_dir / "chunks.work.txt"
-    parts = []
-    for chunk in chunks:
-        text = chunk.get("text", "")
-        for page_num in chunk.get("source_pages", []):
-            text = inject_annotations(text, annotations, page_num)
-        parts.append(text)
-    work_chunks_path.write_text("\n\n".join(parts), encoding="utf-8")
-
-    return work_meta_path, work_chunks_path
+    return meta_path, document_text_path
 
 
 def build_document_file_prompt(
-    work_meta_path: Path,
-    work_chunks_path: Path,
+    meta_path: Path,
+    document_text_path: Path,
 ) -> tuple[str, list[dict]]:
     """Build (system_prompt, messages) for file-based document enrichment.
 
-    The LLM reads the work files directly and edits meta.work.json in place.
-    No document content is embedded in the prompt.
+    The LLM reads the metadata JSON and flattened document text directly from
+    disk and returns a structured JSON patch.
     """
     user_content = _DOCUMENT_FILE_USER_TEMPLATE.format(
-        work_meta_path=work_meta_path,
-        work_chunks_path=work_chunks_path,
+        meta_path=meta_path,
+        document_text_path=document_text_path,
     )
     return _DOCUMENT_FILE_SYSTEM_PROMPT, [{"role": "user", "content": user_content}]
+
+
+# ---------------------------------------------------------------------------
+# Metadata-fix prompt
+# ---------------------------------------------------------------------------
+
+_METADATA_FIX_SYSTEM_PROMPT = """\
+You are fixing bibliographic metadata for a document using the first page thumbnails.
+
+Return only valid JSON:
+{
+  "title": "...",
+  "authors": ["..."],
+  "year": "...",
+  "_finished": true
+}
+
+Rules:
+- Prioritize what is visible on the page thumbnails.
+- Correct obvious placeholder or extraction-noise metadata.
+- Preserve the current value when the thumbnails do not support a confident correction.
+- "authors" must be an array of author names in display order.
+- "year" should be a 4-digit year when clearly visible; otherwise keep the current value.
+- Do not invent missing metadata.
+- Output JSON only.
+"""
+
+
+def build_metadata_fix_prompt(
+    meta: dict,
+    pages: list[dict],
+    output_dir: Path,
+    *,
+    max_images: int = 4,
+) -> tuple[str, list[dict]]:
+    """Build a multimodal prompt for title/authors/year correction."""
+    selected_pages = sorted(
+        [page for page in pages if isinstance(page, dict)],
+        key=lambda page: int(page.get("page_number", 0) or 0),
+    )[:max_images]
+
+    current_meta = {
+        "title": meta.get("title", ""),
+        "authors": meta.get("authors", []),
+        "year": meta.get("year", ""),
+        "page_count": meta.get("page_count", 0),
+    }
+    intro = (
+        "Current metadata:\n"
+        f"{json.dumps(current_meta, ensure_ascii=False, indent=2)}\n\n"
+        "Inspect the first page thumbnails and return corrected title, authors, and year.\n"
+        "If a field is unclear, keep the current value."
+    )
+
+    content: list[dict] = [{"type": "text", "text": intro}]
+    for page in selected_pages:
+        page_number = page.get("page_number", "")
+        excerpt = " ".join(str(page.get("text", "")).split())[:500]
+        thumbnail_rel = str(page.get("thumbnail_path", "") or "")
+        content.append({
+            "type": "text",
+            "text": f"\nPage {page_number}\nOCR excerpt: {excerpt or '(none)'}\n",
+        })
+
+        if thumbnail_rel:
+            image_path = output_dir / thumbnail_rel
+            if image_path.exists():
+                media_type, b64_data = _encode_image(str(image_path))
+                content.append({
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": media_type,
+                        "data": b64_data,
+                    },
+                    "_source_path": str(image_path),
+                })
+                continue
+
+        content.append({"type": "text", "text": "(Thumbnail unavailable)\n"})
+
+    return _METADATA_FIX_SYSTEM_PROMPT, [{"role": "user", "content": content}]
 
 
 
@@ -387,7 +453,7 @@ _CHUNK_BATCH_USER_TEMPLATE = """\
 For each chunk, output exactly one line: {{"id":"<chunk_id>","cls":"<content_class>","kw":["term1","term2","term3"],"s":"<summary>"}}
 
 Rules:
-- "s": one-line summary naming the chunk's distinctive claim, example, or move. When a chunk centers on a specific person, archive, project, place, or event, keep that focus visible — do not flatten into abstract theory.
+- "s": two-line summary explaining it's main claim, contribution, method, or proposal. When it centers on a specific person, archive, project, place, or event, keep that focus visible — do not flatten into abstract theory. Do not start with "This chunk..." or similar. Just the summary.
 - "kw": exactly 3 architecture-relevant keywords. Prefer a mix of concrete entities, mechanisms, and named concepts central to this chunk. Preserve named actors, places, buildings, or projects when they are central. Avoid generic repeats from the overall document context unless they are truly central here.
 - "cls": choose the most specific class:
   - "front_matter": title pages, abstracts, acknowledgments, author bios, journal metadata

@@ -63,7 +63,7 @@ def extract_raw(material_id: str | None, force: bool):
     "--stage",
     "stages",
     multiple=True,
-    type=click.Choice(["document", "chunk", "figure"]),
+    type=click.Choice(["document", "metadata", "chunk", "figure"]),
     help="Run only specific stage(s). Repeatable. Default: all stages.",
 )
 @click.option("--dry-run", is_flag=True, help="Report staleness without calling LLM.")
@@ -91,7 +91,7 @@ def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_ru
     for mid, material_result in results.items():
         title = material_result.get("title", mid)
         click.echo(f"\n{mid}  {title}")
-        for stage_name in ["document", "chunk", "figure"]:
+        for stage_name in ["document", "metadata", "chunk", "figure"]:
             if stage_name in material_result:
                 r = material_result[stage_name]
                 status = r.get("status", "?")
@@ -109,7 +109,7 @@ def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_ru
     "--stage",
     "stages",
     multiple=True,
-    type=click.Choice(["document", "chunk", "figure"]),
+    type=click.Choice(["document", "metadata", "chunk", "figure"]),
     help="Run only specific enrichment stage(s). Repeatable. Default: all stages.",
 )
 def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
@@ -149,7 +149,7 @@ def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
         for mid, material_result in results.items():
             title = material_result.get("title", mid)
             click.echo(f"\n{mid}  {title}")
-            for stage_name in ["document", "chunk", "figure"]:
+            for stage_name in ["document", "metadata", "chunk", "figure"]:
                 if stage_name in material_result:
                     r = material_result[stage_name]
                     status = r.get("status", "?")

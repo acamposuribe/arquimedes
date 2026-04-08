@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
 > **Status:** Phases 1-6 complete; Phase 7 next
-> **Last updated:** 2026-04-06
+> **Last updated:** 2026-04-07
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
 > **Phase 4 spec:** [Search index design](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md)
@@ -63,11 +63,22 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 - [x] `arq enrich` — LLM enrichment with stage/run stamps; concepts keep source provenance
   - [x] Annotation-aware: weight highlighted/noted sections in summaries and keywords
-  - [x] Document-level: summary, document_type (refine raw_document_type), keywords (refine raw_keywords), architecture facets
-  - [x] Chunk-level: one-line summaries, keywords
+  - [x] Document-level: summary, document_type (refine raw_document_type), keywords (refine raw_keywords), architecture facets; the LLM reads original `meta.json` plus flattened document text and returns a structured JSON patch that the pipeline applies programmatically
+  - [x] Chunk-level: one-line summaries, keywords, per-chunk stamp provenance with `enriched_at`, and resumable batch checkpointing via `chunk_enrichment.work.json` so non-force reruns skip already completed chunks and only promote to `chunks.jsonl` at full success
   - [x] Figure-level: visual_type, descriptions, captions, deterministic source_page on the sidecar, and LLM-guided artifact deletion for non-figures
+  - [x] Operational run logs under `logs/` record explicit `START` and terminal `DONE`/`FAILED` outcomes for `arq enrich`, `arq cluster`, and `arq lint`
+  - [x] Stage order is strictly sequential per material: document -> metadata -> chunk -> figure
+  - [x] Explicit `--stage` selection is exact: `--stage chunk` runs chunk only; implicit metadata repair happens only in the default full enrichment flow
+  - [x] Figure-stage document context reduced to title/authors/year/domain/collection plus summary when present; figure no longer consumes document_type, bridge concepts, TOC, or raw keywords, and waits for document when both stages are stale so summary stays current
+  - [x] `enrichment.chunk_parallel_requests` and `enrichment.figure_parallel_requests` control per-material batch-level LLM fanout for chunk and figure stages
   - [x] Concept candidates for wiki compiler
   - [x] Copilot enrichment routes use a shared no-tools custom agent with programmatic prompt mode
+  - [x] Claude usage preflight removed; provider routing now relies on ordered runtime fallback instead of Anthropic usage-endpoint checks
+  - [x] Agent routing now treats providers as failed only on process completion outcomes: non-zero exit, timeout, or unusable empty output. Arquimedes does not inspect generated text for auth/rate-limit phrases or cache providers as exhausted across calls.
+  - [x] Temporary operator env var `ARQ_ABORT_ON_CLAUDE_FALLBACK=1` can abort a run before fallback starts if Claude fails
+  - [x] Claude bare mode disabled globally; all Claude routes use the legacy non-bare launch path
+  - [x] Metadata-fix pass inserted between document and chunk and exposed as its own runnable `metadata` stage; it uses the first four page thumbnails and a dedicated Copilot GPT-5.4 mini route to correct title, authors, and year when confidently recoverable
+  - [x] Document stage no longer proposes or applies title changes; title correction is owned by the metadata stage only
 - [x] `arq extract` convenience command (extract-raw + enrich)
 
 ## Phase 4: Search Index
@@ -85,7 +96,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 5: Wiki Compiler
 
-- [x] **(concept clustering)** `arq cluster` — LLM pass over bridge candidate packets and current bridge memory; emit `derived/bridge_concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, descriptor, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
+- [x] **(concept clustering)** `arq cluster` — LLM pass over bridge candidate packets and current bridge memory; the model returns a structured JSON delta with `links_to_existing[]`, `new_clusters[]`, and `_finished`, and the pipeline validates that response before deterministically emitting `derived/bridge_concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, descriptor, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments, and incremental runs may merge, split, rename, or replace existing bridge concepts when new packets reveal a better overall structure; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] `arq compile` — generate material pages, concept pages (one page per cluster), index pages
 - [x] **(collection pages)** Extend `arq compile` so `wiki/{domain}/{collection}/_index.md` becomes a first-class deterministic collection page; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] Collection pages should include: overview, recent additions, material list, top canonical concepts by recurrence, top facets by frequency
@@ -111,7 +122,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 Deterministic lint, reflective passes, memory projection, and lint scheduling are implemented in code and verified by tests. The remaining work is Phase 7+ tooling and any future daemon wiring around these maintained layers.
 
-- [x] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment, stale index, stale memory bridge, duplicates, missing compiled pages
+- [x] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment (document stage by stamp/version drift; other stages by their own input drift rules), stale index, stale memory bridge, duplicates, missing compiled pages
 - [x] **(cluster audit)** LLM review of `derived/bridge_concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
 - [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters`
 - [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, and open questions grounded in linked materials

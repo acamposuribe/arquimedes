@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -128,7 +129,7 @@ def _make_llm_fn(response_texts: list[str]) -> MagicMock:
     return fn
 
 
-def _make_config(figure_batch_size: int = 6) -> dict:
+def _make_config(figure_batch_size: int = 6, figure_parallel_requests: int = 1) -> dict:
     return {
         "llm": {"agent_cmd": "test-agent --print"},
         "enrichment": {
@@ -136,6 +137,7 @@ def _make_config(figure_batch_size: int = 6) -> dict:
             "enrichment_schema_version": "1",
             "chunk_batch_target": 50,
             "figure_batch_size": figure_batch_size,
+            "figure_parallel_requests": figure_parallel_requests,
             "max_retries": 3,
         },
     }
@@ -147,6 +149,50 @@ def _make_config(figure_batch_size: int = 6) -> dict:
 
 
 class TestEnrichFiguresStage:
+    def test_parallel_requests_use_worker_local_llm_clones(self, tmp_path):
+        figure_ids = ["fig_0001", "fig_0002"]
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=figure_ids, with_image=False)
+        config = _make_config(figure_batch_size=1, figure_parallel_requests=2)
+        created_models: list[str] = []
+
+        class _CloneLlm:
+            def __init__(self, model_name: str):
+                self.last_model = model_name
+
+            def __call__(self, system, messages):
+                del system
+                prompt_text = json.dumps(messages)
+                figure_ids = re.findall(r"### Figure: ([^\\n]+)", prompt_text)
+                return _make_figure_response(figure_ids)
+
+        class _BaseLlm:
+            def __init__(self):
+                self.last_model = "base"
+                self.calls = 0
+
+            def __call__(self, system, messages):
+                del system, messages
+                self.calls += 1
+                raise AssertionError("base llm should not be called when worker clones are available")
+
+        base_llm = _BaseLlm()
+
+        def _factory():
+            model_name = f"clone-{len(created_models) + 1}"
+            created_models.append(model_name)
+            return _CloneLlm(model_name)
+
+        base_llm._arq_factory = _factory
+
+        result = enrich_figures_stage(output_dir, config, base_llm, force=True)
+
+        assert result["status"] == "enriched", result["detail"]
+        assert base_llm.calls == 0
+        assert len(created_models) == 2
+        for figure_id in figure_ids:
+            sidecar = json.loads((output_dir / "figures" / f"{figure_id}.json").read_text())
+            assert sidecar["_enrichment_stamp"]["model"] in created_models
+
     def test_accepts_json_array_response(self, tmp_path):
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)
         resp = json.dumps([

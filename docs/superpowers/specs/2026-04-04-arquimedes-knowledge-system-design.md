@@ -215,6 +215,8 @@ enrichment:
         no_auto_update: true
         no_custom_instructions: true
         allow_all: false
+  chunk_parallel_requests: 1   # parallel chunk batch LLM requests per material
+  figure_parallel_requests: 1  # parallel figure batch LLM requests per material
 extraction:
   chunk_size: 500            # tokens per chunk
   generate_thumbnails: true
@@ -231,6 +233,8 @@ sync:
 ```
 
 `config.local.yaml` overrides any value (gitignored). `config.template.yaml` is committed with placeholder comments.
+
+Provider routing is based on ordered process outcomes, not generated-text heuristics. Arquimedes falls through to the next configured route only when an agent process exits non-zero, times out, or returns unusable empty output. It does not scan stdout/stderr for phrases like rate-limit or unauthorized, and it does not cache providers as exhausted across calls.
 
 ## Extraction Pipeline
 
@@ -318,6 +322,7 @@ The corresponding stage stamp stores the model, prompt version, schema version, 
 - Annotations with user notes are treated as first-class insights and surfaced in the material's wiki page
 
 **Document-level enrichment** (added to `meta.json`; run provenance is stored in `_enrichment_stamp`):
+- The document-stage LLM reads the original `meta.json` plus a flattened `text.md`-derived prompt file and returns a structured JSON patch; the pipeline applies that patch programmatically rather than asking the model to edit files in place.
 - document_type: regulation | catalogue | monograph | paper | lecture_note | precedent | technical_spec | site_document (refines or fills raw_document_type when deterministic pass returned "")
 - summary: ~200 words (weighted toward annotated sections when present)
 - keywords: 5-15 terms (refines raw_keywords — may reorder, add domain-specific terms, or remove noise)
@@ -329,9 +334,16 @@ The corresponding stage stamp stores the model, prompt version, schema version, 
   - program, material_system, structural_system
   - historical_period, course/topic, studio/project
 
+**Bridge clustering** (`arq cluster`):
+- The clustering-stage LLM reads a staged bridge packet JSON file plus a compact bridge-memory snapshot and returns a structured JSON delta with `links_to_existing[]`, `new_clusters[]`, and `_finished`.
+- The pipeline validates every referenced `{material_id, concept_name}` pair against indexed concepts, rejects unknown cluster ids, enforces cross-material clusters, and then rewrites `derived/bridge_concept_clusters.jsonl` programmatically rather than asking the model to edit that file in place.
+
 **Chunk-level enrichment** (added to `chunks.jsonl`; run provenance is stored in chunk stamps):
 - summary: one-line summary per chunk
 - keywords: extracted terms
+- each `chunk_enrichment_stamps.json` entry records prompt/schema/fingerprint, actual model, and `enriched_at`
+- chunk runs checkpoint completed batches into `chunk_enrichment.work.json`; if a run fails mid-way, a later non-force rerun must reuse those completed chunks instead of sending them to the LLM again, and only promote the merged result into `chunks.jsonl` after the full stage succeeds
+- operator logs under `logs/` must record both call start and terminal outcome (`DONE` or `FAILED`) so failed enrich runs can be audited after the fact
 
 - **Figure enrichment** (added to figure JSON sidecars; run provenance is stored in each sidecar `_enrichment_stamp`):
 - visual_type: plan | section | elevation | detail | photo | diagram | chart | render | sketch
@@ -348,6 +360,15 @@ The corresponding stage stamp stores the model, prompt version, schema version, 
 ### Why this split matters:
 - **Re-enrichment is cheap**: change your prompt or switch models without re-parsing PDFs
 - **Provider flexibility**: use Claude today, Gemini tomorrow, compare results
+- **Runtime fallback, not preflight quota checks**: ordered provider routes should fail over based on actual launch/runtime exhaustion signals rather than Anthropic usage-endpoint probing, which is not reliable enough to gate Claude before launch
+- **Thumbnail-based metadata repair before chunking**: after document enrichment and before chunk enrichment, the pipeline should run a dedicated metadata-fix pass that inspects the first four page thumbnails and can correct title, authors, and year. This pass uses its own route and stamp, preserves current values when the thumbnails do not support a confident correction, and can also be run independently as the `metadata` stage.
+- **Strict stage order per material**: default enrichment runs sequentially as `document -> metadata -> chunk -> figure`. Figure depends on the current document summary, and chunk should see any metadata corrections already applied.
+- **Exact explicit stage selection**: when an operator passes explicit stage filters such as `--stage chunk`, the pipeline should run only those named stages. Implicit metadata repair belongs to the default full-flow run, not to exact one-off stage reruns.
+- **Title ownership**: the document stage should not ask for or apply title changes. Title correction belongs only to the metadata stage, which uses the first page thumbnails as evidence.
+- **Figure-stage context discipline**: figure prompts should use only minimal document context (title, authors, year, domain, collection, and current summary when present). They should not consume document_type, bridge concepts, TOC, or raw keywords; when both document and figure are stale in the same run, figure must wait for document so the summary input is current.
+- **Per-stage batch fanout control**: chunk and figure stages may issue multiple LLM requests in parallel within a single material, but only according to explicit config limits (`chunk_parallel_requests`, `figure_parallel_requests`). Default both to `1` for sequential batch execution.
+- **Operator stop switch for Claude debugging**: set `ARQ_ABORT_ON_CLAUDE_FALLBACK=1` to abort the run at the moment Claude fails, instead of continuing into the next configured provider
+- **Claude routes always use non-bare mode**: any configured `bare` flag is ignored so Claude keeps the credential-discovery path that works with the existing terminal/keychain setup
 - **Provenance for integrity**: regulations, teaching, and research need traceable sources
 - **Incremental**: raw extraction and enrichment each track their own completion state
 
@@ -451,14 +472,14 @@ Phase 6 is complete. The detailed design lives in [the archived phase-6 spec](..
 - **Orphaned materials**: extracted materials with no wiki page
 - **Orphaned wiki pages**: pages with no live material / cluster / collection backing them
 - **Missing metadata**: materials lacking required facets (domain, document_type, etc.)
-- **Stale enrichment**: materials where any enrichment stage stamp differs from current config (prompt_version, model, enrichment_schema_version) or where input_fingerprint has changed since last enrichment (see [Phase 3 enrichment spec](../completed/specs/2026-04-04-phase3-enrichment-design.md))
+- **Stale enrichment**: materials where any enrichment stage stamp differs from current config. Document stage is durable once stamped and only reruns on missing stamp, prompt/schema drift, or `--force`; metadata, chunk, and figure stages still use their stage-specific input fingerprints to detect drift (see [Phase 3 enrichment spec](../completed/specs/2026-04-04-phase3-enrichment-design.md))
 - **Index drift**: search index out of sync with extracted data
 - **Memory drift**: memory bridge out of sync with compiled wiki / cluster graph
 - **Duplicate materials**: different manifest entries pointing to the same content hash
 - **Missing compiled pages**: expected material, concept, or collection pages absent from the wiki
 
 ### LLM-driven passes:
-- **Cluster audit**: review bridge clusters incrementally, merge or rename safely, preserve coherent bridge concepts, and keep the bridge graph current for new materials
+- **Cluster audit**: review bridge clusters incrementally, but allow merges, splits, renames, and broader reorganization when new evidence reveals a better cross-material structure; the goal is a stronger current bridge graph, not preservation for its own sake
 - **Concept reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters` for bridge concepts from staged evidence
 - **Collection reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_collection_matters` for collections, with new materials treated more richly than old ones
 - **Graph maintenance**: capture unresolved semantic maintenance concerns that deterministic lint cannot judge well, then project them into SQL-backed findings and a visible maintenance page
@@ -469,6 +490,7 @@ Phase 6 is complete. The detailed design lives in [the archived phase-6 spec](..
 - `arq lint --fix` → auto-applies deterministic fixes and accepted reflective updates, then rebuilds memory
 - reflective passes emit structured artifacts under `derived/lint/`
 - graph maintenance is rendered into `wiki/shared/maintenance/graph-health.md` from SQL-backed findings
+- operator logs for `arq enrich`, `arq cluster`, and `arq lint` live under `logs/` and must always include an explicit terminal success/failure record
 
 ### Integration with the server agent:
 The watcher should run `arq lint --quick` (deterministic checks only) after each compile, and `arq lint --full` (including reflective passes with refreshes between stages) on a scheduled basis.

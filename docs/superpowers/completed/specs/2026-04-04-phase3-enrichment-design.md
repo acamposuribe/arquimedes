@@ -102,13 +102,15 @@ Each stage writes a stamp alongside its output:
 
 A hash of **all inputs that can change the enrichment result**, including context from other artifacts and stages:
 
-- **Document stage:** canonical raw-only projection of `meta.json` (material_id, title, authors, year, raw_keywords, raw_document_type, domain, collection, page_count) + full content of `pages.jsonl` + full content of `annotations.jsonl` + full content of `toc.json` + full content of `chunks.jsonl` (chunk texts are the canonical text representation sent to the LLM)
+- **Document stage:** input fingerprint is recorded for audit when the stage runs, but document staleness is not driven by later raw-input drift. Once `_enrichment_stamp` exists, the document stage is considered current unless the prompt/schema contract changes or the user passes `--force`. This avoids self-invalidating document runs and keeps later metadata-fix updates from retriggering document enrichment.
 - **Chunk stage:** full chunk records from `chunks.jsonl` (text, source_pages, emphasized, chunk_id) + full content of `annotations.jsonl` + document context digest (title, raw_document_type, top-level headings, and — if present — the current document-stage summary value and its stamp). This means re-enriching the document stage can make the chunk stage stale if the summary changed.
 - **Figure stage:** per-figure fingerprint — image file hash + source_page text + nearby caption candidates + figure sidecar metadata (source_page, bbox, extraction_method) + document context digest (title, document_type value if enriched, domain). Re-enriching document_type can make figure stage stale.
 
 ### Staleness Rules
 
-**"Current" = exact match** on three stamp fields: `prompt_version`, `enrichment_schema_version`, `input_fingerprint`. Any difference = stale.
+**Document stage:** current when `_enrichment_stamp` exists and its `prompt_version` and `enrichment_schema_version` match current config.
+
+**Chunk / metadata / figure stages:** current = exact match on three stamp fields: `prompt_version`, `enrichment_schema_version`, `input_fingerprint`. Any difference = stale.
 
 The `model` field is **audit-only** — it records which model actually produced the output (which may vary due to ordered agent fallback) but is not compared for staleness. To force re-enrichment with a different model, use `--force`.
 
@@ -122,7 +124,7 @@ The `model` field is **audit-only** — it records which model actually produced
 - **Chunk stage:** `chunk_enrichment_stamps.json` — `{chunk_id: stamp}` map. Checked per-chunk but written atomically (all or nothing per stage run).
 - **Figure stage:** each `figures/*.json` sidecar → `_enrichment_stamp` key
 
-Stamps are independent per stage. Re-enriching chunks does not invalidate document or figure enrichment. Re-extracting raw artifacts (which changes input_fingerprint) triggers re-enrichment of affected stages on next run.
+Stamps are independent per stage. Re-enriching chunks does not invalidate document or figure enrichment. Raw artifact drift triggers re-enrichment only for stages whose staleness contract still depends on input fingerprints.
 
 ## Provenance
 
@@ -273,8 +275,8 @@ enrichment:
 - **Parallel materials:** when multiple materials need enrichment, they are processed concurrently via `ThreadPoolExecutor(max_workers=parallel)`
 - **Parallel stages:** within a single material, document + figure stages run concurrently (independent inputs), while chunk stage waits for document (uses doc summary in prompt context)
 - **Early skip:** orchestrator checks staleness before dispatching to stage functions, avoiding unnecessary LLM construction
-- **Ordered stage fallback:** routes are tried in order from `enrichment.llm_routes[stage]` (falling back to legacy `llm.agent_cmd` if no stage routes exist). If an agent fails (exit code, auth error, rate limit), the next is tried automatically
-- **Fast-fail on auth/rate-limit:** subprocess stderr is monitored in real-time; patterns like "not logged in", "rate limit", "quota exceeded" trigger immediate process kill (via `os.killpg`) instead of waiting for timeout
+- **Ordered stage fallback:** routes are tried in order from `enrichment.llm_routes[stage]` (falling back to legacy `llm.agent_cmd` if no stage routes exist). If an agent process exits non-zero, times out, or returns unusable empty output, the next route is tried automatically
+- **No text heuristics:** runtime fallback does not inspect stdout/stderr for phrases like "not logged in", "rate limit", or "unauthorized", and it does not cache providers as exhausted based on free-text output
 
 ## Scope Boundaries
 

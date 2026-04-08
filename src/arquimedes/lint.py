@@ -59,7 +59,7 @@ from arquimedes.index import (
     _read_manifest_ids,
     get_index_path,
 )
-from arquimedes.memory import memory_rebuild
+from arquimedes.memory import _cluster_fingerprint, _fingerprint_file, memory_rebuild
 
 
 LINT_DIR = "derived/lint"
@@ -1109,13 +1109,8 @@ def _memory_state_stale(root: Path) -> tuple[bool, str]:
         return True, "memory stamp missing"
 
     stamp = _load_json(stamp_path, {}) or {}
-    clusters_fp = canonical_hash(
-        _read_text(root / "derived" / "bridge_concept_clusters.jsonl"),
-        _read_text(root / "derived" / "lint" / "cluster_reviews.jsonl"),
-        _read_text(root / "derived" / "lint" / "concept_reflections.jsonl"),
-        _read_text(root / "derived" / "lint" / "collection_reflections.jsonl"),
-    )
-    manifest_fp = canonical_hash(_read_text(root / "manifests" / "materials.jsonl"))
+    clusters_fp = _cluster_fingerprint(root)
+    manifest_fp = _fingerprint_file(root / "manifests" / "materials.jsonl")
     if stamp.get("clusters_fingerprint") != clusters_fp:
         return True, "cluster or reflection artifacts changed"
     if stamp.get("manifest_fingerprint") != manifest_fp:
@@ -3205,63 +3200,96 @@ def run_lint(
     scheduled: bool = False,
 ) -> dict:
     """Run lint in quick or full mode and return a structured summary."""
-    if config is None:
-        config = load_config()
-    if quick and full:
-        raise ValueError("lint cannot be both quick and full")
-    if not quick and not full:
-        quick = True
-    apply = fix or full
 
-    deterministic = run_deterministic_lint(config)
+    import datetime
+    lint_start_time = datetime.datetime.now()
     root = get_project_root()
-    result = {
-        "mode": "full" if full else "quick",
-        "deterministic": deterministic,
-        "reflection": None,
-        "fixes": None,
-        "report_path": str((get_project_root() / REPORT_PATH)),
-    }
+    log_path = root / "logs" / "lint.log"
 
-    if apply:
-        result["fixes"] = _apply_deterministic_fixes(deterministic, config)
+    def _log_value(value) -> str:
+        return str(value).replace("\t", " ").replace("\n", " ").strip()
 
-    full_reflection_ran = False
-    if full:
-        graph_due, graph_reason = _full_lint_due(root, deterministic, config)
-        if scheduled and not graph_due:
-            result["reflection"] = {
-                "cluster_reviews": 0,
-                "bridge_cluster_changes": 0,
-                "bridge_cluster_discovery": 0,
-                "concept_reflections": 0,
-                "collection_reflections": 0,
-                "graph_maintenance": 0,
-                "applied": False,
-                "skipped": True,
-                "graph_skipped": True,
-                "graph_skip_reason": graph_reason,
-            }
-        else:
-            result["reflection"] = run_reflective_lint(
-                config,
-                deterministic,
-                llm_factory=llm_factory,
-                apply=apply,
-                scheduled=scheduled,
-            )
-            full_reflection_ran = True
+    def _append_log(*fields) -> None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("\t".join(_log_value(field) for field in fields) + "\n")
+        except Exception:
+            pass
 
-    if full and full_reflection_ran:
-        _write_full_lint_stamp(root, deterministic)
+    requested_mode = "full" if full else "quick"
+    _append_log(lint_start_time.isoformat(), "START", requested_mode, fix, report, scheduled)
 
-    if report or full or fix:
-        report_text = render_lint_report(deterministic)
-        path = get_project_root() / REPORT_PATH
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(report_text, encoding="utf-8")
+    try:
+        if config is None:
+            config = load_config()
+        if quick and full:
+            raise ValueError("lint cannot be both quick and full")
+        if not quick and not full:
+            quick = True
+        apply = fix or full
 
-    return result
+        deterministic = run_deterministic_lint(config)
+        result = {
+            "mode": "full" if full else "quick",
+            "deterministic": deterministic,
+            "reflection": None,
+            "fixes": None,
+            "report_path": str((get_project_root() / REPORT_PATH)),
+        }
+
+        if apply:
+            result["fixes"] = _apply_deterministic_fixes(deterministic, config)
+
+        full_reflection_ran = False
+        if full:
+            graph_due, graph_reason = _full_lint_due(root, deterministic, config)
+            if scheduled and not graph_due:
+                result["reflection"] = {
+                    "cluster_reviews": 0,
+                    "bridge_cluster_changes": 0,
+                    "bridge_cluster_discovery": 0,
+                    "concept_reflections": 0,
+                    "collection_reflections": 0,
+                    "graph_maintenance": 0,
+                    "applied": False,
+                    "skipped": True,
+                    "graph_skipped": True,
+                    "graph_skip_reason": graph_reason,
+                }
+            else:
+                result["reflection"] = run_reflective_lint(
+                    config,
+                    deterministic,
+                    llm_factory=llm_factory,
+                    apply=apply,
+                    scheduled=scheduled,
+                )
+                full_reflection_ran = True
+
+        if full and full_reflection_ran:
+            _write_full_lint_stamp(root, deterministic)
+
+        if report or full or fix:
+            report_text = render_lint_report(deterministic)
+            path = get_project_root() / REPORT_PATH
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(report_text, encoding="utf-8")
+
+        lint_end_time = datetime.datetime.now()
+        summary = result.get("deterministic", {}).get("summary", {})
+        _append_log(
+            lint_start_time.isoformat(),
+            lint_end_time.isoformat(),
+            result["mode"],
+            "DONE",
+            f"issues={summary.get('issues', 0)} high={summary.get('high', 0)}",
+        )
+        return result
+    except Exception as exc:
+        lint_end_time = datetime.datetime.now()
+        _append_log(lint_start_time.isoformat(), lint_end_time.isoformat(), requested_mode, "FAILED", exc)
+        raise
 
 
 def lint_exit_code(result: dict) -> int:

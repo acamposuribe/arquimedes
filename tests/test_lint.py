@@ -7,12 +7,14 @@ import re
 from pathlib import Path
 from datetime import datetime, timezone
 
+import pytest
 from click.testing import CliRunner
 
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _filter_local_rows_not_in_bridge, _graph_reflection_due, _load_manifest, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
+from arquimedes.lint import ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _filter_local_rows_not_in_bridge, _graph_reflection_due, _load_manifest, _memory_state_stale, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
+from arquimedes.memory import memory_rebuild
 from arquimedes.cli import lint as lint_cmd
 
 
@@ -233,6 +235,73 @@ def test_run_lint_quick_writes_markdown_report(tmp_path, monkeypatch):
 
     assert result["mode"] == "quick"
     assert (root / "wiki" / "_lint_report.md").exists()
+
+
+def test_run_lint_logs_failed_outcome(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    monkeypatch.setattr(lint_mod, "run_deterministic_lint", lambda _config: (_ for _ in ()).throw(ValueError("lint boom")))
+
+    with pytest.raises(ValueError, match="lint boom"):
+        run_lint(config, quick=True)
+
+    log_lines = (root / "logs" / "lint.log").read_text(encoding="utf-8").splitlines()
+    assert len(log_lines) == 2
+    assert "\tSTART\tquick\tFalse\tFalse\tFalse" in log_lines[0]
+    assert "\tFAILED\tlint boom" in log_lines[1]
+
+
+def test_memory_state_stale_matches_memory_rebuild_fingerprint(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    rebuild_index()
+    _write_jsonl(
+        root / "derived" / "bridge_concept_clusters.jsonl",
+        [
+            {
+                "cluster_id": "concept_001",
+                "canonical_name": "Archive and Space",
+                "slug": "archive-and-space",
+                "material_ids": ["mat_001"],
+                "source_concepts": [
+                    {
+                        "material_id": "mat_001",
+                        "concept_name": "archive and space",
+                        "relevance": "high",
+                        "source_pages": [1],
+                        "evidence_spans": ["archive and space"],
+                        "confidence": 0.9,
+                    }
+                ],
+            }
+        ],
+    )
+    _write_jsonl(
+        root / "derived" / "lint" / "graph_findings.jsonl",
+        [
+            {
+                "finding_id": "graph:0",
+                "finding_type": "bridge",
+                "severity": "low",
+                "summary": "Add a missing bridge link.",
+                "details": "The graph could connect these materials more directly.",
+                "affected_material_ids": ["mat_001"],
+                "affected_cluster_ids": ["concept_001"],
+                "candidate_future_sources": ["oral history"],
+                "candidate_bridge_links": ["archive and memory"],
+                "input_fingerprint": "abc123",
+            }
+        ],
+    )
+
+    memory_rebuild(config)
+
+    stale, reason = _memory_state_stale(root)
+    assert stale is False
+    assert reason == ""
 
 
 def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monkeypatch):

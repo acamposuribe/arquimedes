@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
@@ -45,6 +46,14 @@ def _save_jsonl(path: Path, rows: list[dict]) -> None:
     with open(path, "w", encoding="utf-8") as f:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
+
+
+def _configured_parallel_requests(config: dict, key: str) -> int:
+    value = config.get("enrichment", {}).get(key, 1)
+    try:
+        return max(1, int(value))
+    except (TypeError, ValueError):
+        return 1
 
 
 # ---------------------------------------------------------------------------
@@ -369,12 +378,15 @@ def enrich_figures_stage(
     # Build doc_context for fingerprints
     doc_context: dict = {
         "title": meta.get("title", ""),
+        "authors": meta.get("authors", []),
+        "year": meta.get("year", ""),
         "domain": meta.get("domain", ""),
+        "collection": meta.get("collection", ""),
     }
-    if "document_type" in meta and isinstance(meta["document_type"], dict):
-        dt = meta["document_type"]
-        if isinstance(dt.get("value"), str):
-            doc_context["document_type"] = dt["value"]
+    if "summary" in meta and isinstance(meta["summary"], dict):
+        summary = meta["summary"].get("value")
+        if isinstance(summary, str):
+            doc_context["summary"] = summary
 
     # 3. Load pages for text lookup (keyed by page number)
     try:
@@ -440,8 +452,7 @@ def enrich_figures_stage(
         return {"status": "skipped", "detail": "up to date"}
 
     # 6. Build doc_context_str for prompts
-    toc = _load_json(output_dir / "toc.json", default=None)
-    doc_context_str = enrich_prompts.build_document_context(meta, toc, None)
+    doc_context_str = enrich_prompts.build_figure_context(meta)
 
     # 7. Track whether any batches used vision
     n_vision_batches = 0
@@ -457,8 +468,13 @@ def enrich_figures_stage(
     # Map: sidecar_path → {enriched fields + analysis_mode + stamp}
     enriched_by_path: dict[Path, dict] = {}
 
-    for batch_idx, batch in enumerate(batches):
-        # Build figures_with_context for the prompt builder
+    llm_factory = llm_fn.__dict__.get("_arq_factory") if hasattr(llm_fn, "__dict__") else None
+    requested_parallelism = _configured_parallel_requests(config, "figure_parallel_requests")
+    can_parallelize = callable(llm_factory) and len(batches) > 1
+    worker_count = min(requested_parallelism, len(batches)) if can_parallelize else 1
+
+    def _run_batch(batch_idx: int, batch: list[dict]) -> tuple[int, dict[Path, dict], bool]:
+        batch_llm_fn = llm_factory() if worker_count > 1 else llm_fn
         figures_with_context = []
         batch_has_vision = False
 
@@ -478,31 +494,13 @@ def enrich_figures_stage(
                 "sidecar": sidecar,
             })
 
-        if batch_has_vision:
-            n_vision_batches += 1
-        else:
-            n_text_batches += 1
-
-        # Call LLM
-        try:
-            system, messages = enrich_prompts.build_figure_batch_prompt(
-                figures_with_context, doc_context_str
-            )
-            raw_text = llm_fn(system, messages)
-            actual_model = getattr(llm_fn, "last_model", model)
-        except enrich_llm.EnrichmentError as exc:
-            return {
-                "status": "failed",
-                "detail": f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}",
-            }
-        except Exception as exc:
-            return {
-                "status": "failed",
-                "detail": f"Batch {batch_idx + 1}/{len(batches)} error: {exc}",
-            }
-
-        # Parse compact JSONL response
+        system, messages = enrich_prompts.build_figure_batch_prompt(
+            figures_with_context, doc_context_str
+        )
+        raw_text = batch_llm_fn(system, messages)
+        actual_model = getattr(batch_llm_fn, "last_model", model)
         response_by_id = _parse_figure_jsonl(raw_text)
+        enriched_batch: dict[Path, dict] = {}
 
         for fig in batch:
             sidecar = fig["sidecar"]
@@ -510,15 +508,10 @@ def enrich_figures_stage(
             image_path = fig["image_path"]
             has_image = image_path is not None and image_path.exists()
             analysis_mode = "vision" if has_image else "text_fallback"
-
             fig_response = response_by_id.get(figure_id)
             if fig_response is None:
-                return {
-                    "status": "failed",
-                    "detail": f"Batch {batch_idx + 1}/{len(batches)}: LLM output missing figure '{figure_id}'",
-                }
+                raise ValueError(f"LLM output missing figure '{figure_id}'")
 
-            # Build enriched sidecar fields
             enriched: dict = dict(sidecar)
             enriched["analysis_mode"] = analysis_mode
             enriched["relevance"] = fig_response["relevance"]
@@ -540,9 +533,57 @@ def enrich_figures_stage(
                 prompt_version,
                 source_page=0,
             )
-            enriched["_enrichment_stamp"] = fig["stamp"]
+            enriched["_enrichment_stamp"] = fig["stamp"].copy()
             enriched["_enrichment_stamp"]["model"] = actual_model
-            enriched_by_path[fig["path"]] = enriched
+            enriched_batch[fig["path"]] = enriched
+
+        return batch_idx, enriched_batch, batch_has_vision
+
+    batch_results: dict[int, tuple[dict[Path, dict], bool]] = {}
+    if worker_count > 1:
+        with ThreadPoolExecutor(max_workers=worker_count) as pool:
+            future_to_idx = {
+                pool.submit(_run_batch, batch_idx, batch): batch_idx
+                for batch_idx, batch in enumerate(batches)
+            }
+            for future in as_completed(future_to_idx):
+                batch_idx = future_to_idx[future]
+                try:
+                    result_idx, enriched_batch, batch_has_vision = future.result()
+                except enrich_llm.EnrichmentError as exc:
+                    return {
+                        "status": "failed",
+                        "detail": f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}",
+                    }
+                except Exception as exc:
+                    return {
+                        "status": "failed",
+                        "detail": f"Batch {batch_idx + 1}/{len(batches)} error: {exc}",
+                    }
+                batch_results[result_idx] = (enriched_batch, batch_has_vision)
+    else:
+        for batch_idx, batch in enumerate(batches):
+            try:
+                result_idx, enriched_batch, batch_has_vision = _run_batch(batch_idx, batch)
+            except enrich_llm.EnrichmentError as exc:
+                return {
+                    "status": "failed",
+                    "detail": f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}",
+                }
+            except Exception as exc:
+                return {
+                    "status": "failed",
+                    "detail": f"Batch {batch_idx + 1}/{len(batches)} error: {exc}",
+                }
+            batch_results[result_idx] = (enriched_batch, batch_has_vision)
+
+    for batch_idx in range(len(batches)):
+        enriched_batch, batch_has_vision = batch_results[batch_idx]
+        if batch_has_vision:
+            n_vision_batches += 1
+        else:
+            n_text_batches += 1
+        enriched_by_path.update(enriched_batch)
 
     # 9. Atomic write: stage all sidecar files, then commit with rollback
     try:

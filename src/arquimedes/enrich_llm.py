@@ -27,8 +27,6 @@ import signal
 import subprocess
 import threading
 import sys
-import urllib.request
-import urllib.error
 from typing import Callable
 
 # ---------------------------------------------------------------------------
@@ -63,6 +61,11 @@ def _coerce_timeout_seconds(value, default: int | None = None) -> int | None:
         return None
     return max(timeout_seconds, 1)
 
+
+def _abort_on_claude_fallback_enabled() -> bool:
+    value = os.getenv("ARQ_ABORT_ON_CLAUDE_FALLBACK", "")
+    return value.strip().lower() not in {"", "0", "false", "no", "off"}
+
 # ---------------------------------------------------------------------------
 # Claude OAuth usage pre-flight check
 # ---------------------------------------------------------------------------
@@ -75,7 +78,13 @@ def check_claude_oauth_usage() -> dict | None:
     """Fetch current Claude OAuth usage from the Anthropic API.
 
     Returns the parsed JSON dict on success, or None if the check cannot be
-    performed (missing keychain, network error, etc.).
+    performed (missing keychain, curl failure, malformed response, etc.).
+
+    Uses ``curl`` instead of Python's TLS stack so the request follows the
+    host system trust/keychain configuration in the same way the agent CLIs do.
+
+    A ``429`` response is returned as a small dict marked with
+    ``_rate_limited=True`` so the caller can treat Claude as exhausted.
 
     Reads credentials from the macOS keychain (``Claude Code-credentials``)
     or falls back to ``~/.claude/.credentials.json``.
@@ -84,17 +93,57 @@ def check_claude_oauth_usage() -> dict | None:
     if not token:
         return None
     try:
-        req = urllib.request.Request(
-            "https://api.anthropic.com/api/oauth/usage",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "anthropic-beta": "oauth-2025-04-20",
-            },
+        result = subprocess.run(
+            [
+                "curl",
+                "-sS",
+                "-H",
+                f"Authorization: Bearer {token}",
+                "-H",
+                "anthropic-beta: oauth-2025-04-20",
+                "-w",
+                "\n%{http_code}",
+                "https://api.anthropic.com/api/oauth/usage",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=5,
         )
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            return json.loads(resp.read().decode())
     except Exception:
         return None
+
+    if result.returncode != 0:
+        return None
+
+    stdout = result.stdout or ""
+    body, sep, status_text = stdout.rpartition("\n")
+    if not sep:
+        return None
+
+    try:
+        status_code = int(status_text.strip())
+    except ValueError:
+        return None
+
+    payload: dict | None = None
+    if body.strip():
+        try:
+            parsed = json.loads(body)
+        except json.JSONDecodeError:
+            parsed = None
+        if isinstance(parsed, dict):
+            payload = parsed
+
+    if status_code == 200:
+        return payload
+
+    if status_code == 429:
+        rate_limited = dict(payload or {})
+        rate_limited["_http_status"] = 429
+        rate_limited["_rate_limited"] = True
+        return rate_limited
+
+    return None
 
 
 def _read_claude_oauth_token() -> str | None:
@@ -136,6 +185,9 @@ def _claude_usage_over_threshold() -> bool:
     usage = check_claude_oauth_usage()
     if not usage:
         return False
+    if usage.get("_http_status") == 429 or usage.get("_rate_limited") is True:
+        _llm_debug("claude usage pre-flight: oauth usage endpoint returned 429 — skipping claude")
+        return True
     thresholds = {
         "five_hour": _CLAUDE_USAGE_THRESHOLD_5H,
         "seven_day": _CLAUDE_USAGE_THRESHOLD_7D,
@@ -375,7 +427,6 @@ def _stage_route_config(config: dict, stage: str | None) -> list[dict]:
             "no_ask_user": entry.get("no_ask_user"),
             "no_auto_update": entry.get("no_auto_update"),
             "no_custom_instructions": entry.get("no_custom_instructions"),
-            "fast_fail": entry.get("fast_fail"),
             "bare": entry.get("bare"),
         })
     return routes
@@ -417,23 +468,14 @@ def _tools_arg(tools) -> str | None:
     return None
 
 
-def _is_exhaustion_signal(text: str) -> bool:
-    return bool(_FAST_FAIL_RE.search(text or ""))
-
 
 # ---------------------------------------------------------------------------
 # Agent CLI adapter (default — shells out to configurable agent command)
 # ---------------------------------------------------------------------------
 
 
-# Patterns that indicate an agent will never succeed — kill immediately.
-_FAST_FAIL_RE = re.compile(
-    r"not logged in|/login|rate.?limit|unauthorized|quota.?exceeded"
-    r"|authentication.?failed|exceeded your|too many requests",
-    re.IGNORECASE,
-)
-
 _COMPLETION_SENTINELS = {"PROCESS_FINISHED", "x"}
+
 
 def _strip_nuls(text: str) -> str:
     """Remove embedded NUL bytes that break subprocess argv/stdin handling."""
@@ -444,17 +486,8 @@ def _run_agent_subprocess(
     cmd: list[str],
     stdin_text: str,
     timeout: int | None,
-    fast_fail: bool = True,
 ) -> subprocess.CompletedProcess[str]:
-    """Run an agent CLI with optional fast-fail stderr monitoring.
-
-    When *fast_fail* is True, monitors stderr in a background thread and
-    kills the process immediately if an auth/rate-limit pattern is detected.
-
-    Set *fast_fail* to False for agents that echo the full prompt to stderr
-    (e.g. codex), which would otherwise cause false-positive kills on
-    document content containing words like 'unauthorized' or 'exceeded'.
-    """
+    """Run an agent CLI until completion, sentinel shutdown, or timeout."""
     safe_cmd = [_strip_nuls(part) for part in cmd]
     env = os.environ.copy()
     if "--bare" not in safe_cmd:
@@ -477,15 +510,14 @@ def _run_agent_subprocess(
         stderr=subprocess.PIPE,
         text=True,
         env=env,
-        start_new_session=True,  # own process group so we can kill children
+        start_new_session=True,
     )
 
-    # Write stdin — the agent reads the prompt from here
     try:
         proc.stdin.write(safe_stdin)  # type: ignore[union-attr]
         proc.stdin.close()  # type: ignore[union-attr]
     except BrokenPipeError:
-        pass  # process already exited
+        pass
 
     stdout_chunks: list[str] = []
     stderr_chunks: list[str] = []
@@ -493,7 +525,6 @@ def _run_agent_subprocess(
     completion_seen = threading.Event()
 
     def _kill_tree() -> None:
-        """Kill the process and all its children (entire process group)."""
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except (ProcessLookupError, PermissionError):
@@ -527,10 +558,6 @@ def _run_agent_subprocess(
                 if not line:
                     break
                 stderr_chunks.append(line)
-                if fast_fail and _FAST_FAIL_RE.search(line):
-                    _kill_tree()
-                    done.set()
-                    return
         except (ValueError, OSError):
             pass
 
@@ -539,7 +566,6 @@ def _run_agent_subprocess(
     t_out.start()
     t_err.start()
 
-    # Wait for stdout EOF (normal) or fast-fail kill
     if not done.wait(timeout=timeout):
         _kill_tree()
         t_out.join(timeout=5)
@@ -613,7 +639,8 @@ def _build_agent_cmd(
     """Build the full command for an agent CLI, adding speed optimizations.
 
     For ``claude``: adds flags to minimize startup overhead without
-    breaking credential discovery (``--bare`` is avoided for that reason):
+    breaking credential discovery. ``--bare`` is always disabled, even if a
+    route still sets it or the base command includes it.
     - ``--no-session-persistence``: skip saving session to disk
     - ``--system-prompt``: pass system prompt natively
     - ``--tools Read,Write,Bash``: default tool surface for our Claude routes
@@ -628,24 +655,25 @@ def _build_agent_cmd(
     """
     exe = base_parts[0]
     if exe == "claude":
-        cmd = list(base_parts)
-        if bare and "--bare" not in cmd:
-            cmd.append("--bare")
-        if bare:
-            # --bare handles sessions, hooks, memory natively — inject settings
-            # for OAuth (apiKeyHelper) and skip-permissions for headless use.
-            if "--settings" not in cmd:
-                _project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                _settings_path = os.path.join(_project_root, "scripts", "claude_bare_settings.json")
-                cmd.extend(["--settings", _settings_path])
-            if "--dangerously-skip-permissions" not in cmd:
-                cmd.append("--dangerously-skip-permissions")
-        else:
-            # Legacy non-bare flags
-            if "--no-session-persistence" not in cmd:
-                cmd.append("--no-session-persistence")
-            if disable_slash_commands and "--disable-slash-commands" not in cmd:
-                cmd.append("--disable-slash-commands")
+        del bare
+        cmd: list[str] = []
+        skip_next = False
+        for part in base_parts:
+            if skip_next:
+                skip_next = False
+                continue
+            if part == "--bare":
+                continue
+            if part == "--dangerously-skip-permissions":
+                continue
+            if part == "--settings":
+                skip_next = True
+                continue
+            cmd.append(part)
+        if "--no-session-persistence" not in cmd:
+            cmd.append("--no-session-persistence")
+        if disable_slash_commands and "--disable-slash-commands" not in cmd:
+            cmd.append("--disable-slash-commands")
         tools_value = _tools_arg(tools if tools is not None else ["Read", "Write", "Bash"])
         if "--tools" not in cmd and "--allowedTools" not in cmd and "--allowed-tools" not in cmd:
             if tools_value is None:
@@ -659,11 +687,10 @@ def _build_agent_cmd(
             # Replace existing default model with stage-specific override
             idx = cmd.index("--model")
             cmd[idx + 1] = model_override
-        # Control thinking budget — bare defaults to low (no thinking)
+        # Control thinking budget
         if "--effort" not in cmd:
-            effective_effort = effort or ("low" if bare else None)
-            if effective_effort:
-                cmd.extend(["--effort", effective_effort])
+            if effort:
+                cmd.extend(["--effort", effort])
         cmd.extend(["--system-prompt", system])
         return cmd
     if exe == "codex":
@@ -687,8 +714,8 @@ def _build_stage_request(
     model: str | None = None,
     effort: str | None = None,
     route: dict | None = None,
-) -> tuple[list[str], str, bool]:
-    """Return (cmd, stdin_text, fast_fail) for a provider-specific attempt."""
+) -> tuple[list[str], str]:
+    """Return (cmd, stdin_text) for a provider-specific attempt."""
     route = route or {}
     provider = provider.lower()
     if provider == "claude":
@@ -701,7 +728,7 @@ def _build_stage_request(
             disable_slash_commands=_route_flag(route, "disable_slash_commands", True),
             bare=_route_flag(route, "bare", False),
         )
-        return cmd, user_prompt, True
+        return cmd, user_prompt
 
     if provider == "codex":
         cmd = list(base_parts)
@@ -715,7 +742,7 @@ def _build_stage_request(
                 cmd[idx + 1] = model
         if effort and "-c" not in cmd:
             cmd.extend(["-c", f"model_reasoning_effort={effort}"])
-        return cmd, f"[SYSTEM]\n{system}\n\n{user_prompt}", False
+        return cmd, f"[SYSTEM]\n{system}\n\n{user_prompt}"
 
     if provider == "copilot":
         cmd = list(base_parts)
@@ -761,14 +788,14 @@ def _build_stage_request(
             idx = cmd.index("--model")
             if idx + 1 < len(cmd):
                 cmd[idx + 1] = model
-        if effort and "--effort" not in cmd:
+        if effort and not any(part == "--effort" or part.startswith("--effort=") for part in cmd):
             cmd.extend(["--effort", effort])
         prompt = f"[SYSTEM]\n{system}\n\n[USER]\n{user_prompt}"
         cmd.extend(["--prompt", prompt])
-        return cmd, "", True
+        return cmd, ""
 
     cmd = list(base_parts)
-    return cmd, f"[SYSTEM]\n{system}\n\n{user_prompt}", True
+    return cmd, f"[SYSTEM]\n{system}\n\n{user_prompt}"
 
 
 def _normalize_completion_output(text: str) -> str:
@@ -840,29 +867,13 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
     enrichment_config = config.get("enrichment", {})
     max_retries: int = enrichment_config.get("max_retries", 3)
     default_timeout_seconds = _coerce_timeout_seconds(enrichment_config.get("llm_timeout_seconds"))
-    state = state if isinstance(state, dict) else {}
-    exhausted_providers: set[str] = state.setdefault("exhausted_providers", set())
-    exhausted_lock: threading.RLock = state.setdefault("exhausted_lock", threading.RLock())
-
-    # Pre-flight: skip Claude entirely if usage is already near the limit.
-    has_claude_route = any(
-        str(r.get("provider") or _provider_from_parts(r.get("command_parts", []))) == "claude"
-        for r in resolved
-    )
-    has_fallback = len(resolved) > 1
-    if has_claude_route and has_fallback and _claude_usage_over_threshold():
-        with exhausted_lock:
-            exhausted_providers.add("claude")
+    shared_state = state if isinstance(state, dict) else {}
 
     def llm_fn(system: str, messages: list[dict]) -> str:
         system_prompt, user_prompt = _build_prompt_text(system, messages)
         debug_enabled = _llm_debug_enabled()
 
-        with exhausted_lock:
-            active_routes = [route for route in resolved if str(route.get("provider") or _provider_from_parts(route.get("command_parts", []))) not in exhausted_providers]
-
-        if not active_routes:
-            raise EnrichmentError("All configured providers are currently exhausted")
+        active_routes = resolved
 
         for attempt_cfg in active_routes:
             base_parts = attempt_cfg["command_parts"]
@@ -887,11 +898,8 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                         bare=_route_flag(attempt_cfg, "bare", False),
                     )
                     stdin_text = f"[SYSTEM]\n{system_prompt}\n\n{user_prompt}"
-                    fast_fail = attempt_cfg.get("fast_fail")
-                    if fast_fail is None:
-                        fast_fail = provider != "codex"
                 else:
-                    cmd, stdin_text, fast_fail = _build_stage_request(
+                    cmd, stdin_text = _build_stage_request(
                         base_parts,
                         provider,
                         system_prompt,
@@ -902,7 +910,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                     )
             else:
                 timeout_seconds = default_timeout_seconds
-                cmd, stdin_text, fast_fail = _build_stage_request(
+                cmd, stdin_text = _build_stage_request(
                     base_parts,
                     provider,
                     system_prompt,
@@ -916,7 +924,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                     f"stage={stage or 'fallback'} provider={provider} "
                     f"cmd={shlex.join(cmd)} "
                     f"system_chars={len(system_prompt)} user_chars={len(user_prompt)} "
-                    f"stdin_chars={len(stdin_text)} fast_fail={bool(fast_fail)} "
+                    f"stdin_chars={len(stdin_text)} "
                     f"timeout_seconds={timeout_seconds} "
                     f"system_preview={_llm_debug_preview(system_prompt)} "
                     f"user_preview={_llm_debug_preview(user_prompt)}"
@@ -930,7 +938,6 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                         cmd,
                         stdin_text,
                         timeout=timeout_seconds,
-                        fast_fail=bool(fast_fail),
                     )
                     if result.returncode != 0:
                         detail = result.stderr.strip() or result.stdout.strip()
@@ -940,9 +947,6 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                                 f"stdout_chars={len(result.stdout)} stderr_chars={len(result.stderr)} "
                                 f"detail_preview={_llm_debug_preview(detail, 200)}"
                             )
-                        if _is_exhaustion_signal(detail):
-                            with exhausted_lock:
-                                exhausted_providers.add(provider)
                         last_exc = EnrichmentError(
                             f"{provider} failed (exit {result.returncode}): {detail[:500]}"
                         )
@@ -979,11 +983,9 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                     last_exc = EnrichmentError(f"Agent CLI not found: {provider!r}")
                     break
 
-            if last_exc and _is_exhaustion_signal(str(last_exc)):
-                with exhausted_lock:
-                    exhausted_providers.add(provider)
-
             if len(resolved) > 1:
+                if provider == "claude" and _abort_on_claude_fallback_enabled():
+                    raise EnrichmentError(f"claude fallback blocked: {last_exc}")
                 print(f"  [{provider}] {last_exc} — trying next agent", file=sys.stderr)
                 continue
 
@@ -992,4 +994,5 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
     llm_fn.last_model = get_model_id(config, stage) if stage else get_model_id(config)  # type: ignore[attr-defined]
     llm_fn.route_mode = "stage-routes" if use_stage_routes else "fallback"  # type: ignore[attr-defined]
     llm_fn.route_stage = stage  # type: ignore[attr-defined]
+    llm_fn._arq_factory = lambda: make_cli_llm_fn(config, stage, state=shared_state)  # type: ignore[attr-defined]
     return llm_fn  # type: ignore[return-value]

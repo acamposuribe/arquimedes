@@ -72,7 +72,7 @@ enrich_prompts ──────────────────┘
 - [x] Commit
 
 ### Task 3: `enrich_llm.py` + tests
-- [x] `make_cli_llm_fn(config, stage) → LlmFn` — shells out to stage-specific routes from `enrichment.llm_routes[stage]` (ordered attempts; fallback to legacy `config["llm"]["agent_cmd"]` if absent), fast-fail on auth/rate-limit via stderr monitoring
+- [x] `make_cli_llm_fn(config, stage) → LlmFn` — shells out to stage-specific routes from `enrichment.llm_routes[stage]` (ordered attempts; fallback to legacy `config["llm"]["agent_cmd"]` if absent), relying on process completion outcomes (exit code, timeout, empty output) rather than free-text stderr/stdout heuristics
 - [x] `parse_json_or_repair(client, model, text, schema_description) → dict` — JSON parse, one schema-repair retry on failure, raise `EnrichmentError` if still invalid
 - [x] Custom `EnrichmentError` exception
 - [x] Tests: mock client — success, retry on rate limit, schema-repair path, final failure
@@ -129,7 +129,7 @@ enrich_prompts ──────────────────┘
 ### Task 9: CLI integration
 - [x] Replace `arq enrich` stub: add `--force`, `--stage` (multiple), `--dry-run` options, wire to `enrich.enrich()`
 - [x] Replace `arq extract` stub: run `extract_raw()` then `enrich()` sequentially, pass through `--force` and `--stage`
-- [x] No API key check needed — agent CLI handles auth, fast-fail on stderr detects auth issues
+- [x] No API key check needed — agent CLI handles auth; routing falls through only on concrete process failure outcomes
 - [x] Print per-material stage results in spec format
 - [x] Commit
 
@@ -138,4 +138,4 @@ enrich_prompts ──────────────────┘
 - [x] Run `arq enrich <material_id>` on a single material — verify all three stages complete, files written correctly
 - [x] Run `arq enrich <material_id>` again — verify all stages skipped (stamps current)
 - [x] Run `arq enrich <material_id> --force --stage document` — verify only document re-enriched
-- [x] Spec/plan updated to match implementation (staleness 3-field contract, parallel stages, fast-fail, content_class/relevance)
+- [x] Spec/plan updated to match implementation (staleness 3-field contract, parallel stages, process-outcome fallback, content_class/relevance)

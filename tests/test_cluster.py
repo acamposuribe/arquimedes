@@ -22,31 +22,31 @@ from arquimedes.cluster import (
 
 def test_bridge_prompt_includes_material_packets():
     packets_path = Path("/tmp/bridge_cluster_input.json")
-    bridge_path = Path("/tmp/bridge_concept_clusters.jsonl")
+    bridge_path = Path("/tmp/bridge_memory_input.json")
     prompt = _build_bridge_prompt(
         packets_path,
         bridge_path,
     )
     assert str(packets_path) in prompt
     assert str(bridge_path) in prompt
-    assert "Read the bridge packet file" in prompt
-    assert "Read the duplicated bridge memory work file" in prompt
-    assert "preserve the existing bridge concepts" in prompt.lower()
-    assert "This is incremental" in prompt
-    assert "ingested after the last bridge-clustering run" in prompt
-    assert "link those new materials to existing bridge concepts" in prompt
-    assert "Bridge clusters must connect at least two materials." in prompt
-    assert "Keep the edited work file valid JSONL" in prompt
+    assert "Read the new concepts packet file" in prompt
+    assert "Read the existing bridge cluster memory file" in prompt
+    assert "New clusters must connect at least two materials." in prompt
+    assert "return exactly one final JSON object only when the full clustering job is complete" in prompt
+    assert "Set _finished to true only in that final completed JSON object." in prompt
+    assert '"_finished":true' in _BRIDGE_SYSTEM_PROMPT
+    assert '"links_to_existing"' in _BRIDGE_SYSTEM_PROMPT
+    assert '"new_clusters"' in _BRIDGE_SYSTEM_PROMPT
 
 
-def test_bridge_cluster_prompt_requests_file_write():
+def test_bridge_cluster_prompt_requests_json_response():
     prompt = _build_bridge_prompt(
         Path("/tmp/bridge_cluster_input.json"),
-        Path("/tmp/bridge_concept_clusters.jsonl"),
+        Path("/tmp/bridge_memory_input.json"),
     )
-    assert "duplicated bridge memory work file" in prompt
-    assert "Edit /tmp/bridge_concept_clusters.jsonl in place." in prompt or "Edit /tmp/bridge_concept_clusters.jsonl in place" in prompt
-    assert "PROCESS_FINISHED" in prompt
+    assert "existing bridge cluster memory file" in prompt
+    assert "JSON only" in prompt
+    assert "Do not output partial JSON" in prompt
 
 
 def test_bridge_packet_file_is_staged(tmp_path):
@@ -132,9 +132,14 @@ def test_bridge_clustering_uses_bridge_packets(tmp_path, monkeypatch):
         "CREATE TABLE concepts (concept_name TEXT, descriptor TEXT DEFAULT '', concept_key TEXT, material_id TEXT, relevance TEXT, source_pages TEXT, evidence_spans TEXT, confidence REAL, concept_type TEXT DEFAULT 'local', PRIMARY KEY (material_id, concept_type, concept_key))"
     )
     con.execute("INSERT INTO materials VALUES (?, ?, ?, ?)", ("m1", "Archival Habitat", "Summary", '["archive"]'))
+    con.execute("INSERT INTO materials VALUES (?, ?, ?, ?)", ("m2", "Counterarchive Practice", "Summary", '["archive"]'))
     con.execute(
         "INSERT INTO concepts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         ("archival habitat", "A habitat for archives.", "archival habitat", "m1", "high", "[1]", '["evidence"]', 0.9, "local"),
+    )
+    con.execute(
+        "INSERT INTO concepts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("counterarchive practice", "An archival practice against official memory.", "counterarchive practice", "m2", "high", "[2]", '["evidence"]', 0.8, "local"),
     )
     con.commit()
     con.close()
@@ -148,14 +153,181 @@ def test_bridge_clustering_uses_bridge_packets(tmp_path, monkeypatch):
 
     def mock_llm(system, messages):
         llm_called.append((system, messages))
-        return "[]"
+        return json.dumps({
+            "links_to_existing": [],
+            "new_clusters": [
+                {
+                    "canonical_name": "archival counterpublics",
+                    "aliases": ["archival counterpublics"],
+                    "source_concepts": [
+                        {"material_id": "m1", "concept_name": "archival habitat"},
+                        {"material_id": "m2", "concept_name": "counterarchive practice"},
+                    ],
+                    "confidence": 0.85,
+                }
+            ],
+            "_finished": True,
+        })
 
     result = cluster_mod.cluster_bridge_concepts({"llm": {"agent_cmd": "echo"}}, llm_fn=mock_llm, force=True)
 
     assert result["skipped"] is False
+    assert result["clusters"] == 1
     assert llm_called
     bridge_path = tmp_path / "derived" / "bridge_concept_clusters.jsonl"
     assert bridge_path.exists()
+    cluster_lines = bridge_path.read_text(encoding="utf-8").splitlines()
+    assert len(cluster_lines) == 1
+    payload = json.loads(cluster_lines[0])
+    assert payload["canonical_name"] == "archival counterpublics"
+    assert sorted(payload["material_ids"]) == ["m1", "m2"]
+
+
+def test_bridge_clustering_links_packet_concepts_to_existing_cluster(tmp_path, monkeypatch):
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.config as config_mod
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n", encoding="utf-8")
+    (tmp_path / "derived").mkdir()
+    (tmp_path / "derived" / "bridge_concept_clusters.jsonl").write_text(
+        json.dumps({
+            "cluster_id": "bridge_0001",
+            "canonical_name": "archival publics",
+            "slug": "archival-publics",
+            "aliases": ["archival publics"],
+            "material_ids": ["m1"],
+            "source_concepts": [{"material_id": "m1", "concept_name": "archival habitat"}],
+            "confidence": 0.9,
+        }) + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "indexes").mkdir()
+    db_path = tmp_path / "indexes" / "search.sqlite"
+    con = sqlite3.connect(str(db_path))
+    con.execute("CREATE TABLE materials (material_id TEXT PRIMARY KEY, title TEXT, summary TEXT, keywords TEXT)")
+    con.execute(
+        "CREATE TABLE concepts (concept_name TEXT, descriptor TEXT DEFAULT '', concept_key TEXT, material_id TEXT, relevance TEXT, source_pages TEXT, evidence_spans TEXT, confidence REAL, concept_type TEXT DEFAULT 'local', PRIMARY KEY (material_id, concept_type, concept_key))"
+    )
+    con.execute("INSERT INTO materials VALUES (?, ?, ?, ?)", ("m1", "Archival Habitat", "Summary", '["archive"]'))
+    con.execute("INSERT INTO materials VALUES (?, ?, ?, ?)", ("m2", "Counterarchive Practice", "Summary", '["archive"]'))
+    con.execute(
+        "INSERT INTO concepts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("archival habitat", "A habitat for archives.", "archival habitat", "m1", "high", "[1]", '["evidence"]', 0.9, "local"),
+    )
+    con.execute(
+        "INSERT INTO concepts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("counterarchive practice", "An archival practice against official memory.", "counterarchive practice", "m2", "high", "[2]", '["evidence"]', 0.8, "local"),
+    )
+    con.commit()
+    con.close()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(cluster_mod, "get_project_root", lambda: tmp_path)
+
+    def mock_llm(system, messages):
+        return json.dumps({
+            "links_to_existing": [
+                {
+                    "cluster_id": "bridge_0001",
+                    "source_concepts": [
+                        {"material_id": "m2", "concept_name": "counterarchive practice"}
+                    ],
+                }
+            ],
+            "new_clusters": [],
+            "_finished": True,
+        })
+
+    result = cluster_mod.cluster_bridge_concepts({"llm": {"agent_cmd": "echo"}}, llm_fn=mock_llm, force=True)
+
+    assert result["clusters"] == 1
+    cluster_lines = (tmp_path / "derived" / "bridge_concept_clusters.jsonl").read_text(encoding="utf-8").splitlines()
+    payload = json.loads(cluster_lines[0])
+    assert payload["canonical_name"] == "archival publics"
+    assert sorted(payload["material_ids"]) == ["m1", "m2"]
+
+
+def test_bridge_clustering_force_ignores_incremental_cutoff(tmp_path, monkeypatch):
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.config as config_mod
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n", encoding="utf-8")
+    (tmp_path / "derived").mkdir()
+    (tmp_path / "derived" / "bridge_concept_clusters.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "derived" / "bridge_cluster_stamp.json").write_text(
+        json.dumps({
+            "clustered_at": "2026-03-01T00:00:00+00:00",
+            "fingerprint": "abc123",
+            "bridge_concepts": 2,
+            "clusters": 1,
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "manifests" / "materials.jsonl").write_text(
+        "\n".join(
+            [
+                json.dumps({"material_id": "m1", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+                json.dumps({"material_id": "m2", "ingested_at": "2026-01-02T00:00:00+00:00"}),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "indexes").mkdir()
+    db_path = tmp_path / "indexes" / "search.sqlite"
+    con = sqlite3.connect(str(db_path))
+    con.execute("CREATE TABLE materials (material_id TEXT PRIMARY KEY, title TEXT, summary TEXT, keywords TEXT)")
+    con.execute(
+        "CREATE TABLE concepts (concept_name TEXT, descriptor TEXT DEFAULT '', concept_key TEXT, material_id TEXT, relevance TEXT, source_pages TEXT, evidence_spans TEXT, confidence REAL, concept_type TEXT DEFAULT 'local', PRIMARY KEY (material_id, concept_type, concept_key))"
+    )
+    con.execute("INSERT INTO materials VALUES (?, ?, ?, ?)", ("m1", "Archival Habitat", "Summary", '[\"archive\"]'))
+    con.execute("INSERT INTO materials VALUES (?, ?, ?, ?)", ("m2", "Counterarchive Practice", "Summary", '[\"archive\"]'))
+    con.execute(
+        "INSERT INTO concepts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("archival habitat", "A habitat for archives.", "archival habitat", "m1", "high", "[1]", '[\"evidence\"]', 0.9, "local"),
+    )
+    con.execute(
+        "INSERT INTO concepts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("counterarchive practice", "An archival practice against official memory.", "counterarchive practice", "m2", "high", "[2]", '[\"evidence\"]', 0.8, "local"),
+    )
+    con.commit()
+    con.close()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(cluster_mod, "get_project_root", lambda: tmp_path)
+
+    llm_called = []
+
+    def mock_llm(system, messages):
+        llm_called.append((system, messages))
+        return json.dumps({
+            "links_to_existing": [],
+            "new_clusters": [
+                {
+                    "canonical_name": "archival counterpublics",
+                    "aliases": ["archival counterpublics"],
+                    "source_concepts": [
+                        {"material_id": "m1", "concept_name": "archival habitat"},
+                        {"material_id": "m2", "concept_name": "counterarchive practice"},
+                    ],
+                    "confidence": 0.85,
+                }
+            ],
+            "_finished": True,
+        })
+
+    result = cluster_mod.cluster_bridge_concepts({"llm": {"agent_cmd": "echo"}}, llm_fn=mock_llm, force=True)
+
+    assert result["skipped"] is False
+    assert result["clusters"] == 1
+    assert llm_called
 
 
 def test_bridge_fingerprint_only_tracks_uncovered_materials(tmp_path, monkeypatch):
@@ -272,3 +444,44 @@ def test_cluster_cli_force_sets_bridge_force(tmp_path, monkeypatch):
     assert result.exit_code == 0
     assert calls == [("bridge", True, True)]
     assert "Bridge:" in result.output
+
+
+def test_cluster_logs_failed_outcome(tmp_path, monkeypatch):
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.config as config_mod
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n", encoding="utf-8")
+    (tmp_path / "derived").mkdir()
+    (tmp_path / "derived" / "bridge_concept_clusters.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "indexes").mkdir()
+    db_path = tmp_path / "indexes" / "search.sqlite"
+    con = sqlite3.connect(str(db_path))
+    con.execute("CREATE TABLE materials (material_id TEXT PRIMARY KEY, title TEXT, summary TEXT, keywords TEXT)")
+    con.execute(
+        "CREATE TABLE concepts (concept_name TEXT, descriptor TEXT DEFAULT '', concept_key TEXT, material_id TEXT, relevance TEXT, source_pages TEXT, evidence_spans TEXT, confidence REAL, concept_type TEXT DEFAULT 'local', PRIMARY KEY (material_id, concept_type, concept_key))"
+    )
+    con.execute("INSERT INTO materials VALUES (?, ?, ?, ?)", ("m1", "Archival Habitat", "Summary", '[\"archive\"]'))
+    con.execute(
+        "INSERT INTO concepts VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        ("archival habitat", "A habitat for archives.", "archival habitat", "m1", "high", "[1]", '[\"evidence\"]', 0.9, "local"),
+    )
+    con.commit()
+    con.close()
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(cluster_mod, "get_project_root", lambda: tmp_path)
+
+    def failing_llm(system, messages):
+        raise cluster_mod.EnrichmentError("boom")
+
+    with pytest.raises(cluster_mod.EnrichmentError, match="boom"):
+        cluster_mod.cluster_bridge_concepts({"llm": {"agent_cmd": "echo"}}, llm_fn=failing_llm, force=True)
+
+    log_lines = (tmp_path / "logs" / "cluster.log").read_text(encoding="utf-8").splitlines()
+    assert len(log_lines) == 2
+    assert "\tSTART\tbridge\tTrue" in log_lines[0]
+    assert "\tFAILED\tboom" in log_lines[1]
+    assert "DONE" not in log_lines[1]

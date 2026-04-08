@@ -13,7 +13,7 @@ from click.testing import CliRunner
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _filter_local_rows_not_in_bridge, _graph_reflection_due, _load_manifest, _memory_state_stale, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, run_deterministic_lint, run_lint
+from arquimedes.lint import EnrichmentError, ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _cluster_audit_apply_bridge_update, _filter_local_rows_not_in_bridge, _graph_reflection_due, _load_manifest, _memory_state_stale, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, _stage_cluster_audit_reviews_input, run_deterministic_lint, run_lint
 from arquimedes.memory import memory_rebuild
 from arquimedes.cli import lint as lint_cmd
 
@@ -359,22 +359,99 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
         },
     )
     _write_json(root / "wiki" / "research" / "papers" / "_index.md", {"body": "Collection home.\n\n## Phase 6 Reflection\nOld note."})
+    _write_jsonl(
+        root / "derived" / "lint" / "cluster_reviews.jsonl",
+        [
+            {
+                "review_id": "concept_001:merge:old",
+                "cluster_id": "concept_001",
+                "finding_type": "merge",
+                "severity": "medium",
+                "status": "open",
+                "note": "The bridge still needs a sharper canonical name.",
+                "recommendation": "Tighten the name and keep the bridge under review.",
+                "affected_material_ids": ["mat_001", "mat_002"],
+                "affected_concept_names": ["archive and space"],
+                "evidence": ["shared archive frame"],
+                "input_fingerprint": "old",
+                "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+            }
+        ],
+    )
+
+    def fake_local_rows_not_in_bridge(_root: Path, _bridge_clusters: list[dict]):
+        local_rows = [
+            ("memory archive continuum", "memory archive continuum", "mat_001", "medium", "[1]", '["memory archive continuum"]', 0.82, "local", ""),
+            ("memory archive continuum", "memory archive continuum", "mat_002", "medium", "[1]", '["memory archive continuum"]', 0.81, "local", ""),
+        ]
+        filtered_rows = _filter_local_rows_not_in_bridge(local_rows, _bridge_clusters)
+        material_ids = {row[2] for row in filtered_rows}
+        material_rows = [
+            row for row in [
+                ("mat_001", "One", "Summary", '["archive"]'),
+                ("mat_002", "Two", "Summary", '["archive"]'),
+            ]
+            if row[0] in material_ids
+        ]
+        return filtered_rows, material_rows
+
+    monkeypatch.setattr("arquimedes.lint._local_rows_not_in_bridge", fake_local_rows_not_in_bridge)
 
     calls: list[str] = []
 
     def llm_factory(stage: str):
         def fn(system: str, messages: list[dict]) -> str:
             calls.append(stage)
-            return json.dumps([
-                {
-                    "finding_type": "merge",
-                    "severity": "medium",
-                    "recommendation": "Consider merging.",
-                    "affected_material_ids": ["mat_001", "mat_002"],
-                    "affected_concept_names": ["archive and space"],
-                    "evidence": ["shared archive frame"],
-                }
-            ])
+            return json.dumps({
+                "bridge_updates": [
+                    {
+                        "cluster_id": "concept_001",
+                        "new_name": "Archive Spatial Memory",
+                        "new_aliases": ["Archive and Space", "Spatial Archive"],
+                    }
+                ],
+                "new_bridges": [
+                    {
+                        "bridge_ref": "new_bridge_memory",
+                        "canonical_name": "Memory Archive Continuum",
+                        "aliases": ["Archive Memory Continuum"],
+                        "material_ids": ["mat_001", "mat_002"],
+                        "source_concepts": [
+                            {"material_id": "mat_001", "concept_name": "memory archive continuum"},
+                            {"material_id": "mat_002", "concept_name": "memory archive continuum"},
+                        ],
+                    }
+                ],
+                "review_updates": [
+                    {
+                        "cluster_id": "concept_001",
+                        "finding_type": "rename",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "The bridge was renamed and remains coherent across both materials.",
+                        "recommendation": "Keep the sharper canonical and retain the current bridge.",
+                    }
+                ],
+                "new_reviews": [
+                    {
+                        "cluster_ref": "concept_002",
+                        "finding_type": "coverage",
+                        "severity": "medium",
+                        "status": "validated",
+                        "note": "Memory and Place now sits next to a clearer neighboring bridge in the audit graph.",
+                        "recommendation": "Keep it as-is unless stronger cross-material evidence appears.",
+                    },
+                    {
+                        "cluster_ref": "new_bridge_memory",
+                        "finding_type": "new_bridge",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "The new bridge usefully connects the memory archive thread across both materials.",
+                        "recommendation": "Keep this bridge as-is unless stronger contradictory evidence appears.",
+                    },
+                ],
+                "_finished": True,
+            })
 
         return fn
 
@@ -384,46 +461,158 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     ])
 
     first, discovery = _run_cluster_audit(root, clusters, material_info, "test-route", llm_factory)
-    assert len(first) == 1
-    assert discovery == 0
+    assert len(first) == 3
+    assert discovery == 1
     assert len(calls) == 1
     from arquimedes.lint import _cluster_audit_prompt
     prompt_system, prompt_user = _cluster_audit_prompt(
         root,
         root / "derived" / "tmp" / "cluster_audit_input.json",
-        root / "derived" / "tmp" / "bridge_concept_clusters.audit.work.jsonl",
-        root / "derived" / "tmp" / "cluster_reviews.audit.work.jsonl",
+        root / "derived" / "tmp" / "bridge_concept_clusters.audit.input.jsonl",
+        root / "derived" / "tmp" / "cluster_reviews.audit.input.jsonl",
     )
     assert "## TODO" in prompt_system
-    assert "- [ ] Audit the current bridge memory" in prompt_system
-    assert "- [ ] Discover genuinely new bridge concepts" in prompt_system
-    assert "- [ ] Edit the duplicated work files in place." in prompt_system
-    assert "- [ ] Finish the work files cleanly and emit PROCESS_FINISHED as a stop marker." in prompt_system
-    assert "Prefer ambitious, useful connections" in prompt_system
-    assert "Treat splitting as a last resort" in prompt_system
-    assert "Respect prior bridge memory" in prompt_system
+    assert "- [ ] Audit the staged bridge-memory clusters:" in prompt_system
+    assert "- [ ] Create genuinely new bridges only for uncovered local concepts" in prompt_system
+    assert "bridge_updates" in prompt_system
+    assert "new_bridges" in prompt_system
+    assert "review_updates" in prompt_system
+    assert "new_reviews" in prompt_system
+    assert "Every new_bridges entry that you keep must have exactly one matching new_reviews row" in prompt_system
+    assert "cluster_ref must repeat the exact bridge_ref from new_bridges" in prompt_system
+    assert '"_finished"' in prompt_system
+    assert "new_name" in prompt_system
+    assert "new_aliases" in prompt_system
+    assert "new_source_concepts" in prompt_system
+    assert '"confidence"' not in prompt_system
+    assert "You will receive exactly three read-only inputs" in prompt_system
+    assert "exactly one canonical audit-log row per bridge cluster" in prompt_system
     assert "do not guess" in prompt_system
     assert "context_requests array with up to 4 read-only SQL-index lookups" in prompt_system
     assert "You will get only one read-only context round" in prompt_system
     assert "Read these files:" in prompt_user
-    assert "bridge_concept_clusters.audit.work.jsonl" in prompt_user
-    assert "cluster_reviews.audit.work.jsonl" in prompt_user
-    assert "The duplicated work files are the source of truth" in prompt_user
-    assert "living justification log" in prompt_user
-    assert "remove findings that have already been resolved or acted upon" in prompt_user
-    assert "keep or add positive review entries" in prompt_user
-    assert "Keep the review file compact and current" in prompt_user
-    assert "PROCESS_FINISHED" in prompt_user
+    assert "bridge_concept_clusters.audit.input.jsonl" in prompt_user
+    assert "cluster_reviews.audit.input.jsonl" in prompt_user
+    assert "Treat it as read-only input" in prompt_user
+    assert "only the existing bridge clusters you are allowed to review" in prompt_user
+    assert "only the current audit rows for the staged bridge clusters under review" in prompt_user
+    assert "Do not invent concepts that are not present in the bridge packet" in prompt_user
+    assert "Return final JSON only." in prompt_user
+    assert "PROCESS_FINISHED" not in prompt_user
     for record in first:
-        assert {"review_id", "cluster_id", "finding_type", "severity", "recommendation", "affected_material_ids", "affected_concept_names", "evidence", "input_fingerprint", "wiki_path", "context_requested", "context_request_count"} <= set(record)
+        assert {"review_id", "cluster_id", "finding_type", "severity", "status", "note", "recommendation", "input_fingerprint", "wiki_path", "context_requested", "context_request_count"} <= set(record)
+        assert record["review_id"] == record["cluster_id"]
+    stored_clusters = [json.loads(line) for line in (root / "derived" / "bridge_concept_clusters.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert {record["cluster_id"] for record in first} == {"concept_001", "concept_002", next(cluster["cluster_id"] for cluster in stored_clusters if cluster["canonical_name"] == "Memory Archive Continuum")}
+    assert {cluster["canonical_name"] for cluster in stored_clusters} >= {"Archive Spatial Memory", "Memory Archive Continuum"}
+    assert any(cluster["cluster_id"] == "concept_001" and cluster["canonical_name"] == "Archive Spatial Memory" for cluster in stored_clusters)
+    assert any(cluster["cluster_id"].startswith("bridge_") and cluster["canonical_name"] == "Memory Archive Continuum" for cluster in stored_clusters)
     assert not (root / "derived" / "tmp" / "cluster_audit_input.json").exists()
-    assert not (root / "derived" / "tmp" / "bridge_concept_clusters.audit.work.jsonl").exists()
-    assert not (root / "derived" / "tmp" / "cluster_reviews.audit.work.jsonl").exists()
+    assert not (root / "derived" / "tmp" / "bridge_concept_clusters.audit.input.jsonl").exists()
+    assert not (root / "derived" / "tmp" / "cluster_reviews.audit.input.jsonl").exists()
+    assert not (root / "derived" / "lint" / "cluster_audit_last_response.initial.txt").exists()
+    assert not (root / "derived" / "lint" / "cluster_audit_last_response.final.txt").exists()
+    assert not (root / "derived" / "lint" / "cluster_audit_last_response.parsed.json").exists()
 
-    second, discovery2 = _run_cluster_audit(root, clusters, material_info, "test-route", llm_factory)
-    assert len(second) == 1
+    second, discovery2 = _run_cluster_audit(root, stored_clusters, material_info, "test-route", llm_factory)
+    assert len(second) == 3
     assert discovery2 == 0
     assert len(calls) == 1
+
+
+def test_cluster_audit_rewrites_resolved_reviews_to_validated_and_backfills_missing_clusters(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    clusters = _write_cluster_data(root)
+    _write_jsonl(
+        root / "derived" / "lint" / "cluster_reviews.jsonl",
+        [
+            {
+                "review_id": "concept_001:old",
+                "cluster_id": "concept_001",
+                "finding_type": "merge",
+                "severity": "medium",
+                "status": "open",
+                "note": "Needs review.",
+                "recommendation": "Check it again.",
+                "affected_material_ids": ["mat_001", "mat_002"],
+                "affected_concept_names": ["archive and space"],
+                "evidence": ["shared archive frame"],
+                "input_fingerprint": "old",
+                "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+                "_provenance": {"run_at": "2026-01-01T00:00:00+00:00"},
+            },
+            {
+                "review_id": "concept_001:older-duplicate",
+                "cluster_id": "concept_001",
+                "finding_type": "naming",
+                "severity": "high",
+                "status": "open",
+                "note": "Older duplicate row that should be collapsed away.",
+                "recommendation": "Drop this duplicate canonical review.",
+                "affected_material_ids": ["mat_001", "mat_002"],
+                "affected_concept_names": ["archive and space"],
+                "evidence": ["older duplicate"],
+                "input_fingerprint": "old-duplicate",
+                "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+                "_provenance": {"run_at": "2025-01-01T00:00:00+00:00"},
+            }
+        ],
+    )
+
+    monkeypatch.setattr(
+        "arquimedes.lint._local_rows_not_in_bridge",
+        lambda *_args, **_kwargs: (
+            [("memory archive continuum", "memory archive continuum", "mat_001", "medium", "[1]", '["memory"]', 0.8, "local", "")],
+            [("mat_001", "One", "Summary", '["archive"]')],
+        ),
+    )
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            assert stage == "lint"
+            return json.dumps({
+                "bridge_updates": [],
+                "new_bridges": [],
+                "review_updates": [
+                    {
+                        "cluster_id": "concept_001",
+                        "finding_type": "rename",
+                        "severity": "low",
+                        "status": "resolved",
+                        "note": "The earlier rename concern is now satisfied.",
+                        "recommendation": "Keep the current bridge naming.",
+                    }
+                ],
+                "new_reviews": [
+                    {
+                        "cluster_ref": "concept_002",
+                        "finding_type": "validated",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "This bridge still looks acceptable in the current audit pass.",
+                        "recommendation": "Keep it as-is unless stronger cross-material evidence appears.",
+                    }
+                ],
+                "_finished": True,
+            })
+
+        return fn
+
+    material_info = _build_material_info(root, [
+        {"material_id": "mat_001"},
+        {"material_id": "mat_002"},
+    ])
+    reviews, discovery = _run_cluster_audit(root, clusters, material_info, "test-route", llm_factory)
+
+    assert discovery == 0
+    assert len(reviews) == 2
+    by_cluster = {row["cluster_id"]: row for row in reviews}
+    assert {row["review_id"] for row in reviews} == {"concept_001", "concept_002"}
+    assert by_cluster["concept_001"]["status"] == "validated"
+    assert by_cluster["concept_001"]["note"] == "The earlier rename concern is now satisfied."
+    assert by_cluster["concept_002"]["status"] == "validated"
+    assert by_cluster["concept_002"]["finding_type"] == "validated"
 
 
 def test_cluster_audit_local_rows_only_keep_unbridged_concepts():
@@ -441,6 +630,470 @@ def test_cluster_audit_local_rows_only_keep_unbridged_concepts():
     ]
     filtered = _filter_local_rows_not_in_bridge(local_rows, bridge_clusters)
     assert filtered == [("memory and place", "memory and place", "mat_001", "medium", "[1]", '["evidence"]', 0.8, "local")]
+
+
+def test_cluster_audit_bridge_update_adds_new_source_concepts_for_existing_bridges():
+    existing_cluster = {
+        "cluster_id": "concept_001",
+        "canonical_name": "Archive and Space",
+        "aliases": ["Archive and Space"],
+        "confidence": 0.9,
+        "source_concepts": [
+            {
+                "material_id": "mat_001",
+                "concept_name": "archive and space",
+                "concept_key": "archive and space",
+                "descriptor": "",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["archive"],
+                "confidence": 0.9,
+            }
+        ],
+    }
+    concept_index = {
+        ("mat_002", "memory and place"): {
+            "concept_name": "memory and place",
+            "concept_key": "memory and place",
+            "material_id": "mat_002",
+            "relevance": "medium",
+            "source_pages": "[2]",
+            "evidence_spans": '["memory"]',
+            "confidence": 0.8,
+            "concept_type": "local",
+            "descriptor": "",
+        }
+    }
+
+    updated = _cluster_audit_apply_bridge_update(
+        {
+            "cluster_id": "concept_001",
+            "new_source_concepts": [
+                {"material_id": "mat_002", "concept_name": "memory and place"}
+            ],
+            "new_materials": ["mat_002"],
+        },
+        existing_cluster,
+        concept_index,
+        set(),
+        label="bridge_updates[1]",
+    )
+
+    assert updated["material_ids"] == ["mat_001", "mat_002"]
+    assert [source["material_id"] for source in updated["source_concepts"]] == ["mat_001", "mat_002"]
+
+
+def test_cluster_audit_bridge_update_treats_null_new_name_as_unchanged():
+    existing_cluster = {
+        "cluster_id": "concept_001",
+        "canonical_name": "Archive and Space",
+        "aliases": ["Archive and Space"],
+        "material_ids": ["mat_001", "mat_002"],
+        "source_concepts": [
+            {
+                "material_id": "mat_001",
+                "concept_name": "archive and space",
+                "concept_key": "archive and space",
+                "descriptor": "",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["archive"],
+                "confidence": 0.9,
+            },
+            {
+                "material_id": "mat_002",
+                "concept_name": "memory and place",
+                "concept_key": "memory and place",
+                "descriptor": "",
+                "relevance": "medium",
+                "source_pages": [2],
+                "evidence_spans": ["memory"],
+                "confidence": 0.8,
+            },
+        ],
+    }
+
+    updated = _cluster_audit_apply_bridge_update(
+        {
+            "cluster_id": "concept_001",
+            "new_name": None,
+            "new_aliases": ["Archive and Space"],
+        },
+        existing_cluster,
+        {},
+        set(),
+        label="bridge_updates[1]",
+    )
+
+    assert updated["canonical_name"] == "Archive and Space"
+    assert updated["slug"] == "archive-and-space"
+    assert "None" not in updated["aliases"]
+
+
+def test_stage_cluster_audit_reviews_input_only_writes_target_reviews(tmp_path):
+    target = tmp_path / "derived" / "tmp" / "cluster_reviews.audit.input.jsonl"
+    canonical_reviews = {
+        "concept_001": {
+            "review_id": "concept_001",
+            "cluster_id": "concept_001",
+            "finding_type": "rename",
+            "severity": "low",
+            "status": "open",
+            "note": "Needs review.",
+            "recommendation": "Check it again.",
+            "_provenance": {"run_at": "2026-04-08T00:00:00+00:00"},
+        },
+        "concept_002": {
+            "review_id": "concept_002",
+            "cluster_id": "concept_002",
+            "finding_type": "validated",
+            "severity": "low",
+            "status": "validated",
+            "note": "Stable.",
+            "recommendation": "Keep it.",
+            "_provenance": {"run_at": "2026-04-08T00:00:00+00:00"},
+        },
+    }
+
+    _stage_cluster_audit_reviews_input(target, canonical_reviews, {"concept_001"})
+
+    rows = [json.loads(line) for line in target.read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert len(rows) == 1
+    assert rows[0]["cluster_id"] == "concept_001"
+    assert "_provenance" not in rows[0]
+
+
+def test_cluster_audit_skips_unchanged_pending_local_packet_after_audit(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    clusters = _write_cluster_data(root)
+
+    from arquimedes.lint import _cluster_audit_cluster_fingerprint
+
+    _write_jsonl(
+        root / "derived" / "lint" / "cluster_reviews.jsonl",
+        [
+            {
+                "review_id": "concept_001",
+                "cluster_id": "concept_001",
+                "finding_type": "validated",
+                "severity": "low",
+                "status": "validated",
+                "note": "This bridge still looks coherent.",
+                "recommendation": "Keep it as-is.",
+                "input_fingerprint": _cluster_audit_cluster_fingerprint(clusters[0], "test-route"),
+                "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+            },
+            {
+                "review_id": "concept_002",
+                "cluster_id": "concept_002",
+                "finding_type": "validated",
+                "severity": "low",
+                "status": "validated",
+                "note": "This bridge still looks coherent.",
+                "recommendation": "Keep it as-is.",
+                "input_fingerprint": _cluster_audit_cluster_fingerprint(clusters[1], "test-route"),
+                "wiki_path": "wiki/shared/bridge-concepts/memory-and-place.md",
+            },
+        ],
+    )
+
+    def fake_local_rows_not_in_bridge(_root: Path, _bridge_clusters: list[dict]):
+        return (
+            [
+                ("memory archive continuum", "memory archive continuum", "mat_001", "medium", "[1]", '["memory archive continuum"]', 0.82, "local", ""),
+                ("memory archive continuum", "memory archive continuum", "mat_002", "medium", "[1]", '["memory archive continuum"]', 0.81, "local", ""),
+            ],
+            [
+                ("mat_001", "One", "Summary", '["archive"]'),
+                ("mat_002", "Two", "Summary", '["archive"]'),
+            ],
+        )
+
+    monkeypatch.setattr("arquimedes.lint._local_rows_not_in_bridge", fake_local_rows_not_in_bridge)
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(stage)
+            return json.dumps({
+                "bridge_updates": [],
+                "new_bridges": [],
+                "review_updates": [],
+                "new_reviews": [],
+                "_finished": True,
+            })
+
+        return fn
+
+    material_info = _build_material_info(root, [{"material_id": "mat_001"}, {"material_id": "mat_002"}])
+
+    first, discovery = _run_cluster_audit(root, clusters, material_info, "test-route", llm_factory)
+    assert discovery == 0
+    assert len(first) == 2
+    assert len(calls) == 1
+
+    second, discovery2 = _run_cluster_audit(root, clusters, material_info, "test-route", llm_factory)
+    assert discovery2 == 0
+    assert len(second) == 2
+    assert len(calls) == 1
+
+
+def test_cluster_audit_material_fingerprint_ignores_renames_and_alias_changes():
+    from arquimedes.lint import _cluster_audit_cluster_fingerprint, _cluster_audit_target_clusters
+
+    original_cluster = {
+        "cluster_id": "concept_001",
+        "canonical_name": "Archive and Space",
+        "aliases": ["Archive and Space"],
+        "material_ids": ["mat_001", "mat_002"],
+        "source_concepts": [
+            {"material_id": "mat_001", "concept_name": "archive and space", "concept_key": "archive and space"},
+            {"material_id": "mat_002", "concept_name": "archive space", "concept_key": "archive space"},
+        ],
+    }
+    renamed_cluster = {
+        "cluster_id": "concept_001",
+        "canonical_name": "Archive as Institutional Space",
+        "aliases": ["Archive as Institutional Space", "Spatial Archive"],
+        "material_ids": ["mat_001", "mat_002"],
+        "source_concepts": [
+            {"material_id": "mat_001", "concept_name": "archive and space", "concept_key": "archive and space"},
+            {"material_id": "mat_002", "concept_name": "archive as institution", "concept_key": "archive as institution"},
+        ],
+    }
+    canonical_reviews = {
+        "concept_001": {
+            "review_id": "concept_001",
+            "cluster_id": "concept_001",
+            "finding_type": "validated",
+            "severity": "low",
+            "status": "validated",
+            "note": "Looks good.",
+            "recommendation": "Keep it as-is.",
+            "input_fingerprint": _cluster_audit_cluster_fingerprint(original_cluster, "test-route"),
+            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+        }
+    }
+
+    targets, fingerprints = _cluster_audit_target_clusters([renamed_cluster], canonical_reviews, "test-route")
+
+    assert targets == []
+    assert fingerprints["concept_001"] == canonical_reviews["concept_001"]["input_fingerprint"]
+
+
+def test_cluster_audit_drops_new_review_for_rejected_new_bridge_and_still_builds(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    clusters = _write_cluster_data(root)
+    _write_jsonl(
+        root / "derived" / "lint" / "cluster_reviews.jsonl",
+        [
+            {
+                "review_id": "concept_001:old",
+                "cluster_id": "concept_001",
+                "finding_type": "rename",
+                "severity": "low",
+                "status": "open",
+                "note": "Needs review.",
+                "recommendation": "Check it again.",
+                "input_fingerprint": "old",
+                "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+            },
+            {
+                "review_id": "concept_002",
+                "cluster_id": "concept_002",
+                "finding_type": "coverage",
+                "severity": "low",
+                "status": "validated",
+                "note": "Already reviewed.",
+                "recommendation": "Keep it.",
+                "input_fingerprint": "stable",
+                "wiki_path": "wiki/shared/bridge-concepts/memory-and-place.md",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "arquimedes.lint._local_rows_not_in_bridge",
+        lambda *_args, **_kwargs: (
+            [("memory archive continuum", "memory archive continuum", "mat_001", "medium", "[1]", '["memory"]', 0.8, "local", "")],
+            [("mat_001", "One", "Summary", '["archive"]')],
+        ),
+    )
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            assert stage == "lint"
+            return json.dumps({
+                "bridge_updates": [],
+                "new_bridges": [
+                    {
+                        "bridge_ref": "bridge_new_001",
+                        "canonical_name": "Broken New Bridge",
+                        "aliases": ["Broken New Bridge"],
+                        "material_ids": ["mat_001"],
+                        "source_concepts": [
+                            {"material_id": "mat_001", "concept_name": "memory archive continuum"}
+                        ],
+                    }
+                ],
+                "review_updates": [
+                    {
+                        "cluster_id": "concept_001",
+                        "finding_type": "rename",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "Reviewed.",
+                        "recommendation": "Keep it.",
+                    },
+                    {
+                        "cluster_id": "concept_002",
+                        "finding_type": "coverage",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "Still acceptable as-is.",
+                        "recommendation": "Keep it.",
+                    }
+                ],
+                "new_reviews": [
+                    {
+                        "cluster_ref": "bridge_new_001",
+                        "finding_type": "new_bridge",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "Should exist.",
+                        "recommendation": "Keep it.",
+                    }
+                ],
+                "_finished": True,
+            })
+
+        return fn
+
+    material_info = _build_material_info(root, [
+        {"material_id": "mat_001"},
+        {"material_id": "mat_002"},
+    ])
+
+    reviews, discovery = _run_cluster_audit(root, clusters, material_info, "test-route", llm_factory)
+
+    raw_path = root / "derived" / "lint" / "cluster_audit_last_response.initial.txt"
+    parsed_path = root / "derived" / "lint" / "cluster_audit_last_response.parsed.json"
+    assert not raw_path.exists()
+    assert not parsed_path.exists()
+    assert discovery == 0
+    assert {row["cluster_id"] for row in reviews} == {"concept_001", "concept_002"}
+    stored_clusters = [json.loads(line) for line in (root / "derived" / "bridge_concept_clusters.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    assert {cluster["cluster_id"] for cluster in stored_clusters} == {"concept_001", "concept_002"}
+
+
+def test_cluster_audit_accepts_bridge_ref_field_on_new_bridge_reviews(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    clusters = _write_cluster_data(root)
+    _write_jsonl(
+        root / "derived" / "lint" / "cluster_reviews.jsonl",
+        [
+            {
+                "review_id": "concept_001:old",
+                "cluster_id": "concept_001",
+                "finding_type": "rename",
+                "severity": "low",
+                "status": "open",
+                "note": "Needs review.",
+                "recommendation": "Check it again.",
+                "input_fingerprint": "old",
+                "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+            }
+        ],
+    )
+
+    def fake_local_rows_not_in_bridge(_root: Path, _bridge_clusters: list[dict]):
+        local_rows = [
+            ("memory archive continuum", "memory archive continuum", "mat_001", "medium", "[1]", '["memory archive continuum"]', 0.82, "local", ""),
+            ("memory archive continuum", "memory archive continuum", "mat_002", "medium", "[1]", '["memory archive continuum"]', 0.81, "local", ""),
+        ]
+        filtered_rows = _filter_local_rows_not_in_bridge(local_rows, _bridge_clusters)
+        material_ids = {row[2] for row in filtered_rows}
+        material_rows = [
+            row for row in [
+                ("mat_001", "One", "Summary", '["archive"]'),
+                ("mat_002", "Two", "Summary", '["archive"]'),
+            ]
+            if row[0] in material_ids
+        ]
+        return filtered_rows, material_rows
+
+    monkeypatch.setattr("arquimedes.lint._local_rows_not_in_bridge", fake_local_rows_not_in_bridge)
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            assert stage == "lint"
+            return json.dumps({
+                "bridge_updates": [
+                    {
+                        "cluster_id": "concept_001",
+                        "new_name": "Archive Spatial Memory",
+                        "new_aliases": ["Archive and Space", "Spatial Archive"],
+                    }
+                ],
+                "new_bridges": [
+                    {
+                        "bridge_ref": "new_bridge_memory",
+                        "canonical_name": "Memory Archive Continuum",
+                        "aliases": ["Archive Memory Continuum"],
+                        "material_ids": ["mat_001", "mat_002"],
+                        "source_concepts": [
+                            {"material_id": "mat_001", "concept_name": "memory archive continuum"},
+                            {"material_id": "mat_002", "concept_name": "memory archive continuum"},
+                        ],
+                    }
+                ],
+                "review_updates": [
+                    {
+                        "cluster_id": "concept_001",
+                        "finding_type": "rename",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "The bridge was renamed and remains coherent across both materials.",
+                        "recommendation": "Keep the sharper canonical and retain the current bridge.",
+                    }
+                ],
+                "new_reviews": [
+                    {
+                        "cluster_ref": "concept_002",
+                        "finding_type": "coverage",
+                        "severity": "medium",
+                        "status": "validated",
+                        "note": "Memory and Place now sits next to a clearer neighboring bridge in the audit graph.",
+                        "recommendation": "Keep it as-is unless stronger cross-material evidence appears.",
+                    },
+                    {
+                        "bridge_ref": "new_bridge_memory",
+                        "finding_type": "new_bridge",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "The new bridge usefully connects the memory archive thread across both materials.",
+                        "recommendation": "Keep this bridge as-is unless stronger contradictory evidence appears.",
+                    },
+                ],
+                "_finished": True,
+            })
+
+        return fn
+
+    material_info = _build_material_info(root, [
+        {"material_id": "mat_001"},
+        {"material_id": "mat_002"},
+    ])
+
+    reviews, discovery = _run_cluster_audit(root, clusters, material_info, "test-route", llm_factory)
+
+    assert discovery == 1
+    stored_clusters = [json.loads(line) for line in (root / "derived" / "bridge_concept_clusters.jsonl").read_text(encoding="utf-8").splitlines() if line.strip()]
+    new_cluster_id = next(cluster["cluster_id"] for cluster in stored_clusters if cluster["canonical_name"] == "Memory Archive Continuum")
+    assert any(row["cluster_id"] == new_cluster_id and row["review_id"] == new_cluster_id for row in reviews)
 
 
 def test_concept_reflection_only_targets_multi_material_clusters_and_skips_unchanged(tmp_path, monkeypatch):
@@ -510,27 +1163,23 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
 
     calls: list[str] = []
     prompts: list[str] = []
+    systems: list[str] = []
 
     def llm_factory(stage: str):
         def fn(system: str, messages: list[dict]) -> str:
             calls.append(stage)
+            systems.append(system)
             prompt = messages[0]["content"]
             prompts.append(prompt)
-            match = re.search(r"- Work file: (.+)", prompt)
-            assert match is not None
-            work_path = Path(match.group(1).strip())
-            work_path.write_text(
-                json.dumps(
-                    {
-                        "main_takeaways": ["Shared concern with spatial archives"],
-                        "main_tensions": ["Theory vs. use"],
-                        "open_questions": ["What is the archive doing?"],
-                        "why_this_concept_matters": "It shapes the whole corpus.",
-                    }
-                ),
-                encoding="utf-8",
+            return json.dumps(
+                {
+                    "main_takeaways": ["Shared concern with spatial archives"],
+                    "main_tensions": ["Theory vs. use"],
+                    "open_questions": ["What is the archive doing?"],
+                    "why_this_concept_matters": "It shapes the whole corpus.",
+                    "_finished": True,
+                }
             )
-            return "PROCESS_FINISHED"
 
         return fn
 
@@ -540,9 +1189,12 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
     assert len(calls) == 1
     assert "Concept wiki page:" in prompts[0]
     assert "SQL evidence file:" in prompts[0]
-    assert "Work file:" in prompts[0]
-    assert "PROCESS_FINISHED" in prompts[0]
+    assert "Work file:" not in prompts[0]
+    assert "PROCESS_FINISHED" not in prompts[0]
+    assert "Return final JSON only." in prompts[0]
+    assert '"_finished"' in systems[0]
     assert {"cluster_id", "slug", "canonical_name", "main_takeaways", "main_tensions", "open_questions", "why_this_concept_matters", "supporting_material_ids", "supporting_evidence", "input_fingerprint", "wiki_path"} <= set(first[0])
+    assert not (root / "derived" / "tmp" / "concept_reflections" / "concept_001.work.json").exists()
 
     (root / "wiki" / "shared" / "concepts" / "archive-and-space.md").write_text("Concept page updated.", encoding="utf-8")
     second = _run_concept_reflections(root, list(clusters), material_info, llm_factory)
@@ -606,6 +1258,8 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
     _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [
         {
             "cluster_id": "concept_001",
+
+
             "canonical_name": "Archive and Space",
             "slug": "archive-and-space",
             "material_ids": ["mat_001", "mat_002"],
@@ -648,10 +1302,12 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
 
     calls: list[str] = []
     prompts: list[str] = []
+    systems: list[str] = []
 
     def llm_factory(stage: str):
         def fn(system: str, messages: list[dict]) -> str:
             calls.append(stage)
+            systems.append(system)
             prompt = messages[0]["content"]
             prompts.append(prompt)
             page_match = re.search(r"- Collection wiki page: (.+)", prompt)
@@ -661,7 +1317,7 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
             assert ".md" not in page_copy_text
             assert "Collection wiki page:" in prompt
             assert "SQL evidence file:" in prompt
-            assert "Work file:" in prompt
+            assert "Work file:" not in prompt
             assert "main takeaways" in prompt.lower()
             assert "important bridge concepts" in prompt.lower()
             assert "methodological conclusions" in prompt.lower()
@@ -670,23 +1326,17 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
             assert "old_materials" in prompt
             assert "chunks are only secondary support" in prompt.lower()
             assert "why this collection matters" in prompt.lower()
-            match = re.search(r"- Work file: (.+)", prompt)
-            assert match is not None
-            work_path = Path(match.group(1).strip())
-            work_path.write_text(
-                json.dumps(
-                    {
-                        "main_takeaways": ["The collection centers archival space."],
-                        "main_tensions": ["Theory vs use"],
-                        "important_material_ids": ["mat_001", "mat_002"],
-                        "important_cluster_ids": ["concept_001"],
-                        "open_questions": ["What else is in the archive?"],
-                        "why_this_collection_matters": "It shapes the collection as a whole.",
-                    }
-                ),
-                encoding="utf-8",
+            return json.dumps(
+                {
+                    "main_takeaways": ["The collection centers archival space."],
+                    "main_tensions": ["Theory vs use"],
+                    "important_material_ids": ["mat_001", "mat_002"],
+                    "important_cluster_ids": ["concept_001"],
+                    "open_questions": ["What else is in the archive?"],
+                    "why_this_collection_matters": "It shapes the collection as a whole.",
+                    "_finished": True,
+                }
             )
-            return "PROCESS_FINISHED"
 
         return fn
 
@@ -710,12 +1360,184 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
     assert len(calls) == 1
     assert first[0]["why_this_collection_matters"] == "It shapes the collection as a whole."
     assert {"collection_key", "domain", "collection", "main_takeaways", "main_tensions", "important_material_ids", "important_cluster_ids", "open_questions", "why_this_collection_matters", "input_fingerprint", "wiki_path"} <= set(first[0])
+    assert "PROCESS_FINISHED" not in prompts[0]
+    assert "Return final JSON only." in prompts[0]
+    assert '"_finished"' in systems[0]
 
     second = _run_collection_reflections(root, groups, list(clusters), llm_factory, tool)
     assert len(second) == 1
     assert len(calls) == 1
     assert not (root / "derived" / "tmp" / "collection_reflections" / "research__papers.evidence.json").exists()
     assert not (root / "derived" / "tmp" / "collection_reflections" / "research__papers.work.json").exists()
+
+
+def test_collection_reflection_null_fields_preserve_existing_row_values(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    (root / "extracted" / "mat_002").mkdir(parents=True, exist_ok=True)
+    _write_json(
+        root / "extracted" / "mat_002" / "meta.json",
+        {
+            "material_id": "mat_002",
+            "file_hash": "hash-002",
+            "source_path": "Research/Two.pdf",
+            "title": "Two",
+            "authors": ["Author Two"],
+            "year": "2026",
+            "page_count": 1,
+            "file_type": "pdf",
+            "domain": "research",
+            "collection": "papers",
+            "raw_keywords": ["archive"],
+            "raw_document_type": "paper",
+            "summary": {"value": "Summary", "provenance": {}},
+            "keywords": {"value": ["archive"], "provenance": {}},
+            "document_type": {"value": "paper", "provenance": {}},
+            "facets": {},
+            "_enrichment_stamp": {"prompt_version": "enrich-v1.0", "enrichment_schema_version": "1"},
+        },
+    )
+    _write_jsonl(
+        root / "manifests" / "materials.jsonl",
+        [
+            {
+                "material_id": "mat_001",
+                "file_hash": "hash-001",
+                "relative_path": "Research/One.pdf",
+                "file_type": "pdf",
+                "domain": "research",
+                "collection": "papers",
+                "ingested_at": "2026-01-01T00:00:00+00:00",
+            },
+            {
+                "material_id": "mat_002",
+                "file_hash": "hash-002",
+                "relative_path": "Research/Two.pdf",
+                "file_type": "pdf",
+                "domain": "research",
+                "collection": "papers",
+                "ingested_at": "2026-01-02T00:00:00+00:00",
+            },
+        ],
+    )
+    _write_json(root / "wiki" / "research" / "papers" / "_index.md", {"body": "Collection home."})
+    _write_json(root / "wiki" / "shared" / "concepts" / "archive-and-space.md", {"body": "Concept page."})
+    _write_json(root / "wiki" / "shared" / "concepts" / "memory-and-place.md", {"body": "Concept page."})
+    _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", [
+        {
+            "cluster_id": "concept_001",
+            "canonical_name": "Archive and Space",
+            "slug": "archive-and-space",
+            "material_ids": ["mat_001", "mat_002"],
+            "source_concepts": [
+                {
+                    "material_id": "mat_001",
+                    "concept_name": "archive and space",
+                    "relevance": "high",
+                    "source_pages": [1],
+                    "evidence_spans": ["archive and space"],
+                    "confidence": 0.9,
+                },
+                {
+                    "material_id": "mat_002",
+                    "concept_name": "archive space",
+                    "relevance": "medium",
+                    "source_pages": [1],
+                    "evidence_spans": ["archive space"],
+                    "confidence": 0.8,
+                },
+            ],
+        },
+        {
+            "cluster_id": "concept_002",
+            "canonical_name": "Memory and Place",
+            "slug": "memory-and-place",
+            "material_ids": ["mat_001"],
+            "source_concepts": [
+                {
+                    "material_id": "mat_001",
+                    "concept_name": "memory and place",
+                    "relevance": "low",
+                    "source_pages": [1],
+                    "evidence_spans": ["memory and place"],
+                    "confidence": 0.7,
+                }
+            ],
+        },
+    ])
+    _write_jsonl(
+        root / "derived" / "lint" / "collection_reflections.jsonl",
+        [
+            {
+                "collection_key": "research/papers",
+                "domain": "research",
+                "collection": "papers",
+                "main_takeaways": ["Stored takeaway"],
+                "main_tensions": ["Stored tension"],
+                "important_material_ids": ["mat_001"],
+                "important_cluster_ids": ["concept_001"],
+                "open_questions": ["Stored question"],
+                "why_this_collection_matters": "Stored reason.",
+                "input_fingerprint": "stale-fingerprint",
+                "wiki_path": "wiki/research/papers/_index.md",
+            }
+        ],
+    )
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(messages[0]["content"])
+            return json.dumps(
+                {
+                    "main_takeaways": None,
+                    "main_tensions": ["Updated tension"],
+                    "important_material_ids": None,
+                    "important_cluster_ids": ["concept_001"],
+                    "open_questions": None,
+                    "why_this_collection_matters": None,
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    material_info = _build_material_info(root, [
+        {"material_id": "mat_001"},
+        {"material_id": "mat_002"},
+    ])
+    groups = {
+        ("research", "papers"): [
+            material_info["mat_001"] | {"material_id": "mat_001"},
+            material_info["mat_002"] | {"material_id": "mat_002"},
+        ]
+    }
+    clusters = json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[1])
+
+    result = _run_collection_reflections(root, groups, list(clusters), llm_factory)
+
+    assert len(result) == 1
+    assert len(calls) == 1
+    assert result[0]["main_takeaways"] == ["Stored takeaway"]
+    assert result[0]["main_tensions"] == ["Updated tension"]
+    assert result[0]["important_material_ids"] == ["mat_001"]
+    assert result[0]["important_cluster_ids"] == ["concept_001"]
+    assert result[0]["open_questions"] == ["Stored question"]
+    assert result[0]["why_this_collection_matters"] == "Stored reason."
+
+    stored = [
+        json.loads(line)
+        for line in (root / "derived" / "lint" / "collection_reflections.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert stored[0]["main_takeaways"] == ["Stored takeaway"]
+    assert stored[0]["main_tensions"] == ["Updated tension"]
+    assert stored[0]["important_material_ids"] == ["mat_001"]
+    assert stored[0]["important_cluster_ids"] == ["concept_001"]
+    assert stored[0]["open_questions"] == ["Stored question"]
+    assert stored[0]["why_this_collection_matters"] == "Stored reason."
 
 
 def test_collection_reflection_evidence_uses_material_conclusions_and_keeps_chunks_small(tmp_path, monkeypatch):
@@ -874,40 +1696,42 @@ def test_graph_reflection_writes_page_and_skips_unchanged(tmp_path, monkeypatch)
     ]
 
     calls: list[str] = []
+    prompts: list[str] = []
+    systems: list[str] = []
 
     def llm_factory(stage: str):
         def fn(system: str, messages: list[dict]) -> str:
             calls.append(stage)
+            systems.append(system)
             prompt = messages[0]["content"]
+            prompts.append(prompt)
             assert "Graph-state packet:" in prompt
-            assert "Work file:" in prompt
-            work_match = re.search(r"- Work file: (.+)", prompt)
-            assert work_match is not None
-            work_path = Path(work_match.group(1).strip())
-            work_path.write_text(
-                json.dumps({
-                    "findings": [
-                        {
-                            "finding_type": "bridge_gap",
-                            "severity": "medium",
-                            "summary": "Archive and Space still wants a stronger link to architectural form.",
-                            "details": "The cluster remains semantically useful but could use a sharper architectural anchor.",
-                            "affected_material_ids": ["mat_001", "mat_002"],
-                            "affected_cluster_ids": ["concept_001"],
-                            "candidate_future_sources": ["architectural typology"],
-                            "candidate_bridge_links": ["spatial memory"],
-                        }
-                    ]
-                }),
-                encoding="utf-8",
-            )
-            return "PROCESS_FINISHED"
+            assert "Current graph findings file:" in prompt
+            assert "Work file:" not in prompt
+            return json.dumps({
+                "findings": [
+                    {
+                        "finding_type": "bridge_gap",
+                        "severity": "medium",
+                        "summary": "Archive and Space still wants a stronger link to architectural form.",
+                        "details": "The cluster remains semantically useful but could use a sharper architectural anchor.",
+                        "affected_material_ids": ["mat_001", "mat_002"],
+                        "affected_cluster_ids": ["concept_001"],
+                        "candidate_future_sources": ["architectural typology"],
+                        "candidate_bridge_links": ["spatial memory"],
+                    }
+                ],
+                "_finished": True,
+            })
 
         return fn
 
     first = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
     assert first["graph_maintenance"] == 1
     assert len(calls) == 1
+    assert "PROCESS_FINISHED" not in prompts[0]
+    assert "Return final JSON only." in prompts[0]
+    assert '"_finished"' in systems[0]
     page_path = root / "wiki" / "shared" / "maintenance" / "graph-health.md"
     assert not page_path.exists()
     findings_path = root / "derived" / "lint" / "graph_findings.jsonl"
@@ -919,6 +1743,111 @@ def test_graph_reflection_writes_page_and_skips_unchanged(tmp_path, monkeypatch)
     second = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
     assert second["graph_maintenance"] == 0
     assert len(calls) == 1
+
+
+def test_graph_reflection_null_findings_preserve_existing_rows(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    clusters = _write_cluster_data(root)
+    _write_json(root / "wiki" / "research" / "papers" / "_index.md", {"body": "Collection home."})
+    _write_jsonl(
+        root / "derived" / "lint" / "graph_findings.jsonl",
+        [
+            {
+                "finding_id": "graph:0",
+                "finding_type": "bridge_gap",
+                "severity": "medium",
+                "summary": "Stored summary.",
+                "details": "Stored details.",
+                "affected_material_ids": ["mat_001", "mat_002"],
+                "affected_cluster_ids": ["concept_001"],
+                "candidate_future_sources": ["architectural typology"],
+                "candidate_bridge_links": ["spatial memory"],
+                "input_fingerprint": "stale-fingerprint",
+            }
+        ],
+    )
+
+    deterministic_report = {
+        "summary": {
+            "materials": 2,
+            "extracted_materials": 2,
+            "wiki_pages": 5,
+            "clusters": 2,
+            "issues": 1,
+            "high": 1,
+            "medium": 0,
+            "low": 0,
+        }
+    }
+    cluster_reviews = [
+        {
+            "review_id": "concept_001:0:merge",
+            "cluster_id": "concept_001",
+            "finding_type": "merge",
+            "severity": "medium",
+            "recommendation": "Consider merging.",
+            "affected_material_ids": ["mat_001", "mat_002"],
+            "affected_concept_names": ["archive and space"],
+            "evidence": ["shared archive frame"],
+            "input_fingerprint": "abc",
+            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+        }
+    ]
+    concept_refs = [
+        {
+            "cluster_id": "concept_001",
+            "slug": "archive-and-space",
+            "canonical_name": "Archive and Space",
+            "main_takeaways": ["Shared concern with spatial archives"],
+            "main_tensions": ["Theory vs use"],
+            "open_questions": ["What is the archive doing?"],
+            "why_this_concept_matters": "It shapes the whole corpus.",
+            "supporting_material_ids": ["mat_001", "mat_002"],
+            "supporting_evidence": ["shared archive frame"],
+            "input_fingerprint": "def",
+            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+        }
+    ]
+    collection_refs = [
+        {
+            "collection_key": "research/papers",
+            "domain": "research",
+            "collection": "papers",
+            "main_takeaways": ["The collection centers archival space."],
+            "main_tensions": ["Theory vs use"],
+            "important_material_ids": ["mat_001", "mat_002"],
+            "important_cluster_ids": ["concept_001"],
+            "open_questions": ["What else is in the archive?"],
+            "input_fingerprint": "ghi",
+            "wiki_path": "wiki/research/papers/_index.md",
+        }
+    ]
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(messages[0]["content"])
+            return json.dumps({"findings": None, "_finished": True})
+
+        return fn
+
+    result = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
+
+    assert result["graph_maintenance"] == 1
+    assert len(calls) == 1
+    stored = [
+        json.loads(line)
+        for line in (root / "derived" / "lint" / "graph_findings.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert stored[0]["finding_id"] == "graph:0"
+    assert stored[0]["summary"] == "Stored summary."
+    assert stored[0]["details"] == "Stored details."
+    assert stored[0]["candidate_future_sources"] == ["architectural typology"]
+    assert stored[0]["candidate_bridge_links"] == ["spatial memory"]
+    assert stored[0]["input_fingerprint"] != "stale-fingerprint"
 def test_reflection_index_tool_supports_read_only_search_and_open_record(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
@@ -967,21 +1896,15 @@ def test_concept_reflection_includes_prior_reflection_and_rich_evidence(tmp_path
             page_copy_text = Path(page_match.group(1).strip()).read_text(encoding="utf-8")
             assert "linked material" in page_copy_text
             assert ".md" not in page_copy_text
-            match = re.search(r"- Work file: (.+)", prompt)
-            assert match is not None
-            work_path = Path(match.group(1).strip())
-            work_path.write_text(
-                json.dumps(
-                    {
-                        "main_takeaways": ["Shared concern with spatial archives"],
-                        "main_tensions": ["Theory vs. use"],
-                        "open_questions": ["What is the archive doing?"],
-                        "why_this_concept_matters": "It shapes the whole corpus.",
-                    }
-                ),
-                encoding="utf-8",
+            return json.dumps(
+                {
+                    "main_takeaways": ["Shared concern with spatial archives"],
+                    "main_tensions": ["Theory vs. use"],
+                    "open_questions": ["What is the archive doing?"],
+                    "why_this_concept_matters": "It shapes the whole corpus.",
+                    "_finished": True,
+                }
             )
-            return "PROCESS_FINISHED"
 
         return fn
 
@@ -998,7 +1921,76 @@ def test_concept_reflection_includes_prior_reflection_and_rich_evidence(tmp_path
     assert len(calls) == 1
     assert "Concept wiki page:" in calls[0]
     assert "SQL evidence file:" in calls[0]
-    assert "Work file:" in calls[0]
+    assert "Work file:" not in calls[0]
+    assert "Return final JSON only." in calls[0]
+
+
+def test_concept_reflection_null_fields_preserve_existing_row_values(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    _write_cluster_data(root)
+    rebuild_index(config)
+
+    _write_jsonl(
+        root / "derived" / "lint" / "concept_reflections.jsonl",
+        [
+            {
+                "cluster_id": "concept_001",
+                "slug": "archive-and-space",
+                "canonical_name": "Archive and Space",
+                "main_takeaways": ["Stored takeaway"],
+                "main_tensions": ["Stored tension"],
+                "open_questions": ["Stored question"],
+                "why_this_concept_matters": "Stored reason.",
+                "supporting_material_ids": ["mat_001", "mat_002"],
+                "supporting_evidence": ["archive and space", "archive space"],
+                "input_fingerprint": "stale-fingerprint",
+                "wiki_path": "wiki/shared/concepts/archive-and-space.md",
+            }
+        ],
+    )
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(messages[0]["content"])
+            return json.dumps(
+                {
+                    "main_takeaways": None,
+                    "main_tensions": ["Updated tension"],
+                    "open_questions": None,
+                    "why_this_concept_matters": None,
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    material_info = _build_material_info(root, [
+        {"material_id": "mat_001"},
+        {"material_id": "mat_002"},
+    ])
+    clusters = json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[0]), json.loads((root / "derived" / "bridge_concept_clusters.jsonl").read_text().splitlines()[1])
+
+    first = _run_concept_reflections(root, list(clusters), material_info, llm_factory)
+
+    assert len(first) == 1
+    assert len(calls) == 1
+    assert first[0]["main_takeaways"] == ["Stored takeaway"]
+    assert first[0]["main_tensions"] == ["Updated tension"]
+    assert first[0]["open_questions"] == ["Stored question"]
+    assert first[0]["why_this_concept_matters"] == "Stored reason."
+
+    stored = [
+        json.loads(line)
+        for line in (root / "derived" / "lint" / "concept_reflections.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert stored[0]["main_takeaways"] == ["Stored takeaway"]
+    assert stored[0]["main_tensions"] == ["Updated tension"]
+    assert stored[0]["open_questions"] == ["Stored question"]
+    assert stored[0]["why_this_concept_matters"] == "Stored reason."
 
 
 def test_concept_reflection_evidence_builder_respects_chunk_budget_and_caps(tmp_path, monkeypatch):
@@ -1260,6 +2252,94 @@ def test_lint_cli_supports_json_and_exit_codes(tmp_path, monkeypatch):
     assert "\"deterministic\"" in result.output
 
 
+def test_lint_cli_passes_stage_selection(tmp_path, monkeypatch):
+    import arquimedes.config as config_mod
+    import arquimedes.lint as lint_mod
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    runner = CliRunner()
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+
+    def fake_run_lint(config, *, quick=False, full=False, report=False, fix=False, scheduled=False, llm_factory=None, stages=None):
+        captured["stages"] = stages
+        return {
+            "mode": "staged",
+            "deterministic": {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}},
+            "reflection": {"cluster_reviews": 0, "concept_reflections": 0, "collection_reflections": 0, "graph_maintenance": 0},
+            "fixes": None,
+            "report_path": str(root / "wiki" / "_lint_report.md"),
+        }
+
+    monkeypatch.setattr(lint_mod, "run_lint", fake_run_lint)
+
+    result = runner.invoke(lint_cmd, ["--stage", "cluster-audit", "--json"], obj={})
+
+    assert result.exit_code == 0
+    assert captured["stages"] == ["cluster-audit"]
+
+
+def test_run_reflective_lint_only_runs_requested_stage(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+    calls: list[str] = []
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            self.root = _root
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_cluster_audit(*_args, **_kwargs):
+        calls.append("cluster-audit")
+        return ([{"cluster_id": "bridge_0001"}], 1)
+
+    def fake_concept_reflections(*_args, **_kwargs):
+        calls.append("concept-reflection")
+        return [{"cluster_id": "bridge_0001"}]
+
+    def fake_collection_reflections(*_args, **_kwargs):
+        calls.append("collection-reflection")
+        return [{"collection_key": "research/papers"}]
+
+    def fake_graph_reflection(*_args, **_kwargs):
+        calls.append("graph-maintenance")
+        return {"graph_maintenance": 1, "graph_skipped": False, "graph_skip_reason": ""}
+
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "_cluster_audit_due", lambda *_args, **_kwargs: (True, "cluster audit stamp missing"))
+    monkeypatch.setattr(lint_mod, "_run_cluster_audit", fake_cluster_audit)
+    monkeypatch.setattr(lint_mod, "_run_concept_reflections", fake_concept_reflections)
+    monkeypatch.setattr(lint_mod, "_run_collection_reflections", fake_collection_reflections)
+    monkeypatch.setattr(lint_mod, "_run_graph_reflection", fake_graph_reflection)
+    monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+    monkeypatch.setattr(lint_mod, "load_bridge_clusters", lambda _root: [])
+
+    result = lint_mod.run_reflective_lint(
+        config,
+        {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}, "issues": []},
+        stages=["cluster-audit"],
+    )
+
+    assert calls == ["cluster-audit"]
+    assert result["cluster_reviews"] == 1
+    assert result["concept_reflections"] == 0
+    assert result["collection_reflections"] == 0
+    assert result["graph_maintenance"] == 0
+    assert result["stages"] == ["cluster-audit"]
+    assert result["graph_skip_reason"] == "stage not selected"
+
+
 def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
@@ -1313,35 +2393,107 @@ def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):
     )
     rebuild_index(config)
 
-    # Current deterministic fingerprint must match the stamp so only scheduling matters.
-    deterministic = run_deterministic_lint(config)
-    full_fp = canonical_hash(deterministic.get("summary", {}), deterministic.get("issues", []))
-    assert full_fp
+def test_staged_lint_skips_when_cluster_audit_is_already_after_latest_clustering(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
 
-    # Fresh full-lint stamp should skip the expensive reflective passes entirely.
-    _write_json(
-        root / "derived" / "lint" / "full_lint_stamp.json",
-        {
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "deterministic_fingerprint": full_fp,
-            "summary": deterministic.get("summary", {}),
-        },
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            self.root = _root
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_run_cluster_audit(*_args, **_kwargs):
+        raise AssertionError("cluster audit should have been skipped")
+
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "_cluster_audit_due", lambda *_args, **_kwargs: (False, "cluster audit unchanged"))
+    monkeypatch.setattr(lint_mod, "_run_cluster_audit", fake_run_cluster_audit)
+    monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+    monkeypatch.setattr(lint_mod, "load_bridge_clusters", lambda _root: [])
+    monkeypatch.setattr(
+        lint_mod,
+        "run_deterministic_lint",
+        lambda _config: {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}, "issues": []},
     )
 
-    def llm_factory(stage: str):
-        def fn(system: str, messages: list[dict]) -> str:
-            raise AssertionError("full lint should have been skipped by schedule")
-            return fn
-
-    result = run_lint(config, full=True, scheduled=True, llm_factory=llm_factory)
+    result = lint_mod.run_lint(config, stages=["cluster-audit"])
 
     assert result["reflection"]["skipped"] is True
+    assert result["reflection"]["skip_reason"] == "cluster audit unchanged"
+    assert result["reflection"]["graph_skip_reason"] == "stage not selected"
+
+
+def test_staged_lint_runs_when_cluster_audit_is_older_than_latest_clustering(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            self.root = _root
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    called = []
+
+    def fake_run_cluster_audit(*_args, **_kwargs):
+        called.append(True)
+        return ([{"cluster_id": "bridge_0001"}], 1)
+
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "_cluster_audit_due", lambda *_args, **_kwargs: (True, "cluster audit stamp missing"))
+    monkeypatch.setattr(lint_mod, "_run_cluster_audit", fake_run_cluster_audit)
+    monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+    monkeypatch.setattr(lint_mod, "load_bridge_clusters", lambda _root: [])
+    monkeypatch.setattr(
+        lint_mod,
+        "run_deterministic_lint",
+        lambda _config: {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}, "issues": []},
+    )
+
+    result = lint_mod.run_lint(config, stages=["cluster-audit"])
+
+    assert called == [True]
+    assert result["reflection"]["cluster_reviews"] == 1
+    assert result["reflection"]["skipped"] is False
 
 
 def test_graph_reflection_schedule_gate_is_coarse(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
     clusters = _write_cluster_data(root)
+    _write_jsonl(
+        root / "derived" / "lint" / "graph_findings.jsonl",
+        [
+            {
+                "finding_id": "graph:0",
+                "finding_type": "bridge_gap",
+                "severity": "medium",
+                "summary": "Stored summary.",
+                "details": "Stored details.",
+                "affected_material_ids": ["mat_001", "mat_002"],
+                "affected_cluster_ids": ["concept_001"],
+                "candidate_future_sources": ["architectural typology"],
+                "candidate_bridge_links": ["spatial memory"],
+            }
+        ],
+    )
     _write_jsonl(
         root / "manifests" / "materials.jsonl",
         [
@@ -1428,6 +2580,21 @@ def test_graph_reflection_schedule_gate_is_coarse(tmp_path, monkeypatch):
             "input_fingerprint": "ghi",
         }
     ]
+    _write_json(
+        root / "derived" / "bridge_cluster_stamp.json",
+        {
+            "clustered_at": "2026-01-03T00:00:00+00:00",
+            "fingerprint": "bridge-fingerprint",
+            "bridge_concepts": 2,
+            "clusters": len(clusters),
+        },
+    )
+    _write_json(
+        root / "derived" / "lint" / "lint_stamp.json",
+        {
+            "graph_reflection_at": "2026-01-02T01:00:00+00:00",
+        },
+    )
     _write_json(
         root / "derived" / "lint" / "graph_reflection_stamp.json",
         {

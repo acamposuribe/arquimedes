@@ -89,7 +89,7 @@ With the current library (2 materials, 22 concepts), this is a small payload. At
 
 1. **Load** all concept records from the index into a flat list
 2. **Pre-group** by exact `concept_key` match (free, deterministic — merge case/plural variants)
-3. **Build prompt** listing all unique concept keys with their material titles, relevance, descriptors, and evidence spans. Ask the LLM to group semantically equivalent concepts into clusters, choose a canonical name, and assign a confidence. Evidence spans are critical — for scholarly material, concept names alone are often ambiguous; the quoted passages clarify whether two similarly-named concepts actually describe the same intellectual territory.
+3. **Build prompt** listing all unique concept keys with their material titles, relevance, descriptors, and evidence spans. Ask the LLM to group semantically equivalent concepts into clusters and choose a canonical name. Evidence spans are critical — for scholarly material, concept names alone are often ambiguous; the quoted passages clarify whether two similarly-named concepts actually describe the same intellectual territory. Cluster-level confidence is derived later in Python from the validated source concepts instead of being requested from the LLM.
 4. **Parse** LLM response into cluster records
 5. **Write** `derived/bridge_concept_clusters.jsonl`
 
@@ -133,8 +133,7 @@ Output schema:
         "concept_name": "Archive as architectural space",
         "descriptor": "the archive framed as spatial and architectural form"
       }
-  ],
-  "confidence": 0.85
+  ]
 }
 ]
 ```
@@ -165,7 +164,7 @@ Fields:
 - `aliases` — all concept names (including canonical) that map to this cluster
 - `material_ids` — derived from `source_concepts`
 - `source_concepts` — `[{material_id, concept_name, descriptor, relevance, source_pages, evidence_spans, confidence}]` — full provenance from the concepts table, carried through so concept pages can render evidence without re-querying
-- `confidence` — LLM's confidence in the grouping (0.0–1.0)
+- `confidence` — deterministic cluster confidence derived from the validated `source_concepts` confidences
 
 ### `arq cluster` CLI
 

@@ -126,6 +126,22 @@ def _build_source_concept(indexed: dict) -> dict:
     }
 
 
+def _derive_cluster_confidence(source_concepts: list[dict], *, fallback: float = 0.0) -> float:
+    """Derive cluster confidence from validated source concept confidences."""
+    values: list[float] = []
+    for source in source_concepts:
+        if not isinstance(source, dict):
+            continue
+        try:
+            values.append(float(source.get("confidence", 0.0) or 0.0))
+        except (TypeError, ValueError):
+            continue
+    if not values:
+        return float(fallback or 0.0)
+    average = sum(values) / len(values)
+    return max(0.0, min(1.0, average))
+
+
 def _split_concept_row(row: tuple) -> tuple[str, str, str, str, str, str, str, float, str]:
     """Normalize concept rows from old/new index schemas.
 
@@ -540,7 +556,7 @@ def is_bridge_clustering_stale(config: dict | None = None, *, force: bool = Fals
     return False
 
 
-_BRIDGE_DELTA_SCHEMA = '{"links_to_existing":[{"cluster_id":"required existing cluster id","source_concepts":[{"material_id":"required string","concept_name":"required string"}]}],"new_clusters":[{"canonical_name":"required string","aliases":["strings"],"source_concepts":[{"material_id":"required string","concept_name":"required string"}],"confidence":0.0}],"_finished":true}'
+_BRIDGE_DELTA_SCHEMA = '{"links_to_existing":[{"cluster_id":"required existing cluster id","source_concepts":[{"material_id":"required string","concept_name":"required string"}]}],"new_clusters":[{"canonical_name":"required string","descriptor":"short cluster description","aliases":["max 4 strings"],"source_concepts":[{"material_id":"required string","concept_name":"required string"}]}],"_finished":true}'
 
 _BRIDGE_SYSTEM_PROMPT = f"""\
 You are an architecture research librarian. You are grouping concepts \
@@ -553,6 +569,7 @@ Rules:
 - Favor broader but still meaningful canonical names that connect related materials across the collection
 - Group concepts when they participate in the same broader framework, problematic, spatial condition, institutional logic, typology, method, or field of inquir
 - Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.
+- For each new cluster, write a short descriptor of at most two brief lines that explains the umbrella idea in plain language.
 - Concepts that are genuinely distinct should remain separate clusters; do not merge unrelated ideas under a vague keyword
 - Use the material summaries, local concepts, bridge candidates, and evidence snippets to judge whether two packets belong to the same broader territory
 - Bridge candidates are strong signals of potential connections.
@@ -577,6 +594,7 @@ def _bridge_cluster_snapshot(cluster: dict) -> dict:
         return {
                 "cluster_id": str(cluster.get("cluster_id", "")).strip(),
                 "canonical_name": str(cluster.get("canonical_name", "")).strip(),
+            "descriptor": str(cluster.get("descriptor", "")).strip(),
                 "aliases": _dedupe_aliases([str(alias) for alias in aliases if str(alias).strip()]),
                 "material_ids": [str(mid) for mid in cluster.get("material_ids", []) if str(mid).strip()],
                 "source_concepts": [
@@ -688,6 +706,7 @@ def _apply_bridge_delta(existing_clusters: list[dict], parsed: dict) -> list[dic
         canonical_name = str(cluster.get("canonical_name", "")).strip()
         if not canonical_name:
             raise EnrichmentError(f"new_clusters[{idx}] is missing canonical_name")
+        descriptor = str(cluster.get("descriptor", "")).strip()
         aliases = cluster.get("aliases", [])
         if aliases is None:
             aliases = []
@@ -695,12 +714,12 @@ def _apply_bridge_delta(existing_clusters: list[dict], parsed: dict) -> list[dic
             raise EnrichmentError(f"new_clusters[{idx}] field 'aliases' must be a list")
         combined.append({
             "canonical_name": canonical_name,
+            "descriptor": descriptor,
             "aliases": _dedupe_aliases([canonical_name, *[str(alias) for alias in aliases if str(alias).strip()]]),
             "source_concepts": _normalize_bridge_source_concepts(
                 cluster.get("source_concepts"),
                 label=f"new_clusters[{idx}]",
             ),
-            "confidence": float(cluster.get("confidence", 0.0) or 0.0),
         })
 
     return combined
@@ -959,6 +978,7 @@ def _validate_bridge_and_attach_provenance(
 
         cluster_records.append({
             "canonical_name": canonical_name,
+            "descriptor": str(cluster.get("descriptor", "")).strip(),
             "slug": slugify(canonical_name),
             "aliases": aliases,
             "material_ids": material_ids,
@@ -973,7 +993,7 @@ def _validate_bridge_and_attach_provenance(
                 }
                 for source in final_source
             ],
-            "confidence": float(cluster.get("confidence", 0.0)),
+            "confidence": _derive_cluster_confidence(final_source),
         })
 
     clean_clusters = []

@@ -37,6 +37,9 @@ def test_bridge_prompt_includes_material_packets():
     assert '"_finished":true' in _BRIDGE_SYSTEM_PROMPT
     assert '"links_to_existing"' in _BRIDGE_SYSTEM_PROMPT
     assert '"new_clusters"' in _BRIDGE_SYSTEM_PROMPT
+    assert '"descriptor"' in _BRIDGE_SYSTEM_PROMPT
+    assert '"confidence"' not in _BRIDGE_SYSTEM_PROMPT
+    assert "short descriptor" in _BRIDGE_SYSTEM_PROMPT
 
 
 def test_bridge_cluster_prompt_requests_json_response():
@@ -158,12 +161,12 @@ def test_bridge_clustering_uses_bridge_packets(tmp_path, monkeypatch):
             "new_clusters": [
                 {
                     "canonical_name": "archival counterpublics",
+                    "descriptor": "How archival practices create shared publics across institutions and media.",
                     "aliases": ["archival counterpublics"],
                     "source_concepts": [
                         {"material_id": "m1", "concept_name": "archival habitat"},
                         {"material_id": "m2", "concept_name": "counterarchive practice"},
                     ],
-                    "confidence": 0.85,
                 }
             ],
             "_finished": True,
@@ -180,6 +183,7 @@ def test_bridge_clustering_uses_bridge_packets(tmp_path, monkeypatch):
     assert len(cluster_lines) == 1
     payload = json.loads(cluster_lines[0])
     assert payload["canonical_name"] == "archival counterpublics"
+    assert payload["descriptor"] == "How archival practices create shared publics across institutions and media."
     assert sorted(payload["material_ids"]) == ["m1", "m2"]
 
 
@@ -317,7 +321,6 @@ def test_bridge_clustering_force_ignores_incremental_cutoff(tmp_path, monkeypatc
                         {"material_id": "m1", "concept_name": "archival habitat"},
                         {"material_id": "m2", "concept_name": "counterarchive practice"},
                     ],
-                    "confidence": 0.85,
                 }
             ],
             "_finished": True,

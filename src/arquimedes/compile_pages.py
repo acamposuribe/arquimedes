@@ -238,6 +238,41 @@ def _render_reflection_section(title: str, reflection: dict | None) -> list[str]
     return lines
 
 
+def _render_recent_changes_section(review_rows: list[dict] | None) -> list[str]:
+    lines: list[str] = []
+    if not review_rows:
+        return lines
+
+    def _sort_key(row: dict) -> str:
+        provenance = row.get("_provenance") if isinstance(row.get("_provenance"), dict) else {}
+        return str(provenance.get("run_at", "")).strip()
+
+    lines.append("## Recent Changes\n")
+    for row in sorted(review_rows, key=_sort_key, reverse=True):
+        finding_type = str(row.get("finding_type", "")).strip() or "update"
+        severity = str(row.get("severity", "")).strip()
+        status = str(row.get("status", "")).strip()
+        note = str(row.get("note", "")).strip()
+        recommendation = str(row.get("recommendation", "")).strip()
+        provenance = row.get("_provenance") if isinstance(row.get("_provenance"), dict) else {}
+        run_at = str(provenance.get("run_at", "")).strip()
+
+        title_bits = [finding_type.replace("_", " ").title()]
+        if run_at:
+            title_bits.append(run_at[:10])
+        lines.append(f"### {' · '.join(title_bits)}\n")
+        if status:
+            lines.append(f"- Status: {status}")
+        if severity:
+            lines.append(f"- Severity: {severity}")
+        if note:
+            lines.append(f"- Note: {note}")
+        if recommendation:
+            lines.append(f"- Recommendation: {recommendation}")
+        lines.append("")
+    return lines
+
+
 # ---------------------------------------------------------------------------
 # Material page
 # ---------------------------------------------------------------------------
@@ -447,6 +482,7 @@ def render_concept_page(
     related_concepts: list[dict],
     material_paths: dict[str, str] | None = None,
     reflection: dict | None = None,
+    review_rows: list[dict] | None = None,
 ) -> str:
     """Render a concept wiki page as markdown.
 
@@ -470,13 +506,19 @@ def render_concept_page(
     if "/bridge-concepts/" in page_path:
         lines.append("_Bridge cluster_\n")
 
+    descriptor = str(cluster.get("descriptor", "")).strip()
     # --- Aliases ---
     if aliases:
         lines.append(f"_Also known as: {', '.join(aliases)}_\n")
 
+    if descriptor:
+        lines.append(f"{descriptor}\n")
+
     # --- Overview ---
     n_materials = len(dict.fromkeys(sc["material_id"] for sc in source_concepts))
     lines.append(f"This concept appears in {n_materials} material{'s' if n_materials != 1 else ''}.\n")
+
+    lines.extend(_render_reflection_section("Reflections", reflection))
 
     # --- By material ---
     if source_concepts:
@@ -522,7 +564,8 @@ def render_concept_page(
             lines.append(f"- [{link_label}]({rel})")
         lines.append("")
 
-    lines.extend(_render_reflection_section("Phase 6 Reflection", reflection))
+    if is_bridge_page:
+        lines.extend(_render_recent_changes_section(review_rows))
 
     return "\n".join(lines)
 
@@ -561,6 +604,8 @@ def render_collection_page(
     lines.append(f"- **Collection:** {collection}")
     lines.append(f"- **Materials:** {len(materials)}")
     lines.append("")
+
+    lines.extend(_render_reflection_section("Reflections", reflection))
 
     # Recent additions
     if recent_additions:
@@ -620,8 +665,6 @@ def render_collection_page(
                 count = tf.get("count", 0)
                 lines.append(f"- {value} ({count})")
             lines.append("")
-
-    lines.extend(_render_reflection_section("Phase 6 Reflection", reflection))
 
     return "\n".join(lines)
 

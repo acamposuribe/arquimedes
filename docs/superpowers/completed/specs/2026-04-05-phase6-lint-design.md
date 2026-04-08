@@ -17,7 +17,10 @@ The phase is intentionally split into:
 - **deterministic lint** for mechanical hygiene
 - **LLM reflection** for semantic maintenance and growth
 
-Phase 6 is file-driven. The LLM reads staged packets and work files, edits its work file directly, and emits structured artifacts that the rest of the pipeline can project into SQL and compile into wiki pages.
+Phase 6 is mixed-mode.
+
+- Cluster audit now follows the no-file output pattern: the LLM reads staged inputs and returns one final structured JSON delta that the pipeline validates and applies programmatically.
+- Concept reflection, collection reflection, and graph maintenance still use staged work files edited in place.
 
 ## Core Principle
 
@@ -46,6 +49,12 @@ Phase 6 stays disciplined:
 - refresh SQL / wiki state
 - graph maintenance
 - final SQL / wiki projection
+
+`arq lint --stage <stage>`
+- deterministic lint first
+- run only the requested reflective stage(s)
+- allowed stage values: `cluster-audit`, `concept-reflection`, `collection-reflection`, `graph-maintenance`
+- stage flags are repeatable when a targeted run needs more than one reflective stage
 
 The reflective stages are incremental and do not run blindly on every pass.
 
@@ -83,29 +92,43 @@ CLI exit codes:
 
 ## 1. Cluster Audit
 
-Cluster audit reviews the current bridge graph against new materials.
+Cluster audit reviews the current bridge graph against targeted bridge changes and uncovered local concepts.
 
 It is incremental:
-- it runs when there are materials ingested after the last cluster run
-- it compares the current bridge memory to the new material packet
+- it only re-audits existing bridge clusters that changed since their last audit, have no canonical review row, or still have an `open` review
+- it discovers genuinely new bridges only from uncovered local concepts that are still outside bridge memory
 - it preserves existing bridge concepts when they still form a coherent idea
-- it treats splitting as a last resort
+- it skips re-running when the uncovered-local packet is unchanged
 
 Input files:
-- current bridge memory work copy in `derived/tmp/`
+- current bridge memory read-only input copy in `derived/tmp/`, but only for the existing bridge clusters eligible for review in this pass
+- current cluster review read-only input copy in `derived/tmp/`
 - incremental bridge packet for the new materials in `derived/tmp/`
 
 Tasks:
-- detect over-merged clusters that should split
-- detect missed equivalences that should merge
-- detect weak single-material clusters
-- detect poor canonical names
-- detect missing materials that belong in an existing cluster
-- merge / rename / improve bridge clusters where safe and supported
+- improve names and aliases for targeted existing bridge clusters
+- attach uncovered local concepts to targeted existing bridge clusters when they clearly belong there
+- remove materials from targeted existing bridge clusters when they clearly do not belong
+- write or rewrite the canonical review row for every targeted existing cluster
+- propose genuinely new bridge clusters from uncovered local concepts when the evidence supports them
+
+Output contract:
+- the LLM returns one final JSON object with `bridge_updates[]`, `new_bridges[]`, `review_updates[]`, `new_reviews[]`, and `_finished`
+- `bridge_updates` are patch-style edits on existing bridges (`new_name`, `new_aliases`, `new_source_concepts`, `removed_materials`) and may optionally include a non-authoritative `new_materials` hint, while `new_bridges` provide the bridge payload except for cluster-level confidence, which the pipeline derives from the validated source concept confidences
+- review updates only carry audit-log fields (`finding_type`, `severity`, `status`, `note`, `recommendation`); when the row is for a newly proposed bridge it must target the exact temporary `bridge_ref`, and the parser also accepts `bridge_ref` as an alias for `cluster_ref` in that case
+- the pipeline validates that object, applies accepted bridge/review changes programmatically, and then writes canonical outputs
+- if a proposed new bridge is deterministically rejected during validation, any paired `new_reviews` row for that temporary bridge is dropped as well instead of aborting the whole audit run
+- cluster reviews are persistent audit-log continuity records: each bridge cluster should retain exactly one canonical audit-log line, statuses are `open|validated`, and satisfied concerns should be rewritten as `validated` instead of being removed
 
 Output artifacts:
 - `derived/lint/cluster_reviews.jsonl`
-- updated bridge memory work copy in `derived/tmp/`
+- updated canonical bridge graph in `derived/bridge_concept_clusters.jsonl`
+- persisted raw cluster-audit responses in `derived/lint/cluster_audit_last_response.initial.txt`, `derived/lint/cluster_audit_last_response.final.txt` when applicable, and `derived/lint/cluster_audit_last_response.parsed.json` while the run is still being validated; successful runs delete those debug artifacts automatically and failed runs leave them behind for recovery
+- compiled bridge concept pages render a trailing `Recent Changes` section from the matching `cluster_reviews.jsonl` rows so audit outcomes remain visible in the wiki
+- scheduled reflective lint only runs after enough newly ingested materials have accumulated since the last successful reflective lint run; by default the threshold is 5 new materials, so daemon-driven ingestion/compile can run per material while lint batches the reflective maintenance work
+
+Bridge clustering note:
+- newly proposed bridge clusters now carry a short `descriptor` in addition to `canonical_name`; this descriptor is persisted in the bridge graph and rendered near the top of bridge concept pages
 
 ## 2. Concept Reflections
 

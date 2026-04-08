@@ -30,11 +30,14 @@ from typing import Any
 
 from arquimedes.cluster import (
     _attach_run_provenance,
+    _build_source_concept,
+    _derive_cluster_confidence,
     _load_concept_rows,
     _load_material_rows,
+    _normalize_concept_name,
+    _resolve_concept_reference,
     _split_concept_row,
     _stage_bridge_packet_input,
-    _validate_bridge_and_attach_provenance,
     is_bridge_clustering_stale,
     bridge_cluster_fingerprint,
     load_bridge_clusters,
@@ -64,9 +67,9 @@ from arquimedes.memory import _cluster_fingerprint, _fingerprint_file, memory_re
 
 LINT_DIR = "derived/lint"
 REPORT_PATH = Path("wiki/_lint_report.md")
-FULL_LINT_STAMP_PATH = Path(LINT_DIR) / "full_lint_stamp.json"
+LINT_STAGE_STAMP_PATH = Path(LINT_DIR) / "lint_stamp.json"
+CLUSTER_AUDIT_STATE_PATH = Path(LINT_DIR) / "cluster_audit_state.json"
 GRAPH_REFLECTION_STAMP_PATH = Path(LINT_DIR) / "graph_reflection_stamp.json"
-DEFAULT_FULL_LINT_INTERVAL_HOURS = 168.0
 DEFAULT_GRAPH_REFLECTION_INTERVAL_HOURS = 168.0
 DEFAULT_GRAPH_REFLECTION_MIN_CLUSTER_DELTA = 3
 DEFAULT_GRAPH_REFLECTION_MIN_MATERIAL_DELTA = 5
@@ -85,6 +88,16 @@ COLLECTION_REFLECTION_MAX_CONCEPTS_PER_MATERIAL = 3
 _LINK_RE = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
 _LINK_WITH_LABEL_RE = re.compile(r"(?<!!)\[([^\]]+)\]\(([^)]+)\)")
 _FENCE_RE = re.compile(r"```.*?```", re.DOTALL)
+LINT_REFLECTIVE_STAGES = (
+    "cluster-audit",
+    "concept-reflection",
+    "collection-reflection",
+    "graph-maintenance",
+)
+_CLUSTER_AUDIT_DELTA_SCHEMA = '{"bridge_updates":[{"cluster_id":"existing bridge id","new_name":"string","new_aliases":["strings"],"new_source_concepts":[{"material_id":"string","concept_name":"string"}],"new_materials":["material ids"],"removed_materials":["material ids"]}],"new_bridges":[{"bridge_ref":"temporary id","canonical_name":"string","aliases":["strings"],"material_ids":["material ids"],"source_concepts":[{"material_id":"string","concept_name":"string"}]}],"review_updates":[{"cluster_id":"existing bridge id","finding_type":"string","severity":"low|medium|high","status":"open|validated","note":"string","recommendation":"string"}],"new_reviews":[{"cluster_ref":"existing bridge id or exact new_bridges.bridge_ref","bridge_ref":"optional alias for cluster_ref on new bridges","finding_type":"string","severity":"low|medium|high","status":"open|validated","note":"string","recommendation":"string"}],"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
+_CONCEPT_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"open_questions":["strings"]|null,"why_this_concept_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
+_COLLECTION_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"important_material_ids":["material ids"]|null,"important_cluster_ids":["cluster ids"]|null,"open_questions":["strings"]|null,"why_this_collection_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
+_GRAPH_REFLECTION_DELTA_SCHEMA = '{"findings":[{"finding_id":"string(optional)","finding_type":"string","severity":"low|medium|high","summary":"string","details":"string","affected_material_ids":["material ids"],"affected_cluster_ids":["cluster ids"],"candidate_future_sources":["strings"],"candidate_bridge_links":["strings"]}]|null,"_finished":true}'
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +184,24 @@ def _stage_work_copy(source: Path, target: Path) -> Path:
         target.write_text("\n".join(lines) + ("\n" if lines else ""), encoding="utf-8")
     else:
         shutil.copyfile(source, target)
+    return target
+
+
+def _stage_cluster_audit_reviews_input(
+    target: Path,
+    canonical_reviews: dict[str, dict],
+    target_cluster_ids: set[str],
+) -> Path:
+    target.parent.mkdir(parents=True, exist_ok=True)
+    staged_rows = []
+    for cluster_id in sorted(target_cluster_ids):
+        row = canonical_reviews.get(cluster_id)
+        if not isinstance(row, dict):
+            continue
+        staged_row = dict(row)
+        staged_row.pop("_provenance", None)
+        staged_rows.append(staged_row)
+    _write_jsonl(target, staged_rows)
     return target
 
 
@@ -307,6 +338,22 @@ def _dedupe_strings(values: list[str]) -> list[str]:
         seen.add(key)
         out.append(item)
     return out
+
+
+def _normalize_lint_stages(stages: list[str] | tuple[str, ...] | None) -> list[str]:
+    if not stages:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for stage in stages:
+        value = str(stage).strip().lower()
+        if value not in LINT_REFLECTIVE_STAGES:
+            raise ValueError(f"unknown lint stage '{stage}'")
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    return normalized
 
 
 def _truncate(text: str, limit: int = 220) -> str:
@@ -926,8 +973,11 @@ def _run_reflection_prompt_with_context(
     user: str,
     schema_description: str,
     tool: ReflectionIndexTool,
+    raw_response_recorder=None,
 ) -> Any:
     raw = llm_fn(system, [{"role": "user", "content": user}])
+    if raw_response_recorder:
+        raw_response_recorder(raw, "initial")
     parsed = parse_json_or_repair(llm_fn, raw, schema_description)
     requests = _extract_context_requests(parsed)
     context_requested = bool(requests)
@@ -951,6 +1001,8 @@ def _run_reflection_prompt_with_context(
         {"role": "assistant", "content": raw},
         {"role": "user", "content": followup_user},
     ])
+    if raw_response_recorder:
+        raw_response_recorder(raw, "final")
     parsed = parse_json_or_repair(llm_fn, raw, schema_description)
     if isinstance(parsed, dict):
         parsed.pop("context_requests", None)
@@ -1598,37 +1650,70 @@ def _existing_by_key(path: Path, key_field: str) -> dict[str, dict]:
     return existing
 
 
-def _deterministic_fingerprint(report: dict) -> str:
-    return canonical_hash(
-        report.get("summary", {}),
-        report.get("issues", []),
+def _current_clustered_at(root: Path) -> str:
+    stamp = _read_stamp(root / "derived" / "bridge_cluster_stamp.json")
+    if not stamp:
+        return ""
+    return str(stamp.get("clustered_at", "") or "")
+
+
+def _lint_stage_stamp(root: Path) -> dict:
+    return _read_stamp(root / LINT_STAGE_STAMP_PATH)
+
+
+def _write_lint_stage_stamp(root: Path, **updates: str) -> None:
+    stamp = _lint_stage_stamp(root)
+    stamp.update({key: value for key, value in updates.items() if value})
+    _write_stamp(root / LINT_STAGE_STAMP_PATH, stamp)
+
+
+def _bridge_cluster_stage_due(root: Path, stamp_key: str, artifact_path: Path, stage_label: str) -> tuple[bool, str]:
+    current_clustered_at = _current_clustered_at(root)
+    if not current_clustered_at:
+        return False, "bridge clustering has not run yet"
+
+    if not artifact_path.exists():
+        return True, f"{stage_label} artifact missing"
+
+    stage_at = str(_lint_stage_stamp(root).get(stamp_key, "") or "")
+    if not stage_at:
+        return True, f"{stage_label} stamp missing"
+
+    clustered_at_dt = _parse_iso_datetime(current_clustered_at)
+    stage_at_dt = _parse_iso_datetime(stage_at)
+    if clustered_at_dt is None or stage_at_dt is None:
+        return True, f"{stage_label} stamp invalid"
+    if stage_at_dt >= clustered_at_dt:
+        return False, f"{stage_label} already ran after latest clustering"
+
+    return True, f"latest clustering is newer than {stage_label}"
+
+
+def _cluster_audit_due(root: Path, _bridge_clusters: list[dict]) -> tuple[bool, str]:
+    artifact_path = root / LINT_DIR / "cluster_reviews.jsonl"
+    return _bridge_cluster_stage_due(
+        root,
+        "audited_at",
+        artifact_path,
+        "cluster audit",
     )
 
 
-def _full_lint_due(root: Path, deterministic_report: dict, config: dict) -> tuple[bool, str]:
-    stamp = _read_stamp(root / FULL_LINT_STAMP_PATH)
-    if not stamp:
-        return True, "full lint stamp missing"
-    current_fp = _deterministic_fingerprint(deterministic_report)
-    if stamp.get("deterministic_fingerprint") == current_fp:
-        checked_at = _parse_iso_datetime(stamp.get("checked_at"))
-        if checked_at is None:
-            return True, "full lint stamp invalid"
-        hours = float(_lint_schedule_config(config).get("full_schedule_min_hours", DEFAULT_FULL_LINT_INTERVAL_HOURS) or DEFAULT_FULL_LINT_INTERVAL_HOURS)
-        age_hours = (datetime.now(timezone.utc) - checked_at).total_seconds() / 3600.0
-        if age_hours < hours:
-            return False, "full lint is current"
-    return True, "deterministic graph inputs changed or interval elapsed"
+def _concept_reflection_due(root: Path) -> tuple[bool, str]:
+    return _bridge_cluster_stage_due(
+        root,
+        "concept_reflection_at",
+        root / LINT_DIR / "concept_reflections.jsonl",
+        "concept reflection",
+    )
 
 
-def _write_full_lint_stamp(root: Path, deterministic_report: dict) -> None:
-    _write_stamp(
-        root / FULL_LINT_STAMP_PATH,
-        {
-            "checked_at": datetime.now(timezone.utc).isoformat(),
-            "deterministic_fingerprint": _deterministic_fingerprint(deterministic_report),
-            "summary": deterministic_report.get("summary", {}),
-        },
+def _collection_reflection_due(root: Path) -> tuple[bool, str]:
+    return _bridge_cluster_stage_due(
+        root,
+        "collection_reflection_at",
+        root / LINT_DIR / "collection_reflections.jsonl",
+        "collection reflection",
     )
 
 
@@ -1642,7 +1727,17 @@ def _graph_reflection_due(
     collection_refs: list[dict],
     deterministic_report: dict,
 ) -> tuple[bool, str]:
+    stage_due, stage_reason = _bridge_cluster_stage_due(
+        root,
+        "graph_reflection_at",
+        root / LINT_DIR / "graph_findings.jsonl",
+        "graph reflection",
+    )
+    if not stage_due:
+        return False, stage_reason
+
     stamp = _read_stamp(root / GRAPH_REFLECTION_STAMP_PATH)
+    findings_path = root / LINT_DIR / "graph_findings.jsonl"
     payload = _graph_reflection_packet(
         deterministic_report,
         clusters,
@@ -1652,6 +1747,8 @@ def _graph_reflection_due(
         manifest_records,
     )
     current_fp = canonical_hash(payload)
+    if not findings_path.exists():
+        return True, stage_reason
     if not stamp:
         return True, "graph reflection stamp missing"
     if stamp.get("graph_fingerprint") == current_fp:
@@ -1676,11 +1773,6 @@ def _graph_reflection_due(
     return False, "graph reflection deferred by schedule"
 def _concept_reflection_stage_dir(root: Path) -> Path:
     return root / "derived" / "tmp" / "concept_reflections"
-
-
-def _concept_reflection_work_path(root: Path, cluster_id: str) -> Path:
-    safe_cluster_id = (cluster_id or "cluster").strip() or "cluster"
-    return _concept_reflection_stage_dir(root) / f"{safe_cluster_id}.work.json"
 
 
 def _concept_reflection_page_copy_path(root: Path, cluster_id: str) -> Path:
@@ -1929,6 +2021,51 @@ def _concept_reflection_scaffold(
     }
 
 
+def _compile_concept_reflection_response(
+    cluster: dict,
+    scaffold: dict,
+    fingerprint: str,
+    parsed: Any,
+    existing_record: dict | None = None,
+) -> dict:
+    if not isinstance(parsed, dict):
+        raise EnrichmentError("Concept reflection output must be a JSON object")
+    if parsed.get("_finished") is not True:
+        raise EnrichmentError("Concept reflection output missing _finished=true")
+
+    def _resolve_list_field(field: str) -> list[str]:
+        value = parsed.get(field)
+        if value is None:
+            return _dedupe_strings(_safe_list((existing_record or {}).get(field, scaffold.get(field, []))))
+        if not isinstance(value, list):
+            raise EnrichmentError(f"Concept reflection output field '{field}' must be a list or null")
+        return _dedupe_strings(_safe_list(value))
+
+    def _resolve_text_field(field: str) -> str:
+        value = parsed.get(field)
+        if value is None:
+            return str((existing_record or {}).get(field, scaffold.get(field, "")) or "").strip()
+        if not isinstance(value, str):
+            raise EnrichmentError(f"Concept reflection output field '{field}' must be a string or null")
+        return value.strip()
+
+    for field in ("main_takeaways", "main_tensions", "open_questions"):
+        _resolve_list_field(field)
+    _resolve_text_field("why_this_concept_matters")
+    return {
+        **scaffold,
+        "cluster_id": cluster.get("cluster_id", ""),
+        "slug": cluster.get("slug", ""),
+        "canonical_name": cluster.get("canonical_name", ""),
+        "main_takeaways": _resolve_list_field("main_takeaways"),
+        "main_tensions": _resolve_list_field("main_tensions"),
+        "open_questions": _resolve_list_field("open_questions"),
+        "why_this_concept_matters": _resolve_text_field("why_this_concept_matters"),
+        "input_fingerprint": fingerprint,
+        "wiki_path": str(scaffold.get("wiki_path", "")).strip(),
+    }
+
+
 def _concept_reflection_link_fingerprint(cluster: dict) -> str:
     linked = []
     seen: set[tuple[str, str]] = set()
@@ -1952,12 +2089,543 @@ def _cluster_audit_input_path(root: Path) -> Path:
     return root / LINT_DIR / "cluster_audit_input.json"
 
 
-def _cluster_audit_work_paths(root: Path) -> tuple[Path, Path]:
+def _cluster_audit_raw_response_path(root: Path, phase: str = "final") -> Path:
+    suffix = phase.strip() or "final"
+    return root / LINT_DIR / f"cluster_audit_last_response.{suffix}.txt"
+
+
+def _cluster_audit_parsed_response_path(root: Path) -> Path:
+    return root / LINT_DIR / "cluster_audit_last_response.parsed.json"
+
+
+def _cleanup_cluster_audit_debug_artifacts(root: Path) -> None:
+    for path in (
+        _cluster_audit_raw_response_path(root, "initial"),
+        _cluster_audit_raw_response_path(root, "final"),
+        _cluster_audit_parsed_response_path(root),
+    ):
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
+def _cluster_audit_input_paths(root: Path) -> tuple[Path, Path]:
     tmp_root = root / "derived" / "tmp"
     return (
-        tmp_root / "bridge_concept_clusters.audit.work.jsonl",
-        tmp_root / "cluster_reviews.audit.work.jsonl",
+        tmp_root / "bridge_concept_clusters.audit.input.jsonl",
+        tmp_root / "cluster_reviews.audit.input.jsonl",
     )
+
+
+def _cluster_audit_cluster_snapshot(cluster: dict) -> dict:
+    return {
+        "cluster_id": str(cluster.get("cluster_id", "")).strip(),
+        "canonical_name": str(cluster.get("canonical_name", "")).strip(),
+        "aliases": _safe_list(cluster.get("aliases", [])),
+        "material_ids": _safe_list(cluster.get("material_ids", [])),
+        "source_concepts": [
+            {
+                "material_id": str(source.get("material_id", "")).strip(),
+                "concept_name": str(source.get("concept_name", "")).strip(),
+                "concept_key": str(source.get("concept_key", "")).strip() or _normalize_concept_name(str(source.get("concept_name", "")).strip()),
+            }
+            for source in cluster.get("source_concepts", [])
+            if isinstance(source, dict)
+        ],
+    }
+
+
+def _cluster_audit_cluster_fingerprint(cluster: dict, route_signature: str) -> str:
+    del route_signature
+    return canonical_hash({
+        "material_ids": sorted({
+            str(material_id).strip()
+            for material_id in cluster.get("material_ids", [])
+            if str(material_id).strip()
+        }),
+    })
+
+
+def _cluster_audit_cluster_fingerprints(clusters: list[dict], route_signature: str) -> dict[str, str]:
+    fingerprints: dict[str, str] = {}
+    for cluster in clusters:
+        cluster_id = str(cluster.get("cluster_id", "")).strip()
+        if not cluster_id:
+            continue
+        fingerprints[cluster_id] = _cluster_audit_cluster_fingerprint(cluster, route_signature)
+    return fingerprints
+
+
+def _cluster_audit_pending_local_fingerprint(local_rows: list[tuple], route_signature: str) -> str:
+    pending_local = []
+    for row in local_rows:
+        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type, descriptor = _split_concept_row(row)
+        pending_local.append({
+            "material_id": material_id,
+            "concept_name": concept_name,
+            "concept_key": concept_key,
+            "relevance": relevance,
+            "source_pages": source_pages,
+            "evidence_spans": evidence_spans,
+            "confidence": confidence,
+            "concept_type": concept_type,
+            "descriptor": descriptor,
+        })
+    pending_local.sort(key=lambda item: (item["material_id"], item["concept_key"], item["concept_name"]))
+    return canonical_hash({
+        "route_signature": route_signature,
+        "pending_local_concepts": pending_local,
+    })
+
+
+def _cluster_audit_target_clusters(
+    clusters: list[dict],
+    canonical_reviews: dict[str, dict],
+    route_signature: str,
+) -> tuple[list[dict], dict[str, str]]:
+    cluster_fingerprints = _cluster_audit_cluster_fingerprints(clusters, route_signature)
+    targets = []
+    for cluster in sorted(clusters, key=lambda item: str(item.get("cluster_id", ""))):
+        cluster_id = str(cluster.get("cluster_id", "")).strip()
+        if not cluster_id:
+            continue
+        review = canonical_reviews.get(cluster_id)
+        reasons: list[str] = []
+        if review is None:
+            reasons.append("missing_review")
+        else:
+            if str(review.get("status", "")).strip().lower() == "open":
+                reasons.append("open_review")
+            if str(review.get("input_fingerprint", "")).strip() != cluster_fingerprints.get(cluster_id, ""):
+                reasons.append("changed_since_last_audit")
+        if reasons:
+            targets.append({
+                "cluster_id": cluster_id,
+                "canonical_name": str(cluster.get("canonical_name", "")).strip(),
+                "material_ids": _safe_list(cluster.get("material_ids", [])),
+                "current_review_status": str(review.get("status", "")).strip() if isinstance(review, dict) else "",
+                "reasons": reasons,
+            })
+    return targets, cluster_fingerprints
+
+
+def _cluster_audit_finalize_reviews(
+    reviews: list[dict],
+    cluster_fingerprints: dict[str, str],
+    *,
+    context_requested: bool | None = None,
+    context_request_count: int | None = None,
+) -> list[dict]:
+    finalized = []
+    for row in sorted(reviews, key=lambda item: str(item.get("cluster_id", ""))):
+        if not isinstance(row, dict):
+            continue
+        cluster_id = str(row.get("cluster_id", "")).strip()
+        if not cluster_id:
+            continue
+        normalized = dict(row)
+        normalized["review_id"] = _cluster_audit_review_id(cluster_id)
+        normalized["input_fingerprint"] = cluster_fingerprints.get(cluster_id, str(normalized.get("input_fingerprint", "")).strip())
+        if context_requested is not None:
+            normalized["context_requested"] = context_requested
+        else:
+            normalized["context_requested"] = bool(normalized.get("context_requested", False))
+        if context_request_count is not None:
+            normalized["context_request_count"] = context_request_count
+        else:
+            normalized["context_request_count"] = int(normalized.get("context_request_count", 0) or 0)
+        finalized.append(normalized)
+    return finalized
+
+
+def _cluster_audit_mutable_concept_index(
+    local_rows: list[tuple],
+) -> dict[tuple[str, str], dict]:
+    concept_index: dict[tuple[str, str], dict] = {}
+    for row in local_rows:
+        concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type, descriptor = _split_concept_row(row)
+        concept_index[(material_id, concept_key)] = {
+            "concept_name": concept_name,
+            "concept_key": concept_key,
+            "material_id": material_id,
+            "relevance": relevance,
+            "source_pages": source_pages,
+            "evidence_spans": evidence_spans,
+            "confidence": confidence,
+            "concept_type": concept_type,
+            "descriptor": descriptor,
+        }
+    return concept_index
+
+
+def _audit_optional_text(value) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def _cluster_audit_validate_bridge_candidate(
+    candidate: dict,
+    concept_index: dict[tuple[str, str], dict],
+    assigned_pairs: set[tuple[str, str]],
+    *,
+    label: str,
+) -> dict | None:
+    if not isinstance(candidate, dict):
+        raise EnrichmentError(f"{label} must be an object")
+    canonical_name = _audit_optional_text(candidate.get("canonical_name", ""))
+    if not canonical_name:
+        raise EnrichmentError(f"{label} is missing canonical_name")
+    aliases = candidate.get("aliases", [])
+    if not isinstance(aliases, list):
+        raise EnrichmentError(f"{label} field 'aliases' must be a list")
+    raw_sources = candidate.get("source_concepts", [])
+    if not isinstance(raw_sources, list):
+        raise EnrichmentError(f"{label} field 'source_concepts' must be a list")
+
+    validated_source = []
+    for idx, entry in enumerate(raw_sources, start=1):
+        if not isinstance(entry, dict):
+            raise EnrichmentError(f"{label}.source_concepts[{idx}] must be an object")
+        material_id = str(entry.get("material_id", "")).strip()
+        concept_name = str(entry.get("concept_name", "")).strip()
+        if not material_id or not concept_name:
+            raise EnrichmentError(f"{label}.source_concepts[{idx}] must include material_id and concept_name")
+        indexed = _resolve_concept_reference(material_id, concept_name, concept_index)
+        if indexed is None:
+            continue
+        validated_source.append(_build_source_concept(indexed))
+
+    deduped_source = []
+    seen_local: set[tuple[str, str]] = set()
+    for source in validated_source:
+        key = (source["material_id"], source["concept_key"])
+        if key in seen_local:
+            continue
+        seen_local.add(key)
+        deduped_source.append(source)
+
+    candidate_source = []
+    candidate_pairs: list[tuple[str, str]] = []
+    for source in deduped_source:
+        key = (source["material_id"], source["concept_key"])
+        if key in assigned_pairs:
+            continue
+        candidate_source.append(source)
+        candidate_pairs.append(key)
+
+    material_ids = list(dict.fromkeys(source["material_id"] for source in candidate_source))
+    claimed_material_ids = _dedupe_strings(_safe_list(candidate.get("material_ids", [])))
+    if claimed_material_ids and claimed_material_ids != material_ids:
+        raise EnrichmentError(f"{label} field 'material_ids' must match the source_concepts material ids")
+    if len(material_ids) < 2:
+        return None
+
+    assigned_pairs.update(candidate_pairs)
+    alias_values = _dedupe_strings([
+        canonical_name,
+        *[str(value).strip() for value in aliases if str(value).strip()],
+        *[source.get("concept_name", "") for source in candidate_source if source.get("concept_name", "")],
+    ])
+    return {
+        "canonical_name": canonical_name,
+        "slug": slugify(canonical_name),
+        "aliases": alias_values,
+        "material_ids": material_ids,
+        "source_concepts": [
+            {
+                "material_id": source["material_id"],
+                "concept_name": source["concept_name"],
+                "descriptor": source.get("descriptor", ""),
+                "relevance": source["relevance"],
+                "source_pages": source["source_pages"],
+                "evidence_spans": source["evidence_spans"],
+                "confidence": source["confidence"],
+            }
+            for source in candidate_source
+        ],
+        "confidence": _derive_cluster_confidence(candidate_source),
+    }
+
+
+def _cluster_audit_apply_bridge_update(
+    candidate: dict,
+    existing_cluster: dict,
+    concept_index: dict[tuple[str, str], dict],
+    assigned_pairs: set[tuple[str, str]],
+    *,
+    label: str,
+) -> dict:
+    if not isinstance(candidate, dict):
+        raise EnrichmentError(f"{label} must be an object")
+
+    if "new_aliases" in candidate and not isinstance(candidate.get("new_aliases"), list):
+        raise EnrichmentError(f"{label} field 'new_aliases' must be a list when provided")
+    if "new_materials" in candidate and not isinstance(candidate.get("new_materials"), list):
+        raise EnrichmentError(f"{label} field 'new_materials' must be a list when provided")
+    if "removed_materials" in candidate and not isinstance(candidate.get("removed_materials"), list):
+        raise EnrichmentError(f"{label} field 'removed_materials' must be a list when provided")
+    raw_new_sources = candidate.get("new_source_concepts", []) or []
+    if not isinstance(raw_new_sources, list):
+        raise EnrichmentError(f"{label} field 'new_source_concepts' must be a list when provided")
+
+    removed_materials = set(_dedupe_strings(_safe_list(candidate.get("removed_materials", []))))
+    retained_sources = []
+    retained_pairs: set[tuple[str, str]] = set()
+    for source in existing_cluster.get("source_concepts", []):
+        if not isinstance(source, dict):
+            continue
+        material_id = str(source.get("material_id", "")).strip()
+        concept_name = str(source.get("concept_name", "")).strip()
+        concept_key = str(source.get("concept_key", "")).strip() or _normalize_concept_name(concept_name)
+        if not material_id or not concept_name or material_id in removed_materials:
+            continue
+        retained_pairs.add((material_id, concept_key))
+        retained_sources.append({
+            "material_id": material_id,
+            "concept_name": concept_name,
+            "descriptor": str(source.get("descriptor", "")).strip(),
+            "relevance": str(source.get("relevance", "")).strip(),
+            "source_pages": source.get("source_pages", []),
+            "evidence_spans": source.get("evidence_spans", []),
+            "confidence": float(source.get("confidence", 0.0) or 0.0),
+            "concept_key": concept_key,
+        })
+
+    seen_pairs = assigned_pairs | retained_pairs
+    added_sources = []
+    added_pairs: set[tuple[str, str]] = set()
+    for idx, entry in enumerate(raw_new_sources, start=1):
+        if not isinstance(entry, dict):
+            raise EnrichmentError(f"{label}.new_source_concepts[{idx}] must be an object")
+        material_id = str(entry.get("material_id", "")).strip()
+        concept_name = str(entry.get("concept_name", "")).strip()
+        if not material_id or not concept_name:
+            raise EnrichmentError(f"{label}.new_source_concepts[{idx}] must include material_id and concept_name")
+        indexed = _resolve_concept_reference(material_id, concept_name, concept_index)
+        if indexed is None:
+            continue
+        normalized = _build_source_concept(indexed)
+        pair = (normalized["material_id"], normalized["concept_key"])
+        if pair in seen_pairs or pair in added_pairs:
+            continue
+        added_pairs.add(pair)
+        added_sources.append(normalized)
+
+    final_sources = [*retained_sources, *added_sources]
+    final_material_ids = list(dict.fromkeys(source["material_id"] for source in final_sources))
+    if len(final_material_ids) < 2:
+        raise EnrichmentError(f"{label} must leave the bridge connected to at least two distinct materials")
+
+    assigned_pairs.update(retained_pairs)
+    assigned_pairs.update(added_pairs)
+
+    canonical_name = _audit_optional_text(candidate.get("new_name", "")) or _audit_optional_text(existing_cluster.get("canonical_name", ""))
+    if not canonical_name:
+        raise EnrichmentError(f"{label} produced an empty canonical name")
+    alias_values = candidate.get("new_aliases") if "new_aliases" in candidate else existing_cluster.get("aliases", [])
+    aliases = _dedupe_strings([canonical_name, *[str(value).strip() for value in (alias_values or []) if str(value).strip()]])
+
+    return {
+        "cluster_id": str(existing_cluster.get("cluster_id", "")).strip(),
+        "canonical_name": canonical_name,
+        "slug": slugify(canonical_name),
+        "aliases": aliases,
+        "material_ids": final_material_ids,
+        "source_concepts": [
+            {
+                "material_id": source["material_id"],
+                "concept_name": source["concept_name"],
+                "descriptor": source.get("descriptor", ""),
+                "relevance": source["relevance"],
+                "source_pages": source["source_pages"],
+                "evidence_spans": source["evidence_spans"],
+                "confidence": source["confidence"],
+            }
+            for source in final_sources
+        ],
+        "confidence": _derive_cluster_confidence(final_sources, fallback=float(existing_cluster.get("confidence", 0.0) or 0.0)),
+    }
+
+
+def _cluster_audit_review_id(cluster_id: str) -> str:
+    return cluster_id
+
+
+def _cluster_audit_existing_review_key(row: dict, position: int) -> tuple[float, int]:
+    provenance = row.get("_provenance", {}) if isinstance(row.get("_provenance", {}), dict) else {}
+    run_at = _parse_iso_datetime(provenance.get("run_at"))
+    return (run_at.timestamp() if run_at else float("-inf"), position)
+
+
+def _cluster_audit_review_ref(review: dict) -> str:
+    if not isinstance(review, dict):
+        return ""
+    return (
+        str(review.get("cluster_ref", "")).strip()
+        or str(review.get("cluster_id", "")).strip()
+        or str(review.get("bridge_ref", "")).strip()
+    )
+
+
+def _cluster_audit_canonicalize_existing_reviews(
+    existing_rows: list[dict],
+    cluster_refs: dict[str, dict],
+) -> dict[str, dict]:
+    canonical: dict[str, tuple[tuple[float, int], dict]] = {}
+    for position, row in enumerate(existing_rows):
+        if not isinstance(row, dict):
+            continue
+        cluster_id = str(row.get("cluster_id", "")).strip()
+        if not cluster_id or cluster_id not in cluster_refs:
+            continue
+        score = _cluster_audit_existing_review_key(row, position)
+        current = canonical.get(cluster_id)
+        if current is None or score >= current[0]:
+            normalized = _cluster_audit_normalize_review_row(
+                row,
+                cluster_refs,
+                review_id=_cluster_audit_review_id(cluster_id),
+                default_cluster_ref=cluster_id,
+            )
+            for key in ("input_fingerprint", "context_requested", "context_request_count"):
+                if key in row:
+                    normalized[key] = row.get(key)
+            provenance = row.get("_provenance")
+            if isinstance(provenance, dict):
+                normalized["_provenance"] = dict(provenance)
+            canonical[cluster_id] = (score, normalized)
+    return {cluster_id: row for cluster_id, (_score, row) in canonical.items()}
+
+
+def _cluster_audit_normalize_review_row(
+    review: dict,
+    cluster_refs: dict[str, dict],
+    *,
+    review_id: str,
+    default_cluster_ref: str = "",
+) -> dict:
+    if not isinstance(review, dict):
+        raise EnrichmentError("Cluster audit review entries must be objects")
+    cluster_ref = _cluster_audit_review_ref(review) or default_cluster_ref
+    if not cluster_ref:
+        raise EnrichmentError(f"Cluster audit review '{review_id}' is missing cluster_ref/cluster_id")
+    target_cluster = cluster_refs.get(cluster_ref)
+    if not isinstance(target_cluster, dict):
+        raise EnrichmentError(f"Cluster audit review '{review_id}' references unknown bridge '{cluster_ref}'")
+    finding_type = str(review.get("finding_type", "")).strip()
+    severity = str(review.get("severity", "")).strip().lower()
+    status = str(review.get("status", "")).strip().lower()
+    if status == "resolved":
+        status = "validated"
+    if status == "improved":
+        status = "open"
+    note = str(review.get("note", "")).strip()
+    recommendation = str(review.get("recommendation", "")).strip()
+    if not finding_type:
+        raise EnrichmentError(f"Cluster audit review '{review_id}' is missing finding_type")
+    if severity not in {"high", "medium", "low"}:
+        raise EnrichmentError(f"Cluster audit review '{review_id}' has invalid severity '{severity}'")
+    valid_statuses = {"open", "validated"}
+    if status not in valid_statuses:
+        raise EnrichmentError(f"Cluster audit review '{review_id}' has invalid status '{status}'")
+    if not note:
+        raise EnrichmentError(f"Cluster audit review '{review_id}' is missing note")
+    if not recommendation:
+        raise EnrichmentError(f"Cluster audit review '{review_id}' is missing recommendation")
+    return {
+        "review_id": review_id,
+        "cluster_id": str(target_cluster.get("cluster_id", "")).strip(),
+        "finding_type": finding_type,
+        "severity": severity,
+        "status": status,
+        "note": note,
+        "recommendation": recommendation,
+        "wiki_path": str(_concept_page_path(target_cluster)),
+    }
+
+
+def _cluster_audit_apply_review_delta(
+    existing_rows: list[dict],
+    review_updates: list[dict],
+    new_reviews: list[dict],
+    cluster_refs: dict[str, dict],
+) -> tuple[list[dict], set[str]]:
+    rows_by_cluster = _cluster_audit_canonicalize_existing_reviews(existing_rows, cluster_refs)
+    touched_clusters: set[str] = set()
+
+    for idx, review in enumerate(review_updates, start=1):
+        cluster_id = _cluster_audit_review_ref(review)
+        if not cluster_id:
+            raise EnrichmentError(f"review_updates[{idx}] is missing cluster_id")
+        existing = rows_by_cluster.get(cluster_id)
+        if existing is None:
+            raise EnrichmentError(f"review_updates[{idx}] references bridge '{cluster_id}' without an existing canonical review row; use new_reviews instead")
+        if cluster_id in touched_clusters:
+            raise EnrichmentError(f"review_updates[{idx}] duplicates cluster_id '{cluster_id}'")
+        normalized = _cluster_audit_normalize_review_row(
+            review,
+            cluster_refs,
+            review_id=_cluster_audit_review_id(cluster_id),
+            default_cluster_ref=cluster_id,
+        )
+        rows_by_cluster[cluster_id] = {
+            **existing,
+            **normalized,
+        }
+        touched_clusters.add(cluster_id)
+
+    for idx, review in enumerate(new_reviews, start=1):
+        cluster_ref = _cluster_audit_review_ref(review)
+        if not cluster_ref:
+            raise EnrichmentError(f"new_reviews[{idx}] is missing cluster_ref")
+        target_cluster = cluster_refs.get(cluster_ref)
+        if not isinstance(target_cluster, dict):
+            raise EnrichmentError(f"new_reviews[{idx}] references unknown bridge '{cluster_ref}'")
+        canonical_cluster_id = str(target_cluster.get("cluster_id", "")).strip()
+        if canonical_cluster_id in rows_by_cluster:
+            raise EnrichmentError(f"new_reviews[{idx}] references bridge '{canonical_cluster_id}' which already has a canonical review row; use review_updates instead")
+        if canonical_cluster_id in touched_clusters:
+            raise EnrichmentError(f"new_reviews[{idx}] duplicates cluster_id '{canonical_cluster_id}'")
+        normalized = _cluster_audit_normalize_review_row(
+            review,
+            cluster_refs,
+            review_id=_cluster_audit_review_id(canonical_cluster_id),
+            default_cluster_ref=cluster_ref,
+        )
+        rows_by_cluster[canonical_cluster_id] = normalized
+        touched_clusters.add(canonical_cluster_id)
+
+    return [rows_by_cluster[key] for key in sorted(rows_by_cluster)], touched_clusters
+
+
+def _ensure_cluster_audit_review_coverage(
+    reviews: list[dict],
+    bridge_clusters: list[dict],
+) -> list[dict]:
+    rows = [dict(row) for row in reviews if isinstance(row, dict)]
+    covered_clusters = {
+        str(row.get("cluster_id", "")).strip()
+        for row in rows
+        if str(row.get("cluster_id", "")).strip()
+    }
+    for cluster in bridge_clusters:
+        cluster_id = str(cluster.get("cluster_id", "")).strip()
+        if not cluster_id or cluster_id in covered_clusters:
+            continue
+        rows.append({
+            "review_id": _cluster_audit_review_id(cluster_id),
+            "cluster_id": cluster_id,
+            "finding_type": "validated",
+            "severity": "low",
+            "status": "validated",
+            "note": "Current bridge remains coherent in this audit pass.",
+            "recommendation": "Keep the current bridge as is unless stronger new evidence appears.",
+            "wiki_path": str(_concept_page_path(cluster)),
+        })
+        covered_clusters.add(cluster_id)
+    return rows
 
 
 def _collection_reflection_key(domain: str, collection: str) -> str:
@@ -1968,11 +2636,6 @@ def _collection_reflection_key(domain: str, collection: str) -> str:
 
 def _collection_reflection_stage_dir(root: Path) -> Path:
     return root / "derived" / "tmp" / "collection_reflections"
-
-
-def _collection_reflection_work_path(root: Path, domain: str, collection: str) -> Path:
-    key = _collection_reflection_key(domain, collection).replace("/", "__")
-    return _collection_reflection_stage_dir(root) / f"{key}.work.json"
 
 
 def _collection_reflection_page_copy_path(root: Path, domain: str, collection: str) -> Path:
@@ -2198,6 +2861,61 @@ def _collection_reflection_scaffold(
     }
 
 
+def _compile_collection_reflection_response(
+    domain: str,
+    collection: str,
+    scaffold: dict,
+    fingerprint: str,
+    parsed: Any,
+    existing_record: dict | None = None,
+) -> dict:
+    if not isinstance(parsed, dict):
+        raise EnrichmentError("Collection reflection output must be a JSON object")
+    if parsed.get("_finished") is not True:
+        raise EnrichmentError("Collection reflection output missing _finished=true")
+
+    def _resolve_list_field(field: str) -> list[str]:
+        value = parsed.get(field)
+        if value is None:
+            return _dedupe_strings(_safe_list((existing_record or {}).get(field, scaffold.get(field, []))))
+        if not isinstance(value, list):
+            raise EnrichmentError(f"Collection reflection output field '{field}' must be a list or null")
+        return _dedupe_strings(_safe_list(value))
+
+    def _resolve_id_field(field: str) -> list[str]:
+        return sorted({item.strip() for item in _resolve_list_field(field) if item.strip()})
+
+    def _resolve_text_field(field: str) -> str:
+        value = parsed.get(field)
+        if value is None:
+            return str((existing_record or {}).get(field, scaffold.get(field, "")) or "").strip()
+        if not isinstance(value, str):
+            raise EnrichmentError(f"Collection reflection output field '{field}' must be a string or null")
+        return value.strip()
+
+    for field in ("main_takeaways", "main_tensions", "important_material_ids", "important_cluster_ids", "open_questions"):
+        if field.startswith("important_"):
+            _resolve_id_field(field)
+        else:
+            _resolve_list_field(field)
+    _resolve_text_field("why_this_collection_matters")
+
+    return {
+        **scaffold,
+        "collection_key": _collection_reflection_key(domain, collection),
+        "domain": domain,
+        "collection": collection,
+        "main_takeaways": _resolve_list_field("main_takeaways"),
+        "main_tensions": _resolve_list_field("main_tensions"),
+        "important_material_ids": _resolve_id_field("important_material_ids"),
+        "important_cluster_ids": _resolve_id_field("important_cluster_ids"),
+        "open_questions": _resolve_list_field("open_questions"),
+        "why_this_collection_matters": _resolve_text_field("why_this_collection_matters"),
+        "input_fingerprint": fingerprint,
+        "wiki_path": str(scaffold.get("wiki_path", "")).strip(),
+    }
+
+
 def _collection_reflection_fingerprint(domain: str, collection: str, metas: list[dict], clusters: list[dict]) -> str:
     material_ids = sorted({
         str(meta.get("material_id", "")).strip()
@@ -2210,50 +2928,58 @@ def _collection_reflection_fingerprint(domain: str, collection: str, metas: list
     })
 
 
-def _cluster_audit_prompt(root: Path, input_path: Path, bridge_work_path: Path, reviews_work_path: Path) -> tuple[str, str]:
+def _cluster_audit_prompt(root: Path, input_path: Path, bridge_input_path: Path, reviews_input_path: Path) -> tuple[str, str]:
     system = (
         "You are an architecture research librarian auditing the bridge concept graph.\n"
         "\n"
-        "Bridge concepts are ambitious cross-material ideas, not single-material cleanup items. "
-        "Prefer ambitious, useful connections and preserve existing bridge concepts whenever they still form a coherent cross-material idea. "
-        "Treat splitting as a last resort: only split when the evidence clearly shows that one bridge cluster is conflating distinct intellectual territories that cannot remain together. "
-        "If a cluster is broad but still coherent, keep it and improve the canonical name instead of fragmenting it. "
-        "Respect prior bridge memory and prior cluster findings whenever possible. "
+        "You will receive exactly three read-only inputs: the uncovered local bridge packet, the staged bridge memory file with the existing clusters under review, and the current cluster-review audit log. "
         "If you need more context for your decisions, do not guess. Return a JSON object that includes a context_requests array with up to 4 read-only SQL-index lookups. "
         "Use context requests only for targeted material evidence queries or a collection open_record."
         " Each request should look like {\"tool\":\"search_material_evidence\",\"kind\":\"chunk|annotation|figure\",\"material_id\":\"...\",\"query\":\"...\",\"limit\":5} "
         "or {\"tool\":\"open_record\",\"kind\":\"collection\",\"id\":\"...\"}. "
         "You will get only one read-only context round, so request everything you need at once.\n"
         "\n"
+        f"Return exactly one final JSON object matching this schema: {_CLUSTER_AUDIT_DELTA_SCHEMA}\n"
+        "- Use bridge_updates for existing clusters in the staged bridge memory file. You may rename if strictly necessary, replace aliases, attach uncovered local concepts and remove materials that no longer belong.\n"
+        "- Use new_bridges for genuinely new cross-material bridges built from the uncovered local concepts in the bridge packet.\n"
+        "- Every new_bridges entry that you keep must have exactly one matching new_reviews row using the same temporary bridge_ref. If you decide a candidate is not a real bridge, omit both that new_bridges entry and its review row.\n"
+        "- new_source_concepts is the authoritative way to attach uncovered local concepts to a reviewed bridge. If you include new_materials, it is only a convenience hint; the pipeline will derive the actual added materials from new_source_concepts.\n"
+        "The cluster_reviews file is an audit log for the next round and contains only the current review rows for the staged bridge clusters under review: what changed, why it changed, what still seems doubtful, and what is validated for now. There must be exactly one canonical audit-log row per bridge cluster when the audit is done. Status must always be open or validated.\n"
+        "- Use review_updates for clusters that already have a canonical audit-log row, keyed by cluster_id.\n"
+        "- Use new_reviews for clusters that do not yet have a canonical audit-log row. When the row is for a newly proposed bridge, cluster_ref must repeat the exact bridge_ref from new_bridges.\n"
+        "There must be exactly one canonical audit-log row per bridge cluster, and review status must be open or validated.\n\n"
+
+        "ABOUT CLUSTER NAMES: Bridge concepts are ambitious cross-material ideas. "
+        "Only change existing names for clear improvement, and only if strictly necessary."
+        "For new clustrers: Cluster names may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like history, power, space, or memory unless sharply qualified. Prefer cluster names that carry analytical charge and group local and bridge concepts together, like spatial justice, racial capitalism, architecture as care, counter-mapping methods, or collecting as spatial practice, and many others. IMP: Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.\n\n"
+
+        "Set _finished to true only in the final completed JSON object. Return JSON only.\n"
+        "\n"
         "## TODO\n"
-        "- [ ] Audit the current bridge memory for over-merges, missed equivalences, weak naming, single-material weakness, missing materials, and bridge concepts that should merge, rename, or be improved.\n"
-        "- [ ] Discover genuinely new bridge concepts from the bridge packet's concepts and material context. Be critical -> only add concepts that are genuinely new and valuable.\n"
-        "- [ ] Edit the duplicated work files in place.\n"
-        "- [ ] Finish the work files cleanly and emit PROCESS_FINISHED as a stop marker.\n"
+        "- [ ] Read the existing review rows and recommendations.\n"
+        "- [ ] Audit the staged bridge-memory clusters: improve names or aliases when strictly necessary, attach uncovered local concepts when they clearly belong, and remove materials that clearly do not belong.\n"
+        "- [ ] Create genuinely new bridges only for uncovered local concepts that do not fit one of the reviewed bridges.\n"
+        "- [ ] Return explicit bridge and review deltas in the final JSON object.\n"
+        "- [ ] Finish only when the final JSON object is complete and _finished is true.\n"
     )
     user = (
         f"Read these files:\n"
         f"- {input_path}\n"
         "- If the packet points to a bridge packet file, read that too.\n"
-        f"- {reviews_work_path}\n"
-        f"- {bridge_work_path}\n"
+        f"- {reviews_input_path}\n"
+        f"- {bridge_input_path}\n"
         "\n"
-        "The duplicated work files are the source of truth; edit them in place rather than creating fresh outputs.\n"
-        "The bridge work file is JSONL and already contains the current bridge graph.\n"
-        "The review work file is JSONL and should contain the maintained audit log for this run.\n"
-        "Treat the review work file as a living justification log: remove findings that have already been resolved or acted upon, "
-        "keep or add positive review entries for bridge concepts that were improved or validated, and rewrite remaining entries so they explain why the current bridge graph should stay as it is.\n"
-        "Keep the review file compact and current; do not leave stale actions in it.\n"
-        "After editing the work files, emit PROCESS_FINISHED as a stop marker.\n"
+        "The bridge input file is JSONL and contains only the existing bridge clusters you are allowed to review. Treat it as read-only input.\n"
+        "The cluster_reviews input file contains only the current audit rows for the staged bridge clusters under review. Treat it as read-only input.\n"
+        "Do not invent concepts that are not present in the bridge packet.\n"
+        "Return final JSON only.\n"
     )
     return system, user
 
 
 def _concept_reflection_prompt(
-    cluster: dict,
     page_path: Path,
     evidence_path: Path,
-    work_path: Path,
 ) -> tuple[str, str]:
     system = (
         "You are an architecture research librarian writing reflective synthesis for a concept page.\n"
@@ -2263,9 +2989,8 @@ def _concept_reflection_prompt(
         "and what remains unresolved.\n"
         "\n"
         "Use the wiki page as the current public state of the concept. Use the staged SQL-evidence file for "
-        "the supporting materials, chunks, annotations, and figures that ground the synthesis. Use the work "
-        "file as the source of truth for this run and edit it in place. Preserve prior conclusions when they "
-        "still hold, but revise them when the evidence changes.\n"
+        "the supporting materials, chunks, annotations, and figures that ground the synthesis. Preserve prior "
+        "conclusions when they still hold, but revise them when the evidence changes.\n"
         "\n"
         "The chunk evidence is ordered by usefulness. Chunks with source=search are the strongest matches to the bridge concept query terms. "
         "Chunks with source=fallback are only fill-in evidence for the same material and may be less directly relevant. "
@@ -2275,14 +3000,14 @@ def _concept_reflection_prompt(
         "Write the reflection as a synthesis, not as a list of facts. The reflection should usually cover: "
         "the central claim of the concept, the strongest supporting evidence, the main tensions or ambiguities, "
         "the open questions worth tracking, and a concise statement of why this concept matters to the larger corpus.\n"
-        "If this is the first run, the scaffold in the work file already has the right shape; fill it with a strong "
-        "first synthesis instead of waiting for prior history. Keep the work file valid JSON.\n"
+        "If this is the first run, still write a strong first synthesis instead of waiting for prior history.\n"
         "\n"
-        "When finished, emit PROCESS_FINISHED as a stop marker."
+        "Return exactly one final JSON object matching this schema: "
+        f"{_CONCEPT_REFLECTION_DELTA_SCHEMA}\n"
+        "Do all reasoning silently first. Do not return markdown fences, commentary, or partial JSON."
     )
     user = (
         f"Read these files:\n"
-        f"- Work file: {work_path}\n"
         f"- Concept wiki page: {page_path}\n"
         f"- SQL evidence file: {evidence_path}\n"
         "\n"
@@ -2290,13 +3015,13 @@ def _concept_reflection_prompt(
         "The SQL evidence file contains the staged evidence for this concept cluster.\n"
         "The chunks inside that file are ordered by usefulness; source=search is the strongest match to the concept query, while source=fallback is only secondary support.\n"
         "The annotations field, when present, is a single newline-delimited string of annotation notes. The concepts field, when present, is a compact list of concept names only.\n"
-        "The work file is the source of truth for this run; if this is the first reflection, it already has the right scaffold and field structure.\n"
-        "Update the reflection fields in that scaffold rather than inventing a new shape.\n"
+        "Return only the reflection fields requested by the schema: main_takeaways, main_tensions, open_questions, why_this_concept_matters, and _finished.\n"
+        "If one reflection field should remain exactly as the current reflection already states it, you may return null for that field and the pipeline will preserve the stored value for that key.\n"
+        "Do not return cluster metadata, supporting ids, or wiki paths.\n"
         "Write a strong reflection that includes the main takeaways, main tensions, open questions, and why this concept matters.\n"
         "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
         "Do not leave the work file as a mere summary of the page. Use the evidence to surface the concept's role, stakes, and unresolved questions.\n"
-        f"Edit {work_path} in place.\n"
-        "After editing the work file, emit PROCESS_FINISHED as a stop marker.\n"
+        "Return final JSON only.\n"
     )
     return system, user
 
@@ -2306,7 +3031,6 @@ def _collection_reflection_prompt(
     collection: str,
     page_path: Path,
     evidence_path: Path,
-    work_path: Path,
 ) -> tuple[str, str]:
     system = (
         "You are an architecture research librarian writing reflective synthesis for a collection page.\n"
@@ -2316,7 +3040,7 @@ def _collection_reflection_prompt(
         "\n"
         "Use the collection wiki page as the current public state of the collection. Use the staged SQL-evidence file for "
         "the supporting materials, methodological conclusions, main content learnings, chunks, annotations, figures, and compact bridge-concept "
-        "summaries that ground the synthesis. Use the work file as the source of truth for this run and edit it in place. Preserve prior "
+        "summaries that ground the synthesis. Preserve prior "
         "conclusions when they still hold, but revise them when the evidence changes.\n"
         "\n"
         "The material-level methodological conclusions and main content learnings are the primary reusable evidence for each material. "
@@ -2328,14 +3052,14 @@ def _collection_reflection_prompt(
         "Write the reflection as a synthesis, not as a list of facts. The reflection should usually cover: "
         "the collection's central through-line, the strongest supporting materials, the most important bridge concepts, "
         "the main tensions or ambiguities, the open questions worth tracking, and a concise statement of why this collection matters to the larger corpus.\n"
-        "If this is the first run, the scaffold in the work file already has the right shape; fill it with a strong "
-        "first synthesis instead of waiting for prior history. Keep the work file valid JSON.\n"
+        "If this is the first run, still write a strong first synthesis instead of waiting for prior history.\n"
         "\n"
-        "When finished, emit PROCESS_FINISHED as a stop marker."
+        "Return exactly one final JSON object matching this schema: "
+        f"{_COLLECTION_REFLECTION_DELTA_SCHEMA}\n"
+        "Do all reasoning silently first. Do not return markdown fences, commentary, or partial JSON."
     )
     user = (
         f"Read these files:\n"
-        f"- Work file: {work_path}\n"
         f"- Collection wiki page: {page_path}\n"
         f"- SQL evidence file: {evidence_path}\n"
         "\n"
@@ -2348,13 +3072,13 @@ def _collection_reflection_prompt(
         "The bridge_concepts entries are short synthesized cues from the concept reflections, not raw membership ids.\n"
         "Treat the new_materials as the main evidence for this run and the old_materials as compact background continuity.\n"
         "Treat the methodological conclusions and main content learnings as the primary material-level evidence; the chunks are only a small supporting slice.\n"
-        "The work file is the source of truth for this run; if this is the first reflection, it already has the right scaffold and field structure.\n"
-        "Update the reflection fields in that scaffold rather than inventing a new shape.\n"
+        "Return only the reflection fields requested by the schema: main_takeaways, main_tensions, important_material_ids, important_cluster_ids, open_questions, why_this_collection_matters, and _finished.\n"
+        "If one reflection field should remain exactly as the current reflection already states it, you may return null for that field and the pipeline will preserve the stored value for that key.\n"
+        "Do not return collection metadata, fingerprints, or wiki paths.\n"
         "Write a strong reflection that includes the main takeaways, main tensions, important materials, important bridge concepts, open questions, and why this collection matters.\n"
         "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
         "Do not leave the work file as a mere summary of the page. Use the evidence to surface the collection's role, stakes, and unresolved questions.\n"
-        f"Edit {work_path} in place.\n"
-        "After editing the work file, emit PROCESS_FINISHED as a stop marker.\n"
+        "Return final JSON only.\n"
     )
     return system, user
 
@@ -2371,18 +3095,8 @@ def _graph_reflection_packet_path(root: Path) -> Path:
     return _graph_reflection_stage_dir(root) / "graph_health.packet.json"
 
 
-def _graph_reflection_work_path(root: Path) -> Path:
-    return _graph_reflection_stage_dir(root) / "graph_health.work.json"
-
-
-def _graph_reflection_scaffold() -> str:
-    return json.dumps(
-        {
-            "findings": [],
-        },
-        separators=(',', ':'),
-        ensure_ascii=False,
-    )
+def _graph_reflection_existing_path(root: Path) -> Path:
+    return _graph_reflection_stage_dir(root) / "graph_health.current.jsonl"
 
 
 def _graph_reflection_packet(
@@ -2474,7 +3188,7 @@ def _graph_reflection_packet(
 
 def _graph_reflection_prompt(
     packet_path: Path,
-    work_path: Path,
+    current_path: Path,
 ) -> tuple[str, str]:
     system = (
         "You are an architecture research librarian writing structured graph-maintenance findings for SQL-backed storage.\n"
@@ -2483,34 +3197,87 @@ def _graph_reflection_prompt(
         "what bridge areas are too thin or too broad, what concept homes are still missing, what collection "
         "syntheses still need work, and what should be investigated next.\n"
         "\n"
-        "Use the compact graph-state packet for the high-signal inputs. Use the work file as the source of truth "
-        "for this run and edit it in place. Preserve useful prior material when it still fits, but revise stale "
+        "Use the compact graph-state packet for the high-signal inputs. Use the current graph-findings file as the "
+        "current stored state when it exists. Preserve useful prior material when it still fits, but revise stale "
         "items instead of copying them forward blindly.\n"
         "\n"
         "Deterministic lint already handles mechanical hygiene such as broken links, orphans, and stale page counts. "
         "Do not repeat that work here. Keep the findings concise, judgment-heavy, and SQL-friendly.\n"
         "\n"
-        "When finished, emit PROCESS_FINISHED as a stop marker."
+        "Return exactly one final JSON object matching this schema: "
+        f"{_GRAPH_REFLECTION_DELTA_SCHEMA}\n"
+        "Do all reasoning silently first. Do not return markdown fences, commentary, or partial JSON."
     )
     user = (
         f"Read these files:\n"
-        f"- Work file: {work_path}\n"
         f"- Graph-state packet: {packet_path}\n"
+        f"- Current graph findings file: {current_path}\n"
         "\n"
         "The packet is ultra-compact graph state: summary counts, bridge-graph shape, cluster reviews, "
         "concept threads, and collection threads.\n"
-        "The work file is JSON. If this is the first run, it already has the right scaffold with a findings array; "
-        "update it with the current unresolved items instead of inventing a new shape.\n"
+        "The current graph findings file is the current stored state and may be empty on the first run.\n"
         "Write a prioritized maintenance record, not a raw list of everything. Focus on the few unresolved "
         "semantic problems that matter most: weak bridge areas, missing concept homes, collection synthesis gaps, "
         "and the next questions or sources that would move the graph forward.\n"
+        "Return only the fields requested by the schema: findings and _finished.\n"
+        "If the current findings list still fits the evidence exactly, you may return null for findings and the pipeline will preserve the stored list unchanged.\n"
         "Do not restate deterministic lint results.\n"
-        f"Edit {work_path} in place.\n"
-        "After editing the work file, emit PROCESS_FINISHED as a stop marker.\n"
+        "Return final JSON only.\n"
     )
     return system, user
-def _run_file_editing_prompt(llm_fn, system: str, user: str) -> str:
-    return str(llm_fn(system, [{"role": "user", "content": user}]))
+
+
+def _compile_graph_reflection_response(
+    parsed: Any,
+    existing_rows: list[dict],
+    fingerprint: str,
+) -> list[dict]:
+    if not isinstance(parsed, dict):
+        raise EnrichmentError("Graph maintenance output must be a JSON object")
+    if parsed.get("_finished") is not True:
+        raise EnrichmentError("Graph maintenance output missing _finished=true")
+
+    findings = parsed.get("findings")
+    if findings is None:
+        source_rows = [dict(row) for row in existing_rows if isinstance(row, dict)]
+    elif isinstance(findings, list):
+        source_rows = findings
+    else:
+        raise EnrichmentError("Graph maintenance output field 'findings' must be a list or null")
+
+    normalized = []
+    for idx, finding in enumerate(source_rows):
+        if not isinstance(finding, dict):
+            continue
+        for field in ("finding_type", "severity", "summary", "details"):
+            value = finding.get(field, "")
+            if not isinstance(value, str):
+                raise EnrichmentError(f"Graph maintenance finding field '{field}' must be a string")
+        for field in (
+            "affected_material_ids",
+            "affected_cluster_ids",
+            "candidate_future_sources",
+            "candidate_bridge_links",
+        ):
+            value = finding.get(field, [])
+            if not isinstance(value, list):
+                raise EnrichmentError(f"Graph maintenance finding field '{field}' must be a list")
+        finding_id = str(finding.get("finding_id", "")).strip()
+        if not finding_id:
+            finding_id = f"graph:{idx}"
+        normalized.append({
+            "finding_id": finding_id,
+            "finding_type": str(finding.get("finding_type", "")).strip(),
+            "severity": str(finding.get("severity", "")).strip(),
+            "summary": str(finding.get("summary", "")).strip(),
+            "details": str(finding.get("details", "")).strip(),
+            "affected_material_ids": _dedupe_strings(_safe_list(finding.get("affected_material_ids", []))),
+            "affected_cluster_ids": _dedupe_strings(_safe_list(finding.get("affected_cluster_ids", []))),
+            "candidate_future_sources": _dedupe_strings(_safe_list(finding.get("candidate_future_sources", []))),
+            "candidate_bridge_links": _dedupe_strings(_safe_list(finding.get("candidate_bridge_links", []))),
+            "input_fingerprint": fingerprint,
+        })
+    return normalized
 def _next_bridge_cluster_index(clusters: list[dict]) -> int:
     max_idx = 0
     for cluster in clusters:
@@ -2635,6 +3402,44 @@ def _run_cluster_audit(
     existing_path = root / LINT_DIR / "cluster_reviews.jsonl"
     existing_rows = _load_jsonl(existing_path)
     local_rows, material_rows = _local_rows_not_in_bridge(root, clusters)
+    existing_cluster_by_id = {
+        str(cluster.get("cluster_id", "")).strip(): cluster
+        for cluster in clusters
+        if str(cluster.get("cluster_id", "")).strip()
+    }
+    canonical_existing_reviews = _cluster_audit_canonicalize_existing_reviews(existing_rows, existing_cluster_by_id)
+    target_clusters, cluster_fingerprints = _cluster_audit_target_clusters(clusters, canonical_existing_reviews, route_signature)
+    target_cluster_ids = {
+        str(target.get("cluster_id", "")).strip()
+        for target in target_clusters
+        if str(target.get("cluster_id", "")).strip()
+    }
+    current_pending_local_fingerprint = _cluster_audit_pending_local_fingerprint(local_rows, route_signature)
+    audit_state = _read_stamp(root / CLUSTER_AUDIT_STATE_PATH)
+    prior_pending_local_fingerprint = str(audit_state.get("pending_local_fingerprint", "") or "")
+    pending_local_changed = bool(local_rows and material_rows) and current_pending_local_fingerprint != prior_pending_local_fingerprint
+
+    normalized_reviews = [canonical_existing_reviews[key] for key in sorted(canonical_existing_reviews)]
+    normalized_reviews = _ensure_cluster_audit_review_coverage(normalized_reviews, clusters)
+    normalized_reviews = _cluster_audit_finalize_reviews(normalized_reviews, cluster_fingerprints)
+
+    if not target_cluster_ids and not pending_local_changed:
+        run_at = datetime.now(timezone.utc).isoformat()
+        reviews_changed = normalized_reviews != existing_rows
+        if reviews_changed:
+            _attach_run_provenance(normalized_reviews, route_signature, run_at)
+            _write_jsonl(existing_path, normalized_reviews)
+        _write_lint_stage_stamp(root, audited_at=run_at)
+        _write_stamp(
+            root / CLUSTER_AUDIT_STATE_PATH,
+            {
+                "pending_local_fingerprint": current_pending_local_fingerprint,
+                "pending_local_concepts": len(local_rows),
+            },
+        )
+        _cleanup_cluster_audit_debug_artifacts(root)
+        return normalized_reviews, 0
+
     bridge_packets_path = None
     if local_rows and material_rows:
         bridge_packets_path = _stage_bridge_packet_input(
@@ -2646,156 +3451,192 @@ def _run_cluster_audit(
             max_evidence_snippets_per_material=None,
         )
 
+    bridge_input_path, reviews_input_path = _cluster_audit_input_paths(root)
+    reviewable_clusters = [
+        cluster
+        for cluster in clusters
+        if str(cluster.get("cluster_id", "")).strip() in target_cluster_ids
+    ]
     packet = {
-        "bridge_memory": str(root / "derived" / "tmp" / "bridge_concept_clusters.audit.work.jsonl"),
-        "cluster_reviews": str(root / "derived" / "tmp" / "cluster_reviews.audit.work.jsonl"),
+        "bridge_memory": str(bridge_input_path),
+        "cluster_reviews": str(reviews_input_path),
         "bridge_packets": str(bridge_packets_path) if bridge_packets_path else "",
-        "route_signature": route_signature,
     }
-    fingerprint = canonical_hash(packet)
     input_path = _cluster_audit_input_path(root)
-    bridge_work_path, reviews_work_path = _cluster_audit_work_paths(root)
-    if existing_rows and all(row.get("input_fingerprint") == fingerprint for row in existing_rows):
-        return existing_rows, 0
 
     _write_json(input_path, packet)
-    _stage_work_copy(root / "derived" / "bridge_concept_clusters.jsonl", bridge_work_path)
-    _stage_work_copy(existing_path, reviews_work_path)
+    _write_jsonl(bridge_input_path, reviewable_clusters)
+    _stage_cluster_audit_reviews_input(reviews_input_path, canonical_existing_reviews, target_cluster_ids)
     llm_fn = llm_factory("lint")
-    system, user = _cluster_audit_prompt(root, input_path, bridge_work_path, reviews_work_path)
+    system, user = _cluster_audit_prompt(root, input_path, bridge_input_path, reviews_input_path)
+
+    def _record_cluster_audit_raw_response(raw_text: str, phase: str) -> None:
+        path = _cluster_audit_raw_response_path(root, phase)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(raw_text), encoding="utf-8")
+
     parsed = _run_reflection_prompt_with_context(
         llm_fn,
         system,
         user,
-        "JSON object with keys: findings, new_clusters, context_requests",
+        _CLUSTER_AUDIT_DELTA_SCHEMA,
         tool,
+        raw_response_recorder=_record_cluster_audit_raw_response,
+    )
+    _write_json(_cluster_audit_parsed_response_path(root), parsed if isinstance(parsed, dict) else {"raw": parsed})
+
+    if not isinstance(parsed, dict):
+        raise EnrichmentError("Cluster audit output must be a JSON object")
+    if parsed.get("_finished") is not True:
+        raise EnrichmentError("Cluster audit output missing _finished=true")
+    parsed.pop("_finished", None)
+
+    bridge_updates = parsed.get("bridge_updates", [])
+    new_bridges = parsed.get("new_bridges", [])
+    review_updates = parsed.get("review_updates", [])
+    new_reviews = parsed.get("new_reviews", [])
+    if not isinstance(bridge_updates, list):
+        raise EnrichmentError("Cluster audit output field 'bridge_updates' must be a list")
+    if not isinstance(new_bridges, list):
+        raise EnrichmentError("Cluster audit output field 'new_bridges' must be a list")
+    if not isinstance(review_updates, list):
+        raise EnrichmentError("Cluster audit output field 'review_updates' must be a list")
+    if not isinstance(new_reviews, list):
+        raise EnrichmentError("Cluster audit output field 'new_reviews' must be a list")
+
+    context_requested = bool(parsed.get("context_requested"))
+    context_request_count = int(parsed.get("context_request_count", 0) or 0)
+    updated_cluster_ids: set[str] = set()
+    for idx, candidate in enumerate(bridge_updates, start=1):
+        if not isinstance(candidate, dict):
+            raise EnrichmentError(f"bridge_updates[{idx}] must be an object")
+        cluster_id = str(candidate.get("cluster_id", "")).strip()
+        if not cluster_id:
+            raise EnrichmentError(f"bridge_updates[{idx}] is missing cluster_id")
+        if cluster_id not in existing_cluster_by_id:
+            raise EnrichmentError(f"bridge_updates[{idx}] references unknown cluster_id '{cluster_id}'")
+        if cluster_id not in target_cluster_ids:
+            raise EnrichmentError(f"bridge_updates[{idx}] references cluster_id '{cluster_id}' outside audit_targets")
+        if cluster_id in updated_cluster_ids:
+            raise EnrichmentError(f"bridge_updates[{idx}] duplicates cluster_id '{cluster_id}'")
+        updated_cluster_ids.add(cluster_id)
+
+    for idx, review in enumerate(review_updates, start=1):
+        if not isinstance(review, dict):
+            raise EnrichmentError(f"review_updates[{idx}] must be an object")
+        cluster_id = str(review.get("cluster_id", "")).strip() or str(review.get("cluster_ref", "")).strip()
+        if not cluster_id:
+            raise EnrichmentError(f"review_updates[{idx}] is missing cluster_id")
+        if cluster_id not in target_cluster_ids:
+            raise EnrichmentError(f"review_updates[{idx}] references cluster_id '{cluster_id}' outside audit_targets")
+
+    concept_index = _cluster_audit_mutable_concept_index(local_rows)
+    assigned_pairs = _cover_pairs_from_clusters(clusters)
+
+    updated_bridge_rows = []
+    for idx, candidate in enumerate(bridge_updates, start=1):
+        cluster_id = str(candidate.get("cluster_id", "")).strip()
+        validated = _cluster_audit_apply_bridge_update(
+            candidate,
+            existing_cluster_by_id[cluster_id],
+            concept_index,
+            assigned_pairs,
+            label=f"bridge_updates[{idx}]",
+        )
+        updated_bridge_rows.append(validated)
+
+    new_bridge_candidates = []
+    new_bridge_refs: list[tuple[str, dict]] = []
+    dropped_new_bridge_refs: set[str] = set()
+    for idx, candidate in enumerate(new_bridges, start=1):
+        if not isinstance(candidate, dict):
+            raise EnrichmentError(f"new_bridges[{idx}] must be an object")
+        bridge_ref = str(candidate.get("bridge_ref", "")).strip()
+        if not bridge_ref:
+            raise EnrichmentError(f"new_bridges[{idx}] is missing bridge_ref")
+        validated = _cluster_audit_validate_bridge_candidate(
+            candidate,
+            concept_index,
+            assigned_pairs,
+            label=f"new_bridges[{idx}]",
+        )
+        if validated is None:
+            dropped_new_bridge_refs.add(bridge_ref)
+            continue
+        new_bridge_refs.append((bridge_ref, validated))
+        new_bridge_candidates.append(validated)
+
+    assigned_new_bridges = _assign_new_bridge_ids(new_bridge_candidates, clusters) if new_bridge_candidates else []
+    bridge_ref_map = {
+        bridge_ref: assigned_new_bridges[idx]
+        for idx, (bridge_ref, _candidate) in enumerate(new_bridge_refs)
+        if idx < len(assigned_new_bridges)
+    }
+
+    normalized_new_reviews = []
+    for idx, review in enumerate(new_reviews, start=1):
+        if not isinstance(review, dict):
+            raise EnrichmentError(f"new_reviews[{idx}] must be an object")
+        cluster_ref = _cluster_audit_review_ref(review)
+        if not cluster_ref:
+            raise EnrichmentError(f"new_reviews[{idx}] is missing cluster_ref")
+        if cluster_ref in bridge_ref_map:
+            normalized_new_reviews.append(review)
+            continue
+        if cluster_ref in dropped_new_bridge_refs:
+            continue
+        if cluster_ref in existing_cluster_by_id and cluster_ref not in target_cluster_ids:
+            raise EnrichmentError(f"new_reviews[{idx}] references cluster_id '{cluster_ref}' outside audit_targets")
+        normalized_new_reviews.append(review)
+    bridge_refs = {**existing_cluster_by_id, **bridge_ref_map}
+
+    bridge_work = sorted([
+        *[cluster for cluster in clusters if str(cluster.get("cluster_id", "")).strip() not in updated_cluster_ids],
+        *updated_bridge_rows,
+        *assigned_new_bridges,
+    ], key=lambda c: c.get("cluster_id", ""))
+    reviews_work, reviewed_cluster_ids = _cluster_audit_apply_review_delta(existing_rows, review_updates, normalized_new_reviews, bridge_refs)
+    required_review_ids = set(target_cluster_ids) | {
+        str(cluster.get("cluster_id", "")).strip()
+        for cluster in assigned_new_bridges
+        if str(cluster.get("cluster_id", "")).strip()
+    }
+    missing_review_ids = sorted(cluster_id for cluster_id in required_review_ids if cluster_id not in reviewed_cluster_ids)
+    if missing_review_ids:
+        raise EnrichmentError(
+            "Cluster audit must update review rows for every target or new bridge cluster: "
+            + ", ".join(missing_review_ids)
+        )
+    reviews_work = _ensure_cluster_audit_review_coverage(reviews_work, bridge_work)
+
+    final_cluster_fingerprints = _cluster_audit_cluster_fingerprints(bridge_work, route_signature)
+    reviews_work = _cluster_audit_finalize_reviews(
+        reviews_work,
+        final_cluster_fingerprints,
+        context_requested=context_requested,
+        context_request_count=context_request_count,
     )
 
-    original_bridge_work = _load_jsonl(bridge_work_path)
-    original_reviews_work = _load_jsonl(reviews_work_path)
-    bridge_work = original_bridge_work
-    reviews_work = original_reviews_work
-    context_requested = bool(parsed.get("context_requested")) if isinstance(parsed, dict) else False
-    context_request_count = int(parsed.get("context_request_count", 0) or 0) if isinstance(parsed, dict) else 0
+    if not isinstance(bridge_work, list) or any(not isinstance(cluster, dict) for cluster in bridge_work):
+        raise EnrichmentError("Cluster audit output produced invalid bridge clusters")
+    if not isinstance(reviews_work, list) or any(not isinstance(row, dict) for row in reviews_work):
+        raise EnrichmentError("Cluster audit output produced invalid cluster reviews")
 
     bridge_changed = bridge_work != clusters
-    reviews_changed = reviews_work != existing_rows
-
-    if not bridge_changed and not reviews_changed:
-        if isinstance(parsed, list):
-            findings = parsed
-            if not reviews_work:
-                synthesized = []
-                for idx, finding in enumerate(findings):
-                    if not isinstance(finding, dict):
-                        continue
-                    cluster_id = str(finding.get("cluster_id", "")).strip()
-                    target_cluster = next((c for c in clusters if str(c.get("cluster_id", "")).strip() == cluster_id), clusters[0] if clusters else {})
-                    synthesized.append({
-                        "review_id": f"{cluster_id or 'cluster'}:{idx}:{finding.get('finding_type','')}",
-                        "cluster_id": cluster_id,
-                        "finding_type": finding.get("finding_type", ""),
-                        "severity": finding.get("severity", ""),
-                        "recommendation": finding.get("recommendation", ""),
-                        "affected_material_ids": _safe_list(finding.get("affected_material_ids", [])),
-                        "affected_concept_names": _safe_list(finding.get("affected_concept_names", [])),
-                        "evidence": _safe_list(finding.get("evidence", [])),
-                        "input_fingerprint": fingerprint,
-                        "context_requested": context_requested,
-                        "context_request_count": context_request_count,
-                        "wiki_path": str(_concept_page_path(target_cluster)),
-                    })
-                reviews_work = synthesized
-        elif isinstance(parsed, dict):
-            if not reviews_work:
-                findings = parsed.get("findings", [])
-                if isinstance(findings, list):
-                    synthesized = []
-                    for idx, finding in enumerate(findings):
-                        if not isinstance(finding, dict):
-                            continue
-                        cluster_id = str(finding.get("cluster_id", "")).strip()
-                        target_cluster = next((c for c in clusters if str(c.get("cluster_id", "")).strip() == cluster_id), clusters[0] if clusters else {})
-                        synthesized.append({
-                            "review_id": f"{cluster_id or 'cluster'}:{idx}:{finding.get('finding_type','')}",
-                            "cluster_id": cluster_id,
-                            "finding_type": finding.get("finding_type", ""),
-                            "severity": finding.get("severity", ""),
-                            "recommendation": finding.get("recommendation", ""),
-                            "affected_material_ids": _safe_list(finding.get("affected_material_ids", [])),
-                            "affected_concept_names": _safe_list(finding.get("affected_concept_names", [])),
-                            "evidence": _safe_list(finding.get("evidence", [])),
-                            "input_fingerprint": fingerprint,
-                            "context_requested": context_requested,
-                            "context_request_count": context_request_count,
-                            "wiki_path": str(_concept_page_path(target_cluster)),
-                        })
-                    reviews_work = synthesized
-            bridge_candidates = parsed.get("new_clusters", parsed.get("clusters", []))
-            if isinstance(bridge_candidates, list) and bridge_candidates:
-                concept_index: dict[tuple[str, str], dict] = {}
-                for row in local_rows:
-                    concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type, descriptor = _split_concept_row(row)
-                    concept_index[(material_id, concept_key)] = {
-                        "concept_name": concept_name,
-                        "concept_key": concept_key,
-                        "material_id": material_id,
-                        "concept_type": concept_type,
-                        "relevance": relevance,
-                        "source_pages": source_pages,
-                        "evidence_spans": evidence_spans,
-                        "confidence": confidence,
-                        "descriptor": descriptor,
-                    }
-                validated = _validate_bridge_and_attach_provenance(bridge_candidates, concept_index, {})
-                covered_pairs = _cover_pairs_from_clusters(clusters)
-                discovered = []
-                for cluster in validated:
-                    filtered_sources = [
-                        source for source in cluster.get("source_concepts", [])
-                        if (source.get("material_id", ""), source.get("concept_key", "")) not in covered_pairs
-                    ]
-                    material_ids = list(dict.fromkeys(source.get("material_id", "") for source in filtered_sources if source.get("material_id", "")))
-                    if len(material_ids) < 2:
-                        continue
-                    canonical_name = cluster.get("canonical_name", "").strip()
-                    aliases = _dedupe_strings([
-                        canonical_name,
-                        *(_safe_list(cluster.get("aliases", []))),
-                        *[source.get("concept_name", "") for source in filtered_sources if source.get("concept_name", "")],
-                    ])
-                    discovered.append({
-                        "canonical_name": canonical_name or filtered_sources[0].get("concept_name", ""),
-                        "slug": slugify(canonical_name or filtered_sources[0].get("concept_name", "")),
-                        "aliases": aliases,
-                        "material_ids": material_ids,
-                        "source_concepts": filtered_sources,
-                        "confidence": float(cluster.get("confidence", 0.0) or 0.0),
-                    })
-                if discovered:
-                    assigned = _assign_new_bridge_ids(discovered, clusters)
-                    bridge_work = sorted([*clusters, *assigned], key=lambda c: c.get("cluster_id", ""))
-                    bridge_changed = bridge_work != clusters
-
-    if not bridge_work:
-        bridge_work = clusters
-    if not reviews_work:
-        reviews_work = existing_rows
-    if isinstance(reviews_work, list):
-        for row in reviews_work:
-            if isinstance(row, dict):
-                row["context_requested"] = context_requested
-                row["context_request_count"] = context_request_count
-
-    if not isinstance(bridge_work, list) or any(not isinstance(cluster, dict) for cluster in bridge_work):
-        raise EnrichmentError("Bridge audit work file returned invalid bridge clusters")
-    if not isinstance(reviews_work, list) or any(not isinstance(row, dict) for row in reviews_work):
-        raise EnrichmentError("Bridge audit work file returned invalid cluster reviews")
 
     run_at = datetime.now(timezone.utc).isoformat()
     _attach_run_provenance(reviews_work, route_signature, run_at)
     _attach_run_provenance(bridge_work, route_signature, run_at)
     _write_jsonl(root / LINT_DIR / "cluster_reviews.jsonl", reviews_work)
+    _write_lint_stage_stamp(root, audited_at=run_at)
+    remaining_local_rows = _filter_local_rows_not_in_bridge(local_rows, bridge_work)
+    _write_stamp(
+        root / CLUSTER_AUDIT_STATE_PATH,
+        {
+            "pending_local_fingerprint": _cluster_audit_pending_local_fingerprint(remaining_local_rows, route_signature),
+            "pending_local_concepts": len(remaining_local_rows),
+        },
+    )
     _write_jsonl(root / "derived" / "bridge_concept_clusters.jsonl", bridge_work)
     stamp_path = root / "derived" / "bridge_cluster_stamp.json"
     stamp_path.write_text(
@@ -2807,7 +3648,8 @@ def _run_cluster_audit(
         }, separators=(',', ':')),
         encoding="utf-8",
     )
-    _cleanup_paths(input_path, bridge_work_path, reviews_work_path, bridge_packets_path or Path())
+    _cleanup_paths(input_path, bridge_input_path, reviews_input_path, bridge_packets_path or Path())
+    _cleanup_cluster_audit_debug_artifacts(root)
     return reviews_work, int(bridge_changed)
 
 
@@ -2833,48 +3675,31 @@ def _run_concept_reflections(
             return existing_record
         page_copy_path = _concept_reflection_page_copy_path(root, cluster.get("cluster_id", ""))
         evidence_path = _concept_reflection_evidence_path(root, cluster.get("cluster_id", ""))
-        work_path = _concept_reflection_work_path(root, cluster.get("cluster_id", ""))
         _stage_reflection_page_copy(page_path, page_copy_path)
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         _write_json(evidence_path, evidence_payload)
         scaffold = _concept_reflection_scaffold(cluster, fingerprint, root)
-        _write_json(work_path, scaffold)
         llm_fn = llm_factory("cluster")
-        system, user = _concept_reflection_prompt(cluster, page_copy_path, evidence_path, work_path)
+        system, user = _concept_reflection_prompt(page_copy_path, evidence_path)
         succeeded = False
         try:
-            _run_file_editing_prompt(llm_fn, system, user)
-            final_record = _load_json(work_path, {})
-            if not isinstance(final_record, dict):
-                raise EnrichmentError("Concept reflection work file returned invalid JSON")
-            record = {
-                **scaffold,
-                **final_record,
-                "cluster_id": cluster.get("cluster_id", ""),
-                "slug": cluster.get("slug", ""),
-                "canonical_name": cluster.get("canonical_name", ""),
-                "input_fingerprint": fingerprint,
-                "wiki_path": str(page_path.relative_to(root)),
-            }
-            record["main_takeaways"] = _safe_list(record.get("main_takeaways", []))
-            record["main_tensions"] = _safe_list(record.get("main_tensions", []))
-            record["open_questions"] = _safe_list(record.get("open_questions", []))
-            record["why_this_concept_matters"] = str(record.get("why_this_concept_matters", "")).strip()
-            record["supporting_material_ids"] = sorted({
-                str(mid).strip()
-                for mid in _safe_list(record.get("supporting_material_ids", []))
-                if str(mid).strip()
-            })
-            record["supporting_evidence"] = sorted({
-                str(span).strip()
-                for span in _safe_list(record.get("supporting_evidence", []))
-                if str(span).strip()
-            })
+            if tool is not None:
+                parsed = _run_reflection_prompt_with_context(
+                    llm_fn,
+                    system,
+                    user,
+                    _CONCEPT_REFLECTION_DELTA_SCHEMA,
+                    tool,
+                )
+            else:
+                raw = llm_fn(system, [{"role": "user", "content": user}])
+                parsed = parse_json_or_repair(llm_fn, raw, _CONCEPT_REFLECTION_DELTA_SCHEMA)
+            record = _compile_concept_reflection_response(cluster, scaffold, fingerprint, parsed, existing_record)
             succeeded = True
             return record
         finally:
             if succeeded:
-                _cleanup_paths(evidence_path, work_path, page_copy_path)
+                _cleanup_paths(evidence_path, page_copy_path)
 
     if len(eligible) > 1 and workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -2890,8 +3715,10 @@ def _run_concept_reflections(
                 output.append(record)
 
     output.sort(key=lambda r: r.get("cluster_id", ""))
-    _attach_run_provenance(output, route_signature, datetime.now(timezone.utc).isoformat())
+    run_at = datetime.now(timezone.utc).isoformat()
+    _attach_run_provenance(output, route_signature, run_at)
     _write_jsonl(root / LINT_DIR / "concept_reflections.jsonl", output)
+    _write_lint_stage_stamp(root, concept_reflection_at=run_at)
     return output
 
 
@@ -2917,49 +3744,39 @@ def _run_collection_reflections(
             return existing_record
         page_copy_path = _collection_reflection_page_copy_path(root, domain, collection)
         evidence_path = _collection_reflection_evidence_path(root, domain, collection)
-        work_path = _collection_reflection_work_path(root, domain, collection)
         _stage_reflection_page_copy(page_path, page_copy_path)
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_payload = _build_collection_reflection_evidence_payload(root, domain, collection, metas, clusters, existing_record, tool)
         _write_json(evidence_path, evidence_payload)
         scaffold = _collection_reflection_scaffold(domain, collection, fingerprint, root)
-        _write_json(work_path, scaffold)
         llm_fn = llm_factory("cluster")
-        system, user = _collection_reflection_prompt(domain, collection, page_copy_path, evidence_path, work_path)
+        system, user = _collection_reflection_prompt(domain, collection, page_copy_path, evidence_path)
         succeeded = False
         try:
-            _run_file_editing_prompt(llm_fn, system, user)
-            final_record = _load_json(work_path, {})
-            if not isinstance(final_record, dict):
-                raise EnrichmentError("Collection reflection work file returned invalid JSON")
-            record = {
-                **scaffold,
-                **final_record,
-                "collection_key": key,
-                "domain": domain,
-                "collection": collection,
-                "input_fingerprint": fingerprint,
-                "wiki_path": str(page_path.relative_to(root)),
-            }
-            record["main_takeaways"] = _safe_list(record.get("main_takeaways", []))
-            record["main_tensions"] = _safe_list(record.get("main_tensions", []))
-            record["important_material_ids"] = sorted({
-                str(mid).strip()
-                for mid in _safe_list(record.get("important_material_ids", []))
-                if str(mid).strip()
-            })
-            record["important_cluster_ids"] = sorted({
-                str(cid).strip()
-                for cid in _safe_list(record.get("important_cluster_ids", []))
-                if str(cid).strip()
-            })
-            record["open_questions"] = _safe_list(record.get("open_questions", []))
-            record["why_this_collection_matters"] = str(record.get("why_this_collection_matters", "")).strip()
+            if tool is not None:
+                parsed = _run_reflection_prompt_with_context(
+                    llm_fn,
+                    system,
+                    user,
+                    _COLLECTION_REFLECTION_DELTA_SCHEMA,
+                    tool,
+                )
+            else:
+                raw = llm_fn(system, [{"role": "user", "content": user}])
+                parsed = parse_json_or_repair(llm_fn, raw, _COLLECTION_REFLECTION_DELTA_SCHEMA)
+            record = _compile_collection_reflection_response(
+                domain,
+                collection,
+                scaffold,
+                fingerprint,
+                parsed,
+                existing_record,
+            )
             succeeded = True
             return record
         finally:
             if succeeded:
-                _cleanup_paths(evidence_path, work_path, page_copy_path)
+                _cleanup_paths(evidence_path, page_copy_path)
 
     if len(eligible) > 1 and workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:
@@ -2975,8 +3792,10 @@ def _run_collection_reflections(
                 output.append(record)
 
     output.sort(key=lambda r: (r.get("domain", ""), r.get("collection", "")))
-    _attach_run_provenance(output, route_signature, datetime.now(timezone.utc).isoformat())
+    run_at = datetime.now(timezone.utc).isoformat()
+    _attach_run_provenance(output, route_signature, run_at)
     _write_jsonl(root / LINT_DIR / "collection_reflections.jsonl", output)
+    _write_lint_stage_stamp(root, collection_reflection_at=run_at)
     return output
 
 
@@ -2993,7 +3812,7 @@ def _run_graph_reflection(
     route_signature: str = "",
 ) -> dict:
     packet_path = _graph_reflection_packet_path(root)
-    work_path = _graph_reflection_work_path(root)
+    current_path = _graph_reflection_existing_path(root)
     payload = _graph_reflection_packet(
         deterministic_report,
         bridge_clusters,
@@ -3004,6 +3823,7 @@ def _run_graph_reflection(
     )
     fingerprint = canonical_hash(payload)
     findings_path = root / LINT_DIR / "graph_findings.jsonl"
+    existing_rows = _load_jsonl(findings_path)
     if findings_path.exists() and fingerprint and _read_stamp(root / GRAPH_REFLECTION_STAMP_PATH).get("graph_fingerprint") == fingerprint:
         return {
             "graph_maintenance": 0,
@@ -3011,48 +3831,22 @@ def _run_graph_reflection(
             "graph_skip_reason": "graph maintenance unchanged",
         }
 
-    if work_path.exists():
-        work_path.unlink()
-    work_path.parent.mkdir(parents=True, exist_ok=True)
-    work_path.write_text(_graph_reflection_scaffold(), encoding="utf-8")
+    _stage_work_copy(findings_path, current_path)
     _write_json(packet_path, payload)
 
     llm_fn = llm_factory("lint")
-    system, user = _graph_reflection_prompt(packet_path, work_path)
+    system, user = _graph_reflection_prompt(packet_path, current_path)
     succeeded = False
     try:
-        _run_file_editing_prompt(llm_fn, system, user)
-        final_record = _load_json(work_path, {})
-        if not isinstance(final_record, dict):
-            raise EnrichmentError("Graph maintenance work file returned invalid JSON")
-        findings = final_record.get("findings", [])
-        if not isinstance(findings, list):
-            raise EnrichmentError("Graph maintenance work file returned invalid findings")
-        normalized = []
-        for idx, finding in enumerate(findings):
-            if not isinstance(finding, dict):
-                continue
-            finding_id = str(finding.get("finding_id", "")).strip()
-            if not finding_id:
-                finding_id = f"graph:{idx}"
-            normalized.append({
-                "finding_id": finding_id,
-                "finding_type": str(finding.get("finding_type", "")).strip(),
-                "severity": str(finding.get("severity", "")).strip(),
-                "summary": str(finding.get("summary", "")).strip(),
-                "details": str(finding.get("details", "")).strip(),
-                "affected_material_ids": _dedupe_strings(_safe_list(finding.get("affected_material_ids", []))),
-                "affected_cluster_ids": _dedupe_strings(_safe_list(finding.get("affected_cluster_ids", []))),
-                "candidate_future_sources": _dedupe_strings(_safe_list(finding.get("candidate_future_sources", []))),
-                "candidate_bridge_links": _dedupe_strings(_safe_list(finding.get("candidate_bridge_links", []))),
-                "input_fingerprint": fingerprint,
-            })
+        raw = llm_fn(system, [{"role": "user", "content": user}])
+        parsed = parse_json_or_repair(llm_fn, raw, _GRAPH_REFLECTION_DELTA_SCHEMA)
+        normalized = _compile_graph_reflection_response(parsed, existing_rows, fingerprint)
         _attach_run_provenance(normalized, route_signature, datetime.now(timezone.utc).isoformat())
         _write_jsonl(findings_path, normalized)
         succeeded = True
     finally:
         if succeeded:
-            _cleanup_paths(packet_path, work_path)
+            _cleanup_paths(packet_path, current_path)
 
     _write_stamp(
         root / GRAPH_REFLECTION_STAMP_PATH,
@@ -3068,6 +3862,7 @@ def _run_graph_reflection(
             "finding_count": len(normalized),
         },
     )
+    _write_lint_stage_stamp(root, graph_reflection_at=datetime.now(timezone.utc).isoformat())
     return {
         "graph_maintenance": len(normalized),
         "graph_skipped": False,
@@ -3080,9 +3875,11 @@ def run_reflective_lint(
     llm_factory=None,
     apply: bool = False,
     scheduled: bool = False,
+    stages: list[str] | tuple[str, ...] | None = None,
 ) -> dict:
     """Run the reflective LLM passes and project outputs to disk."""
     root = get_project_root()
+    selected_stages = _normalize_lint_stages(stages) or list(LINT_REFLECTIVE_STAGES)
     manifest_records = _load_manifest(root)
     metas = _load_all_metas(root, manifest_records)
     material_info = _build_material_info(root, manifest_records)
@@ -3102,9 +3899,11 @@ def run_reflective_lint(
             "concept_reflections": 0,
             "collection_reflections": 0,
             "graph_maintenance": 0,
+            "stages": selected_stages,
             "applied": False,
             "skipped": True,
             "graph_skipped": True,
+            "graph_skip_reason": "search index missing",
         }
 
     if llm_factory is None:
@@ -3123,63 +3922,108 @@ def run_reflective_lint(
         )
 
     with ReflectionIndexTool(root) as tool:
-        cluster_reviews, bridge_changes = _run_cluster_audit(
-            root,
-            clusters,
-            material_info,
-            lint_route_signature,
-            llm_factory,
-            tool,
-        )
-        _refresh_sql_and_wiki()
-        bridge_clusters = load_bridge_clusters(root)
-        concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool, lint_route_signature)
-        _refresh_sql_and_wiki()
-        collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool, lint_route_signature)
-        _refresh_sql_and_wiki()
-        graph_due, graph_reason = _graph_reflection_due(
-            root,
-            config,
-            bridge_clusters,
-            manifest_records,
-            cluster_reviews,
-            concept_refs,
-            collection_refs,
-            deterministic_report,
-        )
-        if graph_due or not scheduled:
-            graph_result = _run_graph_reflection(
+        cluster_reviews = _load_jsonl(root / LINT_DIR / "cluster_reviews.jsonl")
+        concept_refs = _load_jsonl(root / LINT_DIR / "concept_reflections.jsonl")
+        collection_refs = _load_jsonl(root / LINT_DIR / "collection_reflections.jsonl")
+        bridge_changes = 0
+        cluster_review_count = 0
+        concept_reflection_count = 0
+        collection_reflection_count = 0
+        skipped = True
+        skip_reason = ""
+
+        if "cluster-audit" in selected_stages:
+            cluster_due, cluster_reason = _cluster_audit_due(root, bridge_clusters)
+            if cluster_due:
+                cluster_reviews, bridge_changes = _run_cluster_audit(
+                    root,
+                    clusters,
+                    material_info,
+                    lint_route_signature,
+                    llm_factory,
+                    tool,
+                )
+                cluster_review_count = len(cluster_reviews)
+                _refresh_sql_and_wiki()
+                bridge_clusters = load_bridge_clusters(root)
+                skipped = False
+            elif not skip_reason:
+                skip_reason = cluster_reason
+
+        if "concept-reflection" in selected_stages:
+            concept_due, concept_reason = _concept_reflection_due(root)
+            if concept_due:
+                concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool, lint_route_signature)
+                concept_reflection_count = len(concept_refs)
+                _refresh_sql_and_wiki()
+                skipped = False
+            elif not skip_reason:
+                skip_reason = concept_reason
+
+        if "collection-reflection" in selected_stages:
+            collection_due, collection_reason = _collection_reflection_due(root)
+            if collection_due:
+                collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool, lint_route_signature)
+                collection_reflection_count = len(collection_refs)
+                _refresh_sql_and_wiki()
+                skipped = False
+            elif not skip_reason:
+                skip_reason = collection_reason
+
+        if "graph-maintenance" in selected_stages:
+            graph_due, graph_reason = _graph_reflection_due(
                 root,
-                deterministic_report,
+                config,
+                bridge_clusters,
+                manifest_records,
                 cluster_reviews,
                 concept_refs,
                 collection_refs,
-                bridge_clusters,
-                manifest_records,
-                llm_factory,
-                tool,
-                lint_route_signature,
+                deterministic_report,
             )
-            graph_maintenance = int(graph_result.get("graph_maintenance", 0) or 0)
-            graph_skipped = bool(graph_result.get("graph_skipped", False))
-            graph_skip_reason = str(graph_result.get("graph_skip_reason", "") or "")
-            _refresh_sql_and_wiki()
+            if graph_due:
+                graph_result = _run_graph_reflection(
+                    root,
+                    deterministic_report,
+                    cluster_reviews,
+                    concept_refs,
+                    collection_refs,
+                    bridge_clusters,
+                    manifest_records,
+                    llm_factory,
+                    tool,
+                    lint_route_signature,
+                )
+                graph_maintenance = int(graph_result.get("graph_maintenance", 0) or 0)
+                graph_skipped = bool(graph_result.get("graph_skipped", False))
+                graph_skip_reason = str(graph_result.get("graph_skip_reason", "") or "")
+                _refresh_sql_and_wiki()
+                skipped = False
+            else:
+                graph_maintenance = 0
+                graph_skipped = True
+                graph_skip_reason = graph_reason
+                if not skip_reason:
+                    skip_reason = graph_reason
         else:
             graph_maintenance = 0
             graph_skipped = True
-            graph_skip_reason = graph_reason
+            graph_skip_reason = "stage not selected"
 
     # Always refresh memory so the reflection tables are queryable.
     memory_rebuild(config)
 
     return {
-        "cluster_reviews": len(cluster_reviews),
+        "cluster_reviews": cluster_review_count,
         "bridge_cluster_changes": bridge_changes,
         "bridge_cluster_discovery": bridge_changes,
-        "concept_reflections": len(concept_refs),
-        "collection_reflections": len(collection_refs),
+        "concept_reflections": concept_reflection_count,
+        "collection_reflections": collection_reflection_count,
         "graph_maintenance": graph_maintenance,
+        "stages": selected_stages,
         "applied": apply,
+        "skipped": skipped,
+        "skip_reason": skip_reason,
         "graph_skipped": graph_skipped,
         "graph_skip_reason": graph_skip_reason,
     }
@@ -3198,6 +4042,7 @@ def run_lint(
     fix: bool = False,
     llm_factory=None,
     scheduled: bool = False,
+    stages: list[str] | tuple[str, ...] | None = None,
 ) -> dict:
     """Run lint in quick or full mode and return a structured summary."""
 
@@ -3217,7 +4062,8 @@ def run_lint(
         except Exception:
             pass
 
-    requested_mode = "full" if full else "quick"
+    selected_stages = _normalize_lint_stages(stages)
+    requested_mode = "staged" if selected_stages else ("full" if full else "quick")
     _append_log(lint_start_time.isoformat(), "START", requested_mode, fix, report, scheduled)
 
     try:
@@ -3225,13 +4071,15 @@ def run_lint(
             config = load_config()
         if quick and full:
             raise ValueError("lint cannot be both quick and full")
-        if not quick and not full:
+        if quick and selected_stages:
+            raise ValueError("lint --quick cannot be combined with --stage")
+        if not quick and not full and not selected_stages:
             quick = True
-        apply = fix or full
+        apply = fix or full or bool(selected_stages)
 
         deterministic = run_deterministic_lint(config)
         result = {
-            "mode": "full" if full else "quick",
+            "mode": "staged" if selected_stages else ("full" if full else "quick"),
             "deterministic": deterministic,
             "reflection": None,
             "fixes": None,
@@ -3241,34 +4089,15 @@ def run_lint(
         if apply:
             result["fixes"] = _apply_deterministic_fixes(deterministic, config)
 
-        full_reflection_ran = False
-        if full:
-            graph_due, graph_reason = _full_lint_due(root, deterministic, config)
-            if scheduled and not graph_due:
-                result["reflection"] = {
-                    "cluster_reviews": 0,
-                    "bridge_cluster_changes": 0,
-                    "bridge_cluster_discovery": 0,
-                    "concept_reflections": 0,
-                    "collection_reflections": 0,
-                    "graph_maintenance": 0,
-                    "applied": False,
-                    "skipped": True,
-                    "graph_skipped": True,
-                    "graph_skip_reason": graph_reason,
-                }
-            else:
-                result["reflection"] = run_reflective_lint(
-                    config,
-                    deterministic,
-                    llm_factory=llm_factory,
-                    apply=apply,
-                    scheduled=scheduled,
-                )
-                full_reflection_ran = True
-
-        if full and full_reflection_ran:
-            _write_full_lint_stamp(root, deterministic)
+        if selected_stages or full:
+            result["reflection"] = run_reflective_lint(
+                config,
+                deterministic,
+                llm_factory=llm_factory,
+                apply=apply,
+                scheduled=scheduled,
+                stages=selected_stages if selected_stages else None,
+            )
 
         if report or full or fix:
             report_text = render_lint_report(deterministic)

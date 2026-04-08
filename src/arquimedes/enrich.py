@@ -347,22 +347,17 @@ def enrich(
             output_dir = extracted_dir / mid
             if not _has_extraction(output_dir):
                 continue
-            # Check if any requested stage is stale
-            any_stale = False
-            if "document" in requested_stages and _is_document_stale(output_dir, config):
-                any_stale = True
-            elif "chunk" in requested_stages and _is_chunk_stale(output_dir, config):
-                any_stale = True
-            elif "figure" in requested_stages and _is_figure_stale(output_dir, config):
-                any_stale = True
-            elif "metadata" in requested_stages and _is_metadata_stale(output_dir, config):
-                any_stale = True
-            elif (
+            metadata_needed = (
                 not explicit_stage_selection
                 and ("document" in requested_stages or "chunk" in requested_stages)
-                and _is_metadata_stale(output_dir, config)
-            ):
-                any_stale = True
+            )
+            any_stale = (
+                ("document" in requested_stages and _is_document_stale(output_dir, config))
+                or ("chunk" in requested_stages and _is_chunk_stale(output_dir, config))
+                or ("figure" in requested_stages and _is_figure_stale(output_dir, config))
+                or ("metadata" in requested_stages and _is_metadata_stale(output_dir, config))
+                or (metadata_needed and _is_metadata_stale(output_dir, config))
+            )
             if force or any_stale:
                 to_process[mid] = entry
 

@@ -120,7 +120,7 @@ def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
 
     click.echo("Running deterministic extraction...")
     try:
-        extracted = do_extract_raw(material_id=material_id)
+        extracted = do_extract_raw(material_id=material_id, force=force)
     except (ValueError, FileNotFoundError) as e:
         raise click.ClickException(str(e))
 
@@ -360,16 +360,23 @@ def compile(full: bool, force_cluster: bool, recompile_pages: bool):
 @cli.command()
 @click.option("--quick", is_flag=True, help="Deterministic checks only (no LLM)")
 @click.option("--full", is_flag=True, help="Deterministic checks plus reflective LLM passes")
+@click.option(
+    "--stage",
+    "stages",
+    multiple=True,
+    type=click.Choice(["cluster-audit", "concept-reflection", "collection-reflection", "graph-maintenance"], case_sensitive=False),
+    help="Run only specific reflective stage(s). Repeatable.",
+)
 @click.option("--report", is_flag=True, help="Write report to wiki/_lint_report.md")
 @click.option("--fix", is_flag=True, help="Auto-fix deterministic issues, queue LLM suggestions")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON")
-def lint(quick: bool, full: bool, report: bool, fix: bool, as_json: bool):
+def lint(quick: bool, full: bool, stages: tuple[str, ...], report: bool, fix: bool, as_json: bool):
     """Run health checks on the knowledge base."""
     from arquimedes.config import load_config
     from arquimedes.lint import lint_exit_code, run_lint
 
     try:
-        result = run_lint(load_config(), quick=quick, full=full, report=report, fix=fix)
+        result = run_lint(load_config(), quick=quick, full=full, report=report, fix=fix, stages=list(stages) if stages else None)
     except (ValueError, FileNotFoundError) as e:
         raise click.ClickException(str(e))
     except Exception as e:

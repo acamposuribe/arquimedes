@@ -560,6 +560,14 @@ def compile_wiki(
         for row in _load_jsonl(lint_dir / "concept_reflections.jsonl")
         if row.get("cluster_id", "")
     }
+    cluster_reviews_by_cluster: dict[str, list[dict]] = {}
+    for row in _load_jsonl(lint_dir / "cluster_reviews.jsonl"):
+        if not isinstance(row, dict):
+            continue
+        cluster_id = str(row.get("cluster_id", "")).strip()
+        if not cluster_id:
+            continue
+        cluster_reviews_by_cluster.setdefault(cluster_id, []).append(row)
     collection_reflections = {
         f"{row.get('domain', '')}/{row.get('collection', '')}": row
         for row in _load_jsonl(lint_dir / "collection_reflections.jsonl")
@@ -685,6 +693,7 @@ def compile_wiki(
                 related_concepts,
                 material_paths,
                 concept_reflections.get(c.get("cluster_id", "")),
+                cluster_reviews_by_cluster.get(str(c.get("cluster_id", "")).strip(), []),
             )
             page_path = wiki_root / Path(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md").relative_to("wiki")
             _write_page(page_path, content)

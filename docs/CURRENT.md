@@ -100,22 +100,32 @@ The schema is intentionally compact to reduce token use and now lives in `_BRIDG
 
 This migration is not global.
 
-Phase-6 reflective lint flows in [src/arquimedes/lint.py](src/arquimedes/lint.py) still include work-file editing patterns and `PROCESS_FINISHED` sentinels. Those were not migrated in this pass.
+Phase-6 reflective lint is now mixed:
+
+- cluster audit uses the same final-JSON pattern as document enrich / bridge cluster
+- concept reflection now uses the same final-JSON pattern with deterministic post-apply into `concept_reflections.jsonl`, including per-field `null => preserve existing value` handling
+- collection reflection now uses the same final-JSON pattern with deterministic post-apply into `collection_reflections.jsonl`, including per-field `null => preserve existing value` handling
+- graph maintenance now uses the same final-JSON pattern with deterministic post-apply into `graph_findings.jsonl`, with `findings: null` preserving the stored findings list unchanged
 
 So the current state is:
 
 - document enrich: JSON-return flow
 - metadata-fix: JSON-return flow
 - bridge cluster: JSON-return flow
-- lint reflection passes: still mixed / work-file oriented in places
+- lint cluster audit: JSON-return flow with one canonical persistent review row per bridge cluster
+- lint concept reflection: JSON-return flow with deterministic post-compile into the canonical reflection row
+- lint collection reflection: JSON-return flow with deterministic post-compile into the canonical reflection row
+- lint graph maintenance: JSON-return flow with deterministic post-compile into the canonical findings rows
 
-If the next agent wants to continue removing file-edit output workflows, lint is the next obvious surface.
+Reflective lint gating now uses one shared `derived/lint/lint_stamp.json`: `audited_at`, `concept_reflection_at`, `collection_reflection_at`, and `graph_reflection_at` are each compared against the latest `derived/bridge_cluster_stamp.json` as the outer gate. After that outer gate, every reflective stage still applies its own internal conditions: cluster audit narrows work to changed/open bridge clusters plus changed uncovered-local packets, concept reflection skips unchanged eligible clusters by row fingerprint, collection reflection skips unchanged eligible collections by row fingerprint, and graph maintenance still applies its own unchanged/schedule checks. Only cluster audit and graph maintenance need extra persisted internal state files beyond the shared outer lint stamp.
+
+The LLM-edited output work-file pattern is now removed from the current lint reflection surfaces.
 
 
 ## Suggested Next Pickup
 
 If continuing from here, the highest-value follow-on tasks are:
 
-1. Migrate remaining lint reflective passes away from LLM-edited work files and onto the same final-JSON contract.
-2. Keep schema definitions compact and system-prompt-local for every migrated stage.
-3. Preserve the distinction between staged input files and model-owned output files: input staging is fine, output editing is what should be avoided.
+1. Keep schema definitions compact and system-prompt-local for every migrated stage.
+2. Preserve the distinction between staged input files and model-owned output files: input staging is fine, output editing is what should be avoided.
+3. If continuing this cleanup outside lint, apply the same final-JSON/post-apply contract to any remaining LLM-owned output-edit workflows.

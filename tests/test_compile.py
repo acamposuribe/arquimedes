@@ -157,6 +157,7 @@ def test_validate_bridge_allows_multiple_concepts_from_same_material():
     raw_clusters = [{
         "cluster_id": "bridge_0001",
         "canonical_name": "archive as spatial memory infrastructure",
+        "descriptor": "How archives organize memory as a built spatial system.",
         "aliases": ["archival habitat", "memory palace", "archive as space"],
         "source_concepts": [
             {"material_id": "mat_aaa", "concept_name": "archival habitat"},
@@ -175,6 +176,7 @@ def test_validate_bridge_allows_multiple_concepts_from_same_material():
 
     assert len(validated) == 1
     assert validated[0]["canonical_name"] == "archive as spatial memory infrastructure"
+    assert validated[0]["descriptor"] == "How archives organize memory as a built spatial system."
     assert len(validated[0]["source_concepts"]) == 3
     assert set(validated[0]["material_ids"]) == {"mat_aaa", "mat_bbb"}
 
@@ -204,74 +206,39 @@ def test_bridge_cluster_parse_and_write(tmp_path, monkeypatch):
 
     def mock_llm(system, messages):
         prompt = messages[0]["content"]
-        import re
-        match = re.search(r"Edit (.+) in place\.", prompt)
-        assert match is not None
-        work_path = Path(match.group(1).strip())
-        clusters = [
-            {
-                "cluster_id": "bridge_0001",
-                "canonical_name": "archive as architectural space",
-                "slug": "archive-as-architectural-space",
-                "aliases": ["archive as architectural space", "archival habitat", "archive as space"],
-                "material_ids": ["mat_aaa", "mat_bbb"],
-                "source_concepts": [
-                    {
-                        "material_id": "mat_aaa",
-                        "concept_name": "archival habitat",
-                        "relevance": "high",
-                        "source_pages": [1, 3],
-                        "evidence_spans": ["the archive as a built environment"],
-                        "confidence": 0.9,
-                    },
-                    {
-                        "material_id": "mat_bbb",
-                        "concept_name": "archive as space",
-                        "relevance": "high",
-                        "source_pages": [2, 5],
-                        "evidence_spans": ["spatial dimension of archival practice"],
-                        "confidence": 0.85,
-                    },
-                ],
-                "confidence": 0.85,
-            },
-            {
-                "cluster_id": "bridge_0002",
-                "canonical_name": "memory palace",
-                "slug": "memory-palace",
-                "aliases": ["memory palace"],
-                "material_ids": ["mat_aaa"],
-                "source_concepts": [
-                    {
-                        "material_id": "mat_aaa",
-                        "concept_name": "memory palace",
-                        "relevance": "medium",
-                        "source_pages": [4],
-                        "evidence_spans": ["structures of collective memory"],
-                        "confidence": 0.7,
-                    },
-                ],
-                "confidence": 0.9,
-            },
-        ]
-        work_path.write_text(
-            "\n".join(json.dumps(cluster) for cluster in clusters) + "\n",
-            encoding="utf-8",
-        )
-        return "PROCESS_FINISHED"
+        assert "Read the new concepts packet file from" in prompt
+        assert "Read the existing bridge cluster memory file from" in prompt
+        assert "Use links_to_existing only" in prompt
+        assert "Use new_clusters when packet concepts should form a new cross-material umbrella cluster instead." in prompt
+        return json.dumps({
+            "links_to_existing": [],
+            "new_clusters": [
+                {
+                    "canonical_name": "archive as architectural space",
+                    "descriptor": "How archival form turns storage into a spatial practice.",
+                    "aliases": ["archive as architectural space", "archival habitat", "archive as space"],
+                    "source_concepts": [
+                        {"material_id": "mat_aaa", "concept_name": "archival habitat"},
+                        {"material_id": "mat_bbb", "concept_name": "archive as space"},
+                    ],
+                }
+            ],
+            "_finished": True,
+        })
 
     config = {"llm": {"agent_cmd": "echo"}}
     clusters = cluster_mod.cluster_bridge_concepts(config, llm_fn=mock_llm, force=True)
 
-    assert clusters["clusters"] == 2
+    assert clusters["clusters"] == 1
     assert clusters["bridge_concepts"] == 3
     assert clusters["multi_material"] == 1
 
     written = load_bridge_clusters(tmp_path)
-    assert len(written) == 2
+    assert len(written) == 1
 
     c0 = written[0]
     assert c0["canonical_name"] == "archive as architectural space"
+    assert c0["descriptor"] == "How archival form turns storage into a spatial practice."
     assert c0["slug"] == "archive-as-architectural-space"
     assert set(c0["material_ids"]) == {"mat_aaa", "mat_bbb"}
     assert len(c0["source_concepts"]) == 2
@@ -381,6 +348,7 @@ def test_concept_page_evidence():
     cluster = {
         "cluster_id": "concept_0001",
         "canonical_name": "archive as architectural space",
+        "descriptor": "How archives operate as spatial environments and not just repositories.",
         "slug": "archive-as-architectural-space",
         "aliases": ["archival habitat"],
         "material_ids": ["mat_aaa", "mat_bbb"],
@@ -415,7 +383,9 @@ def test_concept_page_evidence():
     page = render_concept_page(cluster, material_titles, related_concepts, material_paths)
 
     assert "# archive as architectural space" in page
+    assert "How archives operate as spatial environments and not just repositories." in page
     assert "archival habitat" in page  # alias
+    assert page.index("_Also known as: archival habitat_") < page.index("How archives operate as spatial environments and not just repositories.")
     assert "2 materials" in page
     assert "Necropolitics" in page
     assert "archive as built form" in page
@@ -425,6 +395,47 @@ def test_concept_page_evidence():
     assert "spatial dimension of archival practice" in page
     assert "## Related Concepts" in page
     assert "memory palace" in page
+
+
+def test_bridge_concept_page_renders_recent_changes_section():
+    cluster = {
+        "cluster_id": "bridge_0001",
+        "canonical_name": "Archive Space Framework",
+        "slug": "archive-space-framework",
+        "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
+        "aliases": ["archival space framework"],
+        "material_ids": ["mat_aaa", "mat_bbb"],
+        "source_concepts": [
+            {
+                "material_id": "mat_aaa",
+                "concept_name": "archival habitat",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["the archive as a built environment"],
+                "confidence": 0.9,
+            }
+        ],
+    }
+    review_rows = [
+        {
+            "cluster_id": "bridge_0001",
+            "finding_type": "scope_extension",
+            "severity": "low",
+            "status": "validated",
+            "note": "Added a new cross-material concept.",
+            "recommendation": "Keep the bridge as-is.",
+            "_provenance": {"run_at": "2026-04-08T17:35:47.613231+00:00"},
+        }
+    ]
+
+    page = render_concept_page(cluster, {"mat_aaa": "Necropolitics"}, [], None, None, review_rows)
+
+    assert "## Recent Changes" in page
+    assert "### Scope Extension" in page
+    assert "- Status: validated" in page
+    assert "- Severity: low" in page
+    assert "Added a new cross-material concept." in page
+    assert "Keep the bridge as-is." in page
 
 
 # ---------------------------------------------------------------------------
@@ -793,6 +804,20 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
         }) + "\n",
         encoding="utf-8",
     )
+    (derived / "lint" / "cluster_reviews.jsonl").write_text(
+        json.dumps({
+            "review_id": "b_001",
+            "cluster_id": "b_001",
+            "finding_type": "scope_extension",
+            "severity": "low",
+            "status": "validated",
+            "note": "Added one more cross-material source concept.",
+            "recommendation": "Keep the revised bridge.",
+            "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
+            "_provenance": {"run_at": "2026-04-08T17:35:47.613231+00:00"},
+        }) + "\n",
+        encoding="utf-8",
+    )
 
     bridge_cluster = {
         "cluster_id": "b_001",
@@ -840,12 +865,17 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     assert meta_after["bridge_concepts"][0]["canonical_name"] == "Archive Space Framework"
 
     concept_page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "archive-space-framework.md").read_text()
-    assert "## Phase 6 Reflection" in concept_page
+    assert "## Reflections" in concept_page
     assert "It anchors the corpus." in concept_page
+    assert "## Recent Changes" in concept_page
+    assert "Added one more cross-material source concept." in concept_page
+    assert concept_page.index("## Reflections") < concept_page.index("## By Material")
 
     collection_page = (tmp_path / "wiki" / "research" / "papers" / "_index.md").read_text()
-    assert "## Phase 6 Reflection" in collection_page
+    assert "## Reflections" in collection_page
     assert "The corpus is centrally about archival space." in collection_page
+    assert collection_page.index("## Overview") < collection_page.index("## Reflections")
+    assert collection_page.index("## Reflections") < collection_page.index("## Recent Additions")
 
     # Memory bridge tables must be populated in search.sqlite
     con = sqlite3.connect(str(tmp_path / "indexes" / "search.sqlite"))
@@ -896,9 +926,16 @@ def test_collection_page_renders_all_sections():
     page = render_collection_page(
         "Research / Thermal Mass", "research", "thermal-mass",
         materials, key_concepts, top_facets, recent,
+        {
+            "main_takeaways": ["Thermal mass is central."],
+            "main_tensions": [],
+            "open_questions": [],
+            "why_this_collection_matters": "It anchors the collection.",
+        },
     )
     assert "# Research / Thermal Mass" in page
     assert "## Overview" in page
+    assert "## Reflections" in page
     assert "**Materials:** 2" in page
     assert "## Recent Additions" in page
     assert "Paper A" in page
@@ -910,6 +947,8 @@ def test_collection_page_renders_all_sections():
     assert "## Top Facets" in page
     assert "Climate" in page
     assert "mediterranean" in page
+    assert page.index("## Overview") < page.index("## Reflections")
+    assert page.index("## Reflections") < page.index("## Recent Additions")
 
 
 def test_collection_page_empty_sections():

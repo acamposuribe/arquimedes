@@ -784,7 +784,8 @@ class ReflectionIndexTool:
                 """
                 SELECT domain, collection, main_takeaways, main_tensions,
                        important_material_ids, important_cluster_ids,
-                       open_questions, input_fingerprint, wiki_path
+                       open_questions, why_this_collection_matters,
+                       input_fingerprint, wiki_path
                 FROM collection_reflections
                 WHERE domain = ? AND collection = ?
                 """,

@@ -1,6 +1,6 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phases 1-6 complete; Collection Graph Step 1 complete; Phase 7 next
+> **Status:** Phases 1-6 complete; Collection Graph Step 1 next
 > **Last updated:** 2026-04-11
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)

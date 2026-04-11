@@ -479,6 +479,7 @@ class ReflectionIndexTool:
         self.con = sqlite3.connect(f"file:{self.index_path}?mode=ro", uri=True, check_same_thread=False)
         self.con.row_factory = sqlite3.Row
         self._lock = threading.RLock()
+        self._table_columns_cache: dict[str, set[str]] = {}
 
     def close(self) -> None:
         self.con.close()
@@ -490,8 +491,34 @@ class ReflectionIndexTool:
         self.close()
 
     @staticmethod
-    def _row_to_dict(row: sqlite3.Row) -> dict:
-        return {k: row[k] for k in row.keys()}
+    def _row_to_dict(row: sqlite3.Row, json_list_fields: tuple[str, ...] = ()) -> dict:
+        data = {k: row[k] for k in row.keys()}
+        for field in json_list_fields:
+            if field in data:
+                data[field] = _parse_json_list(data[field])
+        return data
+
+    def _table_columns(self, table_name: str) -> set[str]:
+        cached = self._table_columns_cache.get(table_name)
+        if cached is not None:
+            return cached
+        rows = self.con.execute(f"PRAGMA table_info({table_name})").fetchall()
+        columns = {str(row["name"]) for row in rows}
+        self._table_columns_cache[table_name] = columns
+        return columns
+
+    def _select_optional_row(
+        self,
+        table_name: str,
+        requested_fields: tuple[str, ...],
+        where_clause: str,
+        params: list[str],
+    ) -> sqlite3.Row | None:
+        available_fields = [field for field in requested_fields if field in self._table_columns(table_name)]
+        if not available_fields:
+            return None
+        sql = f"SELECT {', '.join(available_fields)} FROM {table_name} WHERE {where_clause}"
+        return self.con.execute(sql, params).fetchone()
 
     def _material_evidence(
         self,
@@ -903,16 +930,25 @@ class ReflectionIndexTool:
                 [record_id],
                 ).fetchone()
                 if row is not None:
-                    reflection = self.con.execute(
-                    """
-                    SELECT cluster_id, slug, canonical_name, main_takeaways, main_tensions,
-                              open_questions, helpful_new_sources, why_this_concept_matters, supporting_material_ids,
-                           supporting_evidence, input_fingerprint, wiki_path
-                    FROM concept_reflections
-                    WHERE cluster_id = ?
-                    """,
-                    [record_id],
-                    ).fetchone()
+                    reflection = self._select_optional_row(
+                        "concept_reflections",
+                        (
+                            "cluster_id",
+                            "slug",
+                            "canonical_name",
+                            "main_takeaways",
+                            "main_tensions",
+                            "open_questions",
+                            "helpful_new_sources",
+                            "why_this_concept_matters",
+                            "supporting_material_ids",
+                            "supporting_evidence",
+                            "input_fingerprint",
+                            "wiki_path",
+                        ),
+                        "cluster_id = ?",
+                        [record_id],
+                    )
                     material_rows = self.con.execute(
                     """
                     SELECT material_id, relevance, source_pages, evidence_spans, confidence
@@ -942,7 +978,17 @@ class ReflectionIndexTool:
                             }
                             for r in material_rows
                         ],
-                        "reflection": self._row_to_dict(reflection) if reflection else {},
+                        "reflection": self._row_to_dict(
+                            reflection,
+                            (
+                                "main_takeaways",
+                                "main_tensions",
+                                "open_questions",
+                                "helpful_new_sources",
+                                "supporting_material_ids",
+                                "supporting_evidence",
+                            ),
+                        ) if reflection else {},
                     }
                 row = self.con.execute(
                 """
@@ -954,16 +1000,25 @@ class ReflectionIndexTool:
                 ).fetchone()
                 if row is None:
                     return None
-                reflection = self.con.execute(
-                """
-                SELECT cluster_id, slug, canonical_name, main_takeaways, main_tensions,
-                      open_questions, helpful_new_sources, why_this_concept_matters, supporting_material_ids,
-                       supporting_evidence, input_fingerprint, wiki_path
-                FROM concept_reflections
-                WHERE cluster_id = ?
-                """,
-                [record_id],
-                ).fetchone()
+                reflection = self._select_optional_row(
+                    "concept_reflections",
+                    (
+                        "cluster_id",
+                        "slug",
+                        "canonical_name",
+                        "main_takeaways",
+                        "main_tensions",
+                        "open_questions",
+                        "helpful_new_sources",
+                        "why_this_concept_matters",
+                        "supporting_material_ids",
+                        "supporting_evidence",
+                        "input_fingerprint",
+                        "wiki_path",
+                    ),
+                    "cluster_id = ?",
+                    [record_id],
+                )
                 material_rows = self.con.execute(
                 """
                 SELECT material_id, relevance, source_pages, evidence_spans, confidence
@@ -993,7 +1048,17 @@ class ReflectionIndexTool:
                         }
                         for r in material_rows
                     ],
-                    "reflection": self._row_to_dict(reflection) if reflection else {},
+                    "reflection": self._row_to_dict(
+                        reflection,
+                        (
+                            "main_takeaways",
+                            "main_tensions",
+                            "open_questions",
+                            "helpful_new_sources",
+                            "supporting_material_ids",
+                            "supporting_evidence",
+                        ),
+                    ) if reflection else {},
                 }
             if kind == "collection":
                 domain, _, collection = record_id.partition("/")
@@ -1007,17 +1072,24 @@ class ReflectionIndexTool:
                 """,
                 [domain, collection],
                 ).fetchone()
-                reflection = self.con.execute(
-                """
-                SELECT domain, collection, main_takeaways, main_tensions,
-                       important_material_ids, important_cluster_ids,
-                      open_questions, helpful_new_sources, why_this_collection_matters,
-                       input_fingerprint, wiki_path
-                FROM collection_reflections
-                WHERE domain = ? AND collection = ?
-                """,
-                [domain, collection],
-                ).fetchone()
+                reflection = self._select_optional_row(
+                    "collection_reflections",
+                    (
+                        "domain",
+                        "collection",
+                        "main_takeaways",
+                        "main_tensions",
+                        "important_material_ids",
+                        "important_cluster_ids",
+                        "open_questions",
+                        "helpful_new_sources",
+                        "why_this_collection_matters",
+                        "input_fingerprint",
+                        "wiki_path",
+                    ),
+                    "domain = ? AND collection = ?",
+                    [domain, collection],
+                )
                 members = self.con.execute(
                 """
                 SELECT material_id, title, summary
@@ -1062,7 +1134,17 @@ class ReflectionIndexTool:
                         }
                         for row in members
                     ],
-                    "reflection": self._row_to_dict(reflection) if reflection else {},
+                    "reflection": self._row_to_dict(
+                        reflection,
+                        (
+                            "main_takeaways",
+                            "main_tensions",
+                            "important_material_ids",
+                            "important_cluster_ids",
+                            "open_questions",
+                            "helpful_new_sources",
+                        ),
+                    ) if reflection else {},
                 }
             return None
 

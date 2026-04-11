@@ -8,9 +8,9 @@
 > **Phase 5 spec:** [Wiki compiler, collection pages, and memory bridge](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 > **Phase 6 spec:** [Lint, reflection, and memory growth](superpowers/completed/specs/2026-04-05-phase6-lint-design.md)
 > **Proposed next architecture:** [Collection graph architecture](superpowers/specs/2026-04-09-collection-graph-design.md)
+> **Proposed implementation plan:** [Collection graph implementation plan](superpowers/plans/2026-04-09-collection-graph-implementation.md)
 > **Phase 8 spec:** [Web UI design](superpowers/specs/2026-04-11-phase8-web-ui-design.md)
 > **Phase 8 plan:** [Web UI implementation plan](superpowers/plans/2026-04-11-phase8-web-ui.md)
-> **Proposed implementation plan:** [Collection graph implementation plan](superpowers/plans/2026-04-09-collection-graph-implementation.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 > **Pipeline:** [Operational pipeline](PIPELINE.md)
 > **Supporting spec:** [Connection model](superpowers/completed/specs/2026-04-05-connection-model.md)
@@ -186,7 +186,7 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 - [ ] Debouncing + batching (10s window, single commit per batch)
 - [ ] `arq sync` — auto-pull daemon for collaborators with `arq index ensure` after pull, so local search and memory are always current before use
 - [ ] `arq sync` should inherit the memory bridge automatically via `arq index ensure` → `arq memory ensure`
-- [x] `arq lint --quick` after each compile, `arq lint --full` on weekly schedule
+- [ ] `arq lint --quick` after each compile, `arq lint --full` on weekly schedule
 - [ ] launchd integration for both watch and sync
 - [ ] Auto-commit + push pipeline
 - [ ] Always-on maintainer flow: ingest → extract → compile → lint/index → commit/push

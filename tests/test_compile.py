@@ -324,8 +324,11 @@ def test_material_page_sections():
     assert "## Summary" in page
     assert "A test summary." in page
     assert "## Material Conclusions" in page
+    assert "- Use archives as spatial evidence." in page
     assert "Use archives as spatial evidence." in page
+    assert "- Archival form shapes knowledge." in page
     assert "Archival form shapes knowledge." in page
+    assert "['Use archives as spatial evidence.']" not in page
     assert "## Key Concepts" in page
     assert "archive as architectural space" in page
     assert "## Architecture Facets" in page

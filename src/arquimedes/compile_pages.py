@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import os
 import re
-from pathlib import Path, PurePosixPath
+from pathlib import PurePosixPath
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +28,14 @@ def _meta_val_list(field) -> list:
         val = field.get("value")
         return val if isinstance(val, list) else ([val] if val else [])
     return field if isinstance(field, list) else []
+
+
+def _meta_lines(field) -> list[str]:
+    items = _meta_val_list(field)
+    if items:
+        return [str(item).strip() for item in items if str(item).strip()]
+    text = _meta_val(field)
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def _clean_quoted_text(text: str) -> str:
@@ -350,18 +358,18 @@ def render_material_page(
         lines.append(summary)
         lines.append("")
 
-    methodological_conclusions = _meta_val(meta.get("methodological_conclusions"))
-    main_content_learnings = _meta_val(meta.get("main_content_learnings"))
+    methodological_conclusions = _meta_lines(meta.get("methodological_conclusions"))
+    main_content_learnings = _meta_lines(meta.get("main_content_learnings"))
     if methodological_conclusions or main_content_learnings:
         lines.append("## Material Conclusions\n")
         if methodological_conclusions:
             lines.append("**Methodological conclusions**")
-            for item in [line.strip() for line in methodological_conclusions.splitlines() if line.strip()]:
+            for item in methodological_conclusions:
                 lines.append(f"- {item}")
             lines.append("")
         if main_content_learnings:
             lines.append("**Main content learnings**")
-            for item in [line.strip() for line in main_content_learnings.splitlines() if line.strip()]:
+            for item in main_content_learnings:
                 lines.append(f"- {item}")
             lines.append("")
 

@@ -34,6 +34,30 @@ Step 1 should be standalone and non-breaking. The intent is to keep the current 
 
 Step 2 should only be responsible for bringing those collection-scoped semantic neighborhoods back together at the global bridge level.
 
+### Step 1 Guardrails
+
+These constraints are mandatory for the Step 1 implementation:
+
+- preserve current clustering semantics exactly; only narrow the scope of inputs
+- preserve current cluster-audit semantics exactly; only narrow the scope of inputs
+- preserve the current clustering prompt and JSON delta contract exactly
+- preserve the current audit prompt and work-file contract exactly
+- do not add any new membership rule, cleanup heuristic, or validator logic just because clustering is now collection-bound
+
+In particular:
+
+- do **not** invent a “one concept per material” rule
+- do **not** auto-split existing cluster memberships during the move to collection scope
+- do **not** reinterpret legacy bridge clusters during migration
+
+For a repo whose current data effectively lives inside one collection, the expected migration result is:
+
+- same cluster count
+- same cluster memberships
+- same prompt behavior
+- same audit behavior
+- only collection-bound ids, paths, stamps, and scheduling
+
 ### S1.1 Data model and artifact layout
 
 - [ ] Define canonical local-cluster artifact paths under `derived/collections/`
@@ -59,6 +83,7 @@ Notes:
 - The intent is to reuse the current `arq cluster` behavior as directly as possible.
 - The main engineering work is scope partitioning, per-collection staleness tracking, orchestration, and artifact relocation.
 - The expected scale win comes from running many eligible collection jobs in parallel, not from changing the core clustering logic.
+- No semantic reinterpretation is allowed in Step 1. The only allowed changes are scope partitioning, orchestration, ids, paths, stamps, and artifact locations.
 
 ### S1.3 Local graph projection
 
@@ -91,6 +116,7 @@ Notes:
 
 - Local audit belongs in Step 1 because it is part of making current cluster behavior truly collection-local.
 - Step 1 should preserve the current clustering-and-audit loop, only scoped differently.
+- Local audit must preserve the same cluster-shape assumptions as the current global audit. Scope may change; audit semantics may not.
 
 ### S1.7 Search and agent traversal
 
@@ -197,6 +223,13 @@ Notes:
 - [ ] Provide deterministic migration for old bridge-memory tables where possible
 - [ ] Decide what the existing `derived/bridge_concept_clusters.jsonl` means during Step 1
 - [ ] Add upgrade notes for existing repos
+
+Migration requirements for Step 1:
+
+- when the current corpus effectively lives inside one collection, `derived/bridge_concept_clusters.jsonl` should rebase into one collection-local cluster file with near-1:1 preservation of cluster count and membership
+- `derived/lint/cluster_reviews.jsonl` and `derived/lint/collection_reflections.jsonl` should be rebased to local ids and local paths without semantic reinterpretation
+- the migration should be deterministic and LLM-free
+- the migration should not require re-enrichment, re-extraction, re-indexing, re-clustering, or re-reflection merely to preserve current semantics
 
 ### Operational safety
 

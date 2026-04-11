@@ -117,7 +117,9 @@ It is still the raw evidence layer.
 
 This becomes the canonical concept home inside a collection.
 
-A local cluster may connect multiple materials, but it may never span collections.
+A local cluster is the current bridge-cluster model rebased into one collection scope.
+
+It may connect multiple materials, and it may also retain multiple source concepts from the same material whenever the current global clustering semantics would already allow that. The only new hard boundary in Step 1 is that it may never span collections.
 
 Suggested artifact:
 
@@ -216,6 +218,30 @@ Step 1 should be a **standalone, non-breaking scoped version of the current sema
 
 Only after that works cleanly should Step 2 add a new global bridge layer that reconnects collections.
 
+### Non-Negotiable Step 1 Constraints
+
+Step 1 is a **scope rebinding**, not a semantic redesign.
+
+That means:
+
+- keep the current clustering prompt and JSON response contract exactly as they are
+- keep the current cluster-membership semantics exactly as they are
+- keep the current cluster-audit prompt and review semantics exactly as they are
+- change only which inputs a run sees, where outputs are written, and how runs are scheduled
+
+Step 1 must therefore **not**:
+
+- add a new “one concept per material” rule
+- auto-split clusters into narrower local clusters just because they are now collection-bound
+- reinterpret old bridge clusters during migration
+- introduce new cleanup heuristics, validators, or concept-selection rules that did not exist in the current global behavior
+
+The practical test for whether Step 1 is correct is simple:
+
+- if the current corpus effectively lives in one collection, then the existing bridge clusters should become the same clusters, just collection-bound
+- migration should be structurally close to **1:1 rebasing**, not semantic recomputation
+- the LLM should not need to know what a collection is; collection scope must be enforced entirely by staged inputs and orchestration
+
 ### Pipeline shape
 
 After `arq index rebuild`, the semantic publication path becomes:
@@ -223,6 +249,14 @@ After `arq index rebuild`, the semantic publication path becomes:
 `cluster-local -> compile -> memory rebuild`
 
 In Step 1, local collection clustering becomes the first-class semantic layer even if the existing global bridge layer is temporarily retained for continuity. In implementation terms, this is basically what is now called `arq cluster`, but updated to live within collection bounds rather than full-corpus bounds.
+
+This should be understood literally:
+
+- same packet semantics
+- same prompt semantics
+- same response semantics
+- same cluster-membership semantics
+- only narrower staged evidence and narrower persistence boundaries
 
 ### Command shape
 
@@ -268,6 +302,11 @@ Suggested config shape:
 
 This keeps Step 1 standalone: the current clustering-and-audit loop continues to exist, but now within collection bounds.
 
+The same constraint applies here too:
+
+- local audit must not introduce a stricter or different membership model than the current global audit
+- if the current global audit would preserve a cluster shape, Step 1 local audit should preserve that same shape inside collection scope
+
 ### Input scope
 
 For one `(domain, collection)`:
@@ -293,6 +332,9 @@ For one `(domain, collection)`:
 - material pages should treat local clusters as concept homes
 - stale detection should be per collection
 - the clustering logic itself should remain as close as practical to the current `arq cluster` behavior
+- local clustering must preserve the same membership rules as the current global clustering
+- local audit must preserve the same review semantics as the current global audit
+- one-scope legacy migrations should preserve cluster count and cluster membership as closely as possible
 
 ### Transitional behavior
 

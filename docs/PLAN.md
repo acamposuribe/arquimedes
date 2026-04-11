@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phases 1-6 complete; Phase 7 next
-> **Last updated:** 2026-04-09
+> **Status:** Phases 1-6 complete; Collection Graph Step 1 complete; Phase 7 next
+> **Last updated:** 2026-04-11
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
 > **Phase 4 spec:** [Search index design](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md)
@@ -52,6 +52,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 - [x] `arq ingest` — scan LIBRARY_ROOT, register materials in materials.jsonl
 - [x] Material ID generation (sha256[:12])
+- [x] Re-ingesting a moved material refreshes its manifest `relative_path`, `domain`, and `collection`, and updates extracted raw scope fields so collection assignment remains trustworthy after rehoming
 - [x] `arq extract-raw` — deterministic extraction via PyMuPDF + pdfplumber
   - [x] PDF: text, pages, TOC, tables
   - [x] PDF annotations: highlights, notes, marks → annotations.jsonl, emphasized flag on chunks
@@ -98,7 +99,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 5: Wiki Compiler
 
-- [x] **(concept clustering)** `arq cluster` — LLM pass over bridge candidate packets and current bridge memory; the model returns a structured JSON delta with `links_to_existing[]`, `new_clusters[]`, and `_finished`, and the pipeline validates that response before deterministically emitting `derived/bridge_concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, descriptor, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; cluster-level confidence is derived in Python from the validated source concept confidences instead of being requested from the LLM; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments, and incremental runs may merge, split, rename, or replace existing bridge concepts when new packets reveal a better overall structure; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
+- [x] **(concept clustering)** `arq cluster` — LLM pass over bridge candidate packets and current bridge memory; the model returns a structured JSON delta with `links_to_existing[]`, `new_clusters[]`, and `_finished`, and the pipeline validates that response before deterministically emitting `derived/bridge_concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, descriptor, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments, and incremental runs may merge, split, rename, or replace existing bridge concepts when new packets reveal a better overall structure; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] `arq compile` — generate material pages, concept pages (one page per cluster), index pages
 - [x] **(collection pages)** Extend `arq compile` so `wiki/{domain}/{collection}/_index.md` becomes a first-class deterministic collection page; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] Collection pages should include: overview, recent additions, material list, top canonical concepts by recurrence, top facets by frequency
@@ -131,9 +132,22 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 - [x] Persist full collection reflection prose in SQLite as part of the queryable memory layer, including `why_this_collection_matters`
 - [x] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas
 - [x] Feed reflective outputs back into searchable memory so agents can query takeaways, tensions, and open questions, not only graph topology
-- [x] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --stage <reflective-stage>` (targeted reflective runs), `arq lint --report`, `arq lint --fix`
+- [x] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --report`, `arq lint --fix`
 - [x] Provenance on every LLM suggestion
 - [x] Define the health-check and maintenance behaviors the future server maintainer will run automatically
+
+## Collection Graph Step 1: Collection-First Semantic Homes
+
+- [ ] Rehome moved materials so collection assignment stays trustworthy after ingest
+- [ ] Add collection-local cluster artifacts, stamps, and stable ids under `derived/collections/`
+- [ ] Add `arq cluster-local` with per-collection stale detection, scheduling, and internal gates
+- [ ] Project the local graph into SQLite and register local concept wiki pages
+- [ ] Compile collection-local concept pages and make material/collection pages prefer them
+- [ ] Re-ground collection reflections in local concept homes
+- [ ] Reuse the current cluster-audit model as collection-local audit with parallel fanout and per-collection gates
+- [ ] Add collection -> local concepts and material -> local concepts traversal
+- [ ] Keep default lexical search global while preserving deterministic cross-collection relatedness during the transition
+- [ ] Add a one-time Step 1 migration script for legacy bridge-era repos so current data can bootstrap local concept homes and collection continuity without re-enrichment or re-reflection
 
 ## Phase 7: Agent Tools
 

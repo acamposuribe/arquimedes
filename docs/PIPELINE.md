@@ -9,9 +9,9 @@ Arquimedes publishes one shared knowledge system with three synchronized layers:
 - **Extracted / enriched artifacts** in `extracted/`
   - raw text, chunks, annotations, figures, enriched summaries, concepts
 - **Published wiki** in `wiki/`
-  - material pages, concept pages, glossary, `_index.md` pages
+  - material pages, collection-local concept pages, glossary, `_index.md` pages
 - **Machine-queryable memory** in `indexes/search.sqlite`
-  - search index, canonical concept clusters, bridge tables, wiki identities
+  - search index, local concept graph, bridge tables, wiki identities
 
 The wiki is the readable semantic memory.
 The SQLite index is the operational semantic memory for agents and tools.
@@ -23,7 +23,7 @@ The SQLite index is the operational semantic memory for agents and tools.
 Collaborators contribute by adding files to the shared library root folder.
 
 They do **not**:
-- run `arq cluster`
+- run `arq cluster-local`
 - run `arq compile`
 - republish semantic structure
 
@@ -43,7 +43,7 @@ It:
 - watches the shared library root for changes
 - ingests new materials
 - extracts and enriches them
-- clusters concepts
+- clusters concepts within collection scope
 - compiles the wiki
 - runs `arq lint --quick` after each compile
 - runs `arq lint --full` on a schedule, with refreshes between reflective stages
@@ -91,17 +91,17 @@ When a collaborator adds a file to the shared library root:
 - Makes materials, chunks, annotations, figures, and raw concept candidates searchable
 - No LLM
 
-5. **`arq cluster`**
-- Reads bridge candidate packets and existing bridge concept memory
-- Groups cross-material concepts into canonical bridge clusters
-- Writes `derived/bridge_concept_clusters.jsonl`
+5. **`arq cluster-local`**
+- Reads one collection-bounded packet at a time plus that collection's existing local concept memory
+- Groups concepts into collection-local concept homes
+- Writes `derived/collections/<domain>__<collection>/local_concept_clusters.jsonl`
 - Uses the stage-specific route list for `cluster` when configured, with the same legacy fallback behavior
 - **LLM required**
 
 6. **`arq compile`**
 - Deterministically renders the wiki:
   - material pages
-  - concept pages
+  - collection-local concept pages
   - glossary
   - `_index.md` pages
 - No LLM
@@ -123,7 +123,7 @@ When a collaborator adds a file to the shared library root:
 ### LLM-required steps
 
 - `arq extract` (enrichment stage)
-- `arq cluster`
+- `arq cluster-local`
 - `arq lint --full` (scheduled reflective maintenance pass)
 
 ### Deterministic steps
@@ -150,7 +150,7 @@ Operationally, this is not optional before collaborator search after new pulls. 
 
 That means collaborators regain:
 - full search index
-- canonical concept clusters
+- collection-local concept homes
 - related-material graph
 - wiki page identities in SQLite
 
@@ -160,7 +160,7 @@ without any LLM access and without re-running clustering or compile.
 
 Semantic publication belongs only to the server-maintainer path:
 
-`ingest -> extract -> index rebuild -> cluster -> compile -> memory rebuild -> commit/push`
+`ingest -> extract -> index rebuild -> cluster-local -> compile -> memory rebuild -> commit/push`
 
 Collaborators only rebuild deterministic local projections:
 
@@ -170,9 +170,17 @@ Collaborators only rebuild deterministic local projections:
 
 - `extract` = parse and understand the source
 - `index rebuild` = make evidence searchable
-- `cluster` = connect concepts across materials
-- `compile` = publish the wiki
-- `memory rebuild` = make the published graph queryable by agents
+- `cluster-local` = form collection-local concept homes
+- `compile` = publish the collection-first wiki
+- `memory rebuild` = make the published local graph queryable by agents
+
+Legacy bridge artifacts may still exist during the Step 1 transition and can continue to provide some continuity for cross-collection relatedness, but they are no longer the primary semantic publication layer. Step 2 adds a distinct global bridge graph built from local semantic outputs.
+
+For existing bridge-era repos that need to move into Step 1 without recomputing current semantics, run the one-time migration script:
+
+`./.venv/bin/python scripts/migrate_step1_local_graph.py`
+
+If the repo contains more than one collection scope, pass `--domain` and `--collection` explicitly. The script is a one-shot bootstrap for current data: it seeds local concept homes from existing bridge clusters, remaps local audit continuity where possible, and rewrites collection reflections onto the new local-cluster fingerprints without re-enrichment, re-clustering, or re-reflection.
 
 This is how Arquimedes stays both:
 - a readable wiki for humans

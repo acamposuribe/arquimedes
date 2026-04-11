@@ -52,12 +52,17 @@ Already present:
   - `find_related()`
   - `get_material_clusters()`
   - `get_collection_clusters()`
+- `index.py` already exposes `ensure_index_and_memory()`
 - the compiler already produces canonical markdown pages under `wiki/`
+- extracted artifacts already exist under `extracted/<material_id>/`
 
 Not yet present:
 
 - no `serve.py`
+- no `read.py`
+- no `freshness.py`
 - no templates/static assets
+- no markdown-to-HTML rendering dependency
 - no shared read/browse helper layer
 - no freshness helper for web or future agent tools
 
@@ -76,6 +81,12 @@ Reasons:
 - the product need is browse/search, not collaborative editing
 - this keeps the UI close to the existing system architecture
 
+### Markdown rendering dependency
+
+Use `mistune>=3.0` (pure Python, fast, no C dependencies) to render compiled wiki markdown into HTML.
+
+The renderer belongs in the web layer, not in a shared core module. Markdown-to-HTML is a presentation concern.
+
 ### Wiki markdown is the visible source of truth
 
 Compiled wiki pages are the canonical human-readable publication artifact.
@@ -93,7 +104,7 @@ This preserves:
 - the same local/global cluster visibility
 - the same staleness rules
 
-### Freshness is explicit
+### Freshness is explicit and non-blocking
 
 Before heavy browse/search use, the UI should surface whether the local workspace is current.
 
@@ -101,9 +112,32 @@ Phase 8 should implement:
 
 - an automatic freshness check on app open / first search in session
 - an explicit **Update** action
-- `arq index ensure` after any successful or no-op repo update step
+- `ensure_index_and_memory()` after any successful or no-op repo update step
+
+The freshness check must not block page rendering.
+
+The app shell renders a placeholder banner on every page. On first load per browser session, a small JS fetch against `GET /api/freshness` populates the banner asynchronously. The **Update** button posts to `POST /update` and updates the banner when the response arrives.
+
+Pages load fast; freshness is visible but never gates navigation.
 
 This is not Phase 9 daemon sync. It is an explicit collaborator-facing freshness contract.
+
+### Figure and source files are served through constrained routes
+
+The UI must not rely on browser `file://` behavior.
+
+Serve assets through explicit material-aware routes:
+
+- source files through `/source/{material_id}`
+- figure images through `/figures/{material_id}/{filename}`
+
+Do not mount the whole repo or `extracted/` tree as a generic static directory.
+
+### Graceful degradation over hard failure
+
+If the SQLite index is missing or stale states cannot be checked, the UI should show a helpful message and keep browseable pages working where possible.
+
+The app should not crash just because first-run setup has not happened yet.
 
 ## Execution Model
 
@@ -125,7 +159,7 @@ Normal usage:
    - update blocked
 4. the first search in a browser session may trigger the same freshness check if the home page was skipped
 5. the user may press **Update**
-6. the update path runs freshness logic and then `arq index ensure`
+6. the update path runs freshness logic and then `ensure_index_and_memory()`
 
 If freshness work fails, the user can still browse the current local state, but the UI must say so clearly.
 
@@ -173,6 +207,7 @@ Minimum route set:
     - material cards
     - optional chunks/annotations/figures/concepts
     - canonical cluster hits
+  - if no index exists, renders a helpful setup state instead of crashing
 
 - `GET /materials/{material_id}`
   - resolves the canonical compiled material wiki path
@@ -188,12 +223,17 @@ Minimum route set:
   - uses figure sidecars + extracted images
   - shows caption, description, visual type, source page
 
+- `GET /figures/{material_id}/{filename}`
+  - serves extracted figure images from `extracted/{material_id}/figures/`
+  - restricted to image extensions only
+
 - `GET /wiki`
   - root wiki browser
 
 - `GET /wiki/{path:path}`
   - renders any markdown page under `wiki/`
   - directory paths should prefer `_index.md`
+  - directories without `_index.md` may render a deterministic listing page
 
 - `GET /source/{material_id}`
   - read-only source-file streaming endpoint
@@ -202,6 +242,9 @@ Minimum route set:
 
 - `GET /extracted/{material_id}/text`
   - renders or downloads `extracted/<id>/text.md`
+
+- `GET /api/freshness`
+  - returns JSON freshness state for async banner population
 
 - `POST /update`
   - explicit freshness/update action
@@ -214,6 +257,8 @@ Minimum route set:
 
 The web UI must render compiled markdown as HTML, but links inside the markdown need translation.
 
+Link rewriting should happen as a post-render HTML pass over `href` and `src` attributes, not by mutating the source markdown files.
+
 Required link handling:
 
 - links to `wiki/.../*.md` must resolve to `/wiki/...`
@@ -221,7 +266,7 @@ Required link handling:
 - material page links should continue to work after markdown-to-HTML conversion
 - `file://...` source links emitted by the compiler should be replaced with `/source/{material_id}` in the rendered material page chrome
 - extracted-text links should map to `/extracted/{material_id}/text`
-- figure image links inside material markdown should resolve to HTTP-served extracted figure paths
+- figure image links inside material markdown should resolve to `/figures/{material_id}/{filename}`
 
 The UI should not mutate canonical markdown files. Link rewriting is a render-time concern only.
 
@@ -235,13 +280,13 @@ Suggested helper responsibilities:
 - inspect whether it has a configured upstream
 - detect whether the worktree is dirty
 - when safe and applicable, run a fast-forward-only pull
-- always run `arq index ensure` after the update/no-update repo step
+- always run `ensure_index_and_memory()` after the update/no-update repo step
 - return a structured status object for UI display
 
 Suggested behavior:
 
-- if the repo is not a git checkout, skip pull and run `arq index ensure`
-- if the repo is dirty, do not pull; report blocked status and still allow manual `index ensure`
+- if the repo is not a git checkout, skip pull and run `ensure_index_and_memory()`
+- if the repo is dirty, do not pull; report blocked status and still allow manual refresh
 - if the repo is clean and tracking info exists, allow `git pull --ff-only`
 - never do merge, rebase, stash, or destructive recovery in the web UI
 
@@ -271,6 +316,9 @@ Suggested responsibilities:
 - enumerate wiki directories/pages safely
 - load markdown page content
 - normalize figure records for gallery rendering
+- provide small read models for:
+  - recent materials
+  - domain/collection navigation
 
 This helper layer is intentionally Phase 8-safe and Phase 7-useful:
 
@@ -288,6 +336,13 @@ Show:
 - recent materials
 - domain/collection entry points
 - quick search form
+
+Preferred data sources:
+
+- recent materials from SQLite
+- distinct domain/collection pairs from SQLite
+
+If the index does not exist yet, the home page should render a setup/helpful empty state rather than fail.
 
 ### Search
 
@@ -322,6 +377,24 @@ Show:
 - caption
 - description
 
+### Wiki directory listing
+
+When a wiki directory has no `_index.md`, the UI may render a deterministic directory listing page with:
+
+- child directories
+- child pages
+- breadcrumbs
+
+### Error page
+
+The app should have a consistent HTML error surface for:
+
+- missing wiki pages
+- missing materials
+- missing figures
+- missing source files
+- missing index-dependent search data
+
 ## Security and Safety Constraints
 
 Phase 8 is local and read-oriented, but it still needs hard path boundaries.
@@ -336,6 +409,7 @@ Required constraints:
 - do not expose arbitrary filesystem browsing
 - do not expose write endpoints except the explicit update action
 - do not trigger LLM work
+- image-serving routes must restrict filenames/extensions to expected image types
 
 No auth is required for this phase. The target deployment is local/trusted collaborator use.
 
@@ -349,13 +423,7 @@ serve:
   port: 8420
 ```
 
-Optional additions if implementation needs them:
-
-- `serve.auto_check_on_open: true`
-- `serve.auto_check_on_first_search: true`
-- `serve.render_extracted_text_inline: false`
-
-Do not add broad web-app configuration unless implementation proves it necessary.
+No additional Phase 8 configuration is required beyond host/port unless implementation proves otherwise.
 
 ## Non-Goals
 
@@ -376,6 +444,10 @@ Minimum Phase 8 checks:
 - `/materials/{id}` renders the compiled material page
 - `/wiki/...` browsing works across relative links
 - `/materials/{id}/figures` shows extracted figure data and images
+- `/figures/{id}/{filename}` serves images safely
 - `/source/{id}` streams the original file safely
-- the update path reports freshness state and runs `arq index ensure`
+- `/api/freshness` reports current status for async UI updates
+- the update path reports freshness state and runs `ensure_index_and_memory()`
 - blocked/dirty repo states are visible and non-destructive
+- missing index/data states degrade gracefully instead of crashing
+- path traversal is rejected on all file-serving routes

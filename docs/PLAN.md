@@ -8,6 +8,8 @@
 > **Phase 5 spec:** [Wiki compiler, collection pages, and memory bridge](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 > **Phase 6 spec:** [Lint, reflection, and memory growth](superpowers/completed/specs/2026-04-05-phase6-lint-design.md)
 > **Proposed next architecture:** [Collection graph architecture](superpowers/specs/2026-04-09-collection-graph-design.md)
+> **Phase 8 spec:** [Web UI design](superpowers/specs/2026-04-11-phase8-web-ui-design.md)
+> **Phase 8 plan:** [Web UI implementation plan](superpowers/plans/2026-04-11-phase8-web-ui.md)
 > **Proposed implementation plan:** [Collection graph implementation plan](superpowers/plans/2026-04-09-collection-graph-implementation.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 > **Pipeline:** [Operational pipeline](PIPELINE.md)

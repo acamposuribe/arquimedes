@@ -20,29 +20,6 @@ from arquimedes.enrich_metadata import enrich_metadata_stage
 from arquimedes.ingest import load_manifest
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _load_jsonl(path: Path) -> list[dict]:
-    """Load a .jsonl file into a list of dicts. Returns [] if absent."""
-    if not path.exists():
-        return []
-    records = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line:
-            records.append(json.loads(line))
-    return records
-
-
-def _load_json(path: Path, default=None):
-    """Load a JSON file. Returns default if absent."""
-    if not path.exists():
-        return default
-    return json.loads(path.read_text(encoding="utf-8"))
-
-
 def _progress(message: str) -> None:
     """Emit lightweight progress logs for long-running enrich operations."""
     print(message, file=sys.stderr, flush=True)

@@ -10,9 +10,9 @@ from arquimedes.chunking import chunk_pages
 from arquimedes.config import get_library_root, get_project_root, load_config
 from arquimedes.extract_figures import extract_all_figures
 from arquimedes.extract_image import extract_raw_image
-from arquimedes.extract_pdf import _sanitize_strings, extract_annotations, extract_raw_pdf
+from arquimedes.extract_pdf import _sanitize_strings, extract_raw_pdf
 from arquimedes.ingest import load_manifest
-from arquimedes.models import Annotation, MaterialMeta, Page
+from arquimedes.models import Annotation, Page
 from arquimedes.thumbnails import generate_thumbnails
 
 
@@ -115,7 +115,7 @@ def _extract_pdf_material(
 ) -> None:
     """Full PDF extraction pipeline."""
     # 1. Core extraction: text, pages, TOC, tables, annotations
-    meta = extract_raw_pdf(pdf_path, output_dir, material_id, manifest_entry)
+    extract_raw_pdf(pdf_path, output_dir, material_id, manifest_entry)
 
     # 2. Figures (embedded + rasterized)
     figures = extract_all_figures(
@@ -163,7 +163,7 @@ def _extract_image_material(
     ocr_fallback: bool = True,
 ) -> None:
     """Image file extraction pipeline."""
-    meta = extract_raw_image(
+    extract_raw_image(
         image_path, output_dir, material_id, manifest_entry,
         ocr_fallback=ocr_fallback,
     )

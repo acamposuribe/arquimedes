@@ -188,7 +188,6 @@ def enrich_document_stage(
     # 3. Load artifacts
     try:
         meta = _load_json(output_dir / "meta.json", default={})
-        toc = _load_json(output_dir / "toc.json", default=None)
         chunks = _load_jsonl(output_dir / "chunks.jsonl")
         annotations = _load_jsonl(output_dir / "annotations.jsonl")
     except Exception as exc:

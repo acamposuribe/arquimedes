@@ -321,10 +321,11 @@ def _write_compile_stamp(
 
 
 def _cluster_file_stamp(project_root: Path) -> str:
+    local_paths = sorted((project_root / "derived" / "collections").glob("*/local_concept_clusters.jsonl"))
+    if local_paths:
+        return enrich_stamps.canonical_hash(*[path.read_text(encoding="utf-8") for path in local_paths])
     bridge_path = project_root / "derived" / "bridge_concept_clusters.jsonl"
-    return enrich_stamps.canonical_hash(
-        bridge_path.read_text(encoding="utf-8") if bridge_path.exists() else "",
-    )
+    return enrich_stamps.canonical_hash(bridge_path.read_text(encoding="utf-8") if bridge_path.exists() else "")
 
 
 # ---------------------------------------------------------------------------
@@ -448,7 +449,8 @@ def _find_related(
 def _remove_orphans(
     wiki_root: Path,
     current_material_ids: set[str],
-    current_slugs: set[str],
+    current_slugs: set[str] | None = None,
+    current_concept_paths: set[str] | None = None,
 ) -> list[str]:
     """Delete wiki pages for removed materials or clusters. Returns removed paths."""
     removed = []
@@ -459,12 +461,29 @@ def _remove_orphans(
         rel = md_file.relative_to(wiki_root)
         parts = rel.parts
 
+        rel_wiki_path = f"wiki/{rel.as_posix()}"
+
         # Concept page: shared/concepts/{slug}.md or shared/bridge-concepts/{slug}.md
         if len(parts) == 3 and parts[0] == "shared" and parts[1] in {"concepts", "bridge-concepts"}:
             slug = parts[2].replace(".md", "")
             if slug.startswith("_"):
                 continue
-            if slug not in current_slugs:
+            if current_concept_paths is not None:
+                remove = rel_wiki_path not in current_concept_paths
+            else:
+                remove = slug not in (current_slugs or set())
+            if remove:
+                logger.info("Removing orphan concept page: %s", md_file)
+                md_file.unlink()
+                removed.append(str(md_file))
+            continue
+
+        # Local concept page: {domain}/{collection}/concepts/{slug}.md
+        if len(parts) == 4 and parts[2] == "concepts":
+            slug = parts[3].replace(".md", "")
+            if slug.startswith("_"):
+                continue
+            if current_concept_paths is not None and rel_wiki_path not in current_concept_paths:
                 logger.info("Removing orphan concept page: %s", md_file)
                 md_file.unlink()
                 removed.append(str(md_file))
@@ -516,15 +535,29 @@ def compile_wiki(
         ensure_index(config)
 
     # 2. Run clustering if stale or forced
+    local_cluster_summary = None
+    existing_local_clusters = cluster_mod.load_local_clusters(root)
     if skip_cluster:
         bridge_cluster_summary = {"skipped": True, "skip_reason": "cluster skipped for refresh"}
+        local_cluster_summary = {"skipped": True, "skip_reason": "cluster skipped for refresh"} if existing_local_clusters else None
+    elif existing_local_clusters or force_cluster:
+        local_cluster_summary = cluster_mod.cluster_concepts(
+            config, llm_fn=llm_fn, force=force or force_cluster
+        )
+        bridge_cluster_summary = {"skipped": True, "skip_reason": "using local collection clusters"}
     else:
         bridge_cluster_summary = cluster_mod.cluster_bridge_concepts(
             config, llm_fn=llm_fn, force=force or force_cluster
         )
 
     # 3. Load clusters
+    local_clusters = cluster_mod.load_local_clusters(root)
     bridge_clusters = cluster_mod.load_bridge_clusters(root)
+    page_clusters = local_clusters or bridge_clusters
+    concept_page_clusters = local_clusters or [
+        c for c in bridge_clusters
+        if len(dict.fromkeys(c.get("material_ids", []))) > 1
+    ]
     material_titles: dict[str, str] = {}
     if db_path.exists():
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -551,7 +584,7 @@ def compile_wiki(
     }
 
     bridge_page_clusters = [
-        c for c in bridge_clusters
+        c for c in page_clusters
         if len(dict.fromkeys(c.get("material_ids", []))) > 1
     ]
     lint_dir = root / "derived" / "lint"
@@ -616,9 +649,9 @@ def compile_wiki(
     current_cluster_stamp = _cluster_file_stamp(root)
     clusters_changed = (current_cluster_stamp != prev_cluster_stamp) or force or recompile_pages
 
-    # 6. Material clusters index: material_id → list of bridge clusters
+    # 6. Material clusters index: material_id → list of concept homes
     material_clusters: dict[str, list[dict]] = {mid: [] for mid in all_metas}
-    for c in bridge_page_clusters:
+    for c in concept_page_clusters:
         for mid in c.get("material_ids", []):
             if mid in material_clusters:
                 material_clusters[mid].append(c)
@@ -646,7 +679,7 @@ def compile_wiki(
                 except json.JSONDecodeError:
                     pass
 
-        related = _find_related(mid, bridge_page_clusters, db_path) if db_path.exists() else []
+        related = _find_related(mid, concept_page_clusters, db_path) if db_path.exists() else []
         mat_clusters = material_clusters.get(mid, [])
 
         # Build raw file link (file:// URL) and extracted text link (relative to wiki page)
@@ -672,13 +705,13 @@ def compile_wiki(
         _write_page(page_path, content)
         mat_pages_written += 1
 
-    # 8. Render bridge concept pages (all, when bridge clusters changed)
+    # 8. Render concept pages (all, when concept clusters changed)
     concept_pages_written = 0
     if clusters_changed or force or recompile_pages:
-        for c in bridge_page_clusters:
+        for c in concept_page_clusters:
             mid_set = set(c.get("material_ids", []))
             related_concepts = []
-            for other in bridge_page_clusters:
+            for other in concept_page_clusters:
                 if other["slug"] == c["slug"]:
                     continue
                 if mid_set & set(other.get("material_ids", [])):
@@ -712,7 +745,7 @@ def compile_wiki(
     graph_maintenance = _render_graph_maintenance_page(
         db_path,
         lint_dir,
-        bridge_page_clusters,
+        concept_page_clusters,
         material_titles,
         material_paths,
     )
@@ -724,7 +757,7 @@ def compile_wiki(
     index_pages_written = _render_index_pages(
         wiki_root,
         all_metas,
-        bridge_page_clusters,
+        concept_page_clusters,
         material_clusters,
         manifest_records,
         local_concept_entries,
@@ -735,8 +768,8 @@ def compile_wiki(
     bridge_feedback_written = _update_extracted_meta_bridge_feedback(extracted_root, bridge_page_clusters)
 
     # 11. Orphan removal
-    current_slugs = {c["slug"] for c in bridge_page_clusters}
-    orphans = _remove_orphans(wiki_root, set(all_metas.keys()), current_slugs)
+    current_concept_paths = {str(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md") for c in concept_page_clusters}
+    orphans = _remove_orphans(wiki_root, set(all_metas.keys()), current_concept_paths=current_concept_paths)
 
     # 12. Write compile stamp
     _write_compile_stamp(root, current_material_stamps, current_cluster_stamp)
@@ -761,6 +794,7 @@ def compile_wiki(
         "orphans_removed": len(orphans),
         "quick_lint": quick_lint_summary,
         "clustering": {
+            "local": local_cluster_summary,
             "bridge": bridge_cluster_summary,
         },
     }
@@ -773,7 +807,7 @@ def compile_wiki(
 def _render_index_pages(
     wiki_root: Path,
     all_metas: dict[str, dict],
-    bridge_clusters: list[dict],
+    concept_clusters: list[dict],
     material_clusters: dict[str, list[dict]],
     manifest_records: list[dict] | None = None,
     local_concept_entries: list[dict] | None = None,
@@ -826,15 +860,15 @@ def _render_index_pages(
                 domain_entries.append(domain_entry)
                 all_material_entries.append(root_entry)
 
-            # Key concepts: canonical bridge clusters with >=1 material in this collection
+            # Key concepts: canonical concept homes with >=1 material in this collection
             concept_counts: dict[str, int] = {}
             concept_info: dict[str, dict] = {}
             concept_relevance: dict[str, float] = {}  # higher = stronger
             _rel_scores = {"high": 3, "medium": 2, "low": 1}
-            for c in bridge_clusters:
+            for c in concept_clusters:
                 overlap = coll_mids & set(c.get("material_ids", []))
                 if overlap:
-                    cid = c["slug"]
+                    cid = str(c.get("cluster_id", "")).strip() or c["slug"]
                     concept_counts[cid] = len(overlap)
                     concept_info[cid] = c
                     # Sum relevance scores for source_concepts in this collection
@@ -845,6 +879,8 @@ def _render_index_pages(
                     )
                     concept_relevance[cid] = rel_sum
             key_concepts = []
+            collection_concept_entries = []
+            concept_index = f"wiki/{domain}/{collection}/concepts/_index.md"
             for slug, count in sorted(
                 concept_counts.items(),
                 key=lambda x: (
@@ -860,6 +896,11 @@ def _render_index_pages(
                 if "/bridge-concepts/" in dest:
                     name += " (bridge)"
                 key_concepts.append({"name": name, "path": rel, "count": count})
+                collection_concept_entries.append({
+                    "name": name,
+                    "path": compile_pages._relative_link(concept_index, dest),
+                    "summary": str(concept_info[slug].get("descriptor", "")).strip() or f"{count} material{'s' if count != 1 else ''}",
+                })
 
             # Top facets: frequency of non-empty facet values
             facet_fields = [
@@ -904,6 +945,11 @@ def _render_index_pages(
             )
             _write_page(wiki_root / domain / collection / "_index.md", content)
             written += 1
+            _write_page(
+                wiki_root / domain / collection / "concepts" / "_index.md",
+                compile_pages.render_index_page(f"{friendly_title} Concepts", collection_concept_entries),
+            )
+            written += 1
 
         domain_content = compile_pages.render_index_page(domain.title(), domain_entries)
         _write_page(wiki_root / domain / "_index.md", domain_content)
@@ -914,7 +960,7 @@ def _render_index_pages(
             "summary": f"{sum(len(cols) for cols in collections.values())} materials",
         })
 
-    # Local concept index
+    # Raw material-level local concept index
     concept_entries = local_concept_entries or []
     _write_page(
         wiki_root / "shared" / "concepts" / "_index.md",
@@ -923,7 +969,7 @@ def _render_index_pages(
     written += 1
 
     # Bridge concept glossary
-    bridge_glossary = compile_pages.render_glossary(bridge_clusters)
+    bridge_glossary = compile_pages.render_glossary(concept_clusters)
     _write_page(
         wiki_root / "shared" / "glossary" / "_index.md",
         bridge_glossary,
@@ -943,7 +989,7 @@ def _render_index_pages(
         "Arquimedes Wiki",
         domain_pages + [
             {"name": "Local Concepts", "path": "shared/concepts/_index.md", "summary": f"{len(concept_entries)} local concepts"},
-            {"name": "Main Concepts", "path": "shared/glossary/_index.md", "summary": f"{len(bridge_clusters)} main concepts"},
+            {"name": "Main Concepts", "path": "shared/glossary/_index.md", "summary": f"{len(concept_clusters)} main concepts"},
             *([maintenance_entry] if maintenance_entry else []),
         ],
     )

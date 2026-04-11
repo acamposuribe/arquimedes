@@ -243,6 +243,51 @@ def related(material_id: str, limit: int, human: bool):
         ))
 
 
+@cli.command("material-clusters")
+@click.argument("material_id")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def material_clusters(material_id: str, human: bool):
+    """List collection-local clusters connected to MATERIAL_ID."""
+    import json as _json
+    from arquimedes.search import format_cluster_hits_human, get_material_clusters
+
+    try:
+        results = get_material_clusters(material_id)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if human:
+        click.echo(format_cluster_hits_human(material_id, results))
+    else:
+        click.echo(_json.dumps(
+            {"material_id": material_id, "local_clusters": [r.to_dict() for r in results]},
+            ensure_ascii=False, indent=2,
+        ))
+
+
+@cli.command("collection-clusters")
+@click.argument("domain")
+@click.argument("collection")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def collection_clusters(domain: str, collection: str, human: bool):
+    """List collection-local clusters for DOMAIN/COLLECTION."""
+    import json as _json
+    from arquimedes.search import format_cluster_hits_human, get_collection_clusters
+
+    try:
+        results = get_collection_clusters(domain, collection)
+    except FileNotFoundError as e:
+        raise click.ClickException(str(e))
+
+    if human:
+        click.echo(format_cluster_hits_human(f"{domain}/{collection}", results))
+    else:
+        click.echo(_json.dumps(
+            {"domain": domain, "collection": collection, "local_clusters": [r.to_dict() for r in results]},
+            ensure_ascii=False, indent=2,
+        ))
+
+
 @cli.command()
 @click.option("--min-materials", default=1, show_default=True, help="Only show concepts appearing in at least N materials.")
 @click.option("--limit", default=100, show_default=True, help="Max concepts to return.")
@@ -283,28 +328,31 @@ def figures(material_id: str):
 
 @cli.command("cluster")
 @click.option("--force", is_flag=True, help="Re-cluster even if input is unchanged.")
-def cluster_cmd(force: bool):
-    """Cluster bridge concepts across materials into canonical concepts."""
-    from arquimedes.cluster import cluster_bridge_concepts
+@click.option("--domain", help="Cluster only one domain.")
+@click.option("--collection", help="Cluster only one collection.")
+def cluster_cmd(force: bool, domain: str | None, collection: str | None):
+    """Cluster concepts into collection-local canonical concept homes."""
+    from arquimedes.cluster import cluster_concepts
     from arquimedes.enrich_llm import EnrichmentError
     from arquimedes.config import load_config
 
     llm_state: dict = {}
 
     try:
-        bridge_summary = cluster_bridge_concepts(load_config(), force=force, llm_state=llm_state)
+        summary = cluster_concepts(load_config(), force=force, llm_state=llm_state, domain=domain, collection=collection)
     except EnrichmentError as e:
         raise click.ClickException(str(e))
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
 
-    if bridge_summary and bridge_summary.get("skipped"):
-        click.echo("Bridge clustering is up to date — skipped.")
-    elif bridge_summary:
-        total = bridge_summary["bridge_concepts"]
-        n_clusters = bridge_summary["clusters"]
-        multi = bridge_summary["multi_material"]
-        click.echo(f"Bridge: {total} concepts → {n_clusters} clusters ({multi} multi-material)")
+    if summary and summary.get("skipped"):
+        click.echo("Clustering is up to date — skipped.")
+    elif summary:
+        total = summary.get("total_concepts", 0)
+        n_clusters = summary.get("clusters", 0)
+        multi = summary.get("multi_material", 0)
+        scopes = summary.get("collections", 0)
+        click.echo(f"Local: {total} concepts → {n_clusters} clusters ({multi} multi-material, {scopes} collections)")
 
 
 @cli.command()

@@ -12,6 +12,7 @@ from arquimedes.cluster import (
     bridge_cluster_fingerprint,
     _validate_bridge_and_attach_provenance,
     load_bridge_clusters,
+    local_cluster_path,
 )
 from arquimedes.compile_pages import (
     _concept_wiki_path,
@@ -1074,6 +1075,130 @@ def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
     local_index = (tmp_path / "wiki" / "shared" / "concepts" / "_index.md").read_text()
     assert "## Archives" in local_index
     assert "archival habitat" in local_index
+
+
+def test_compile_uses_collection_local_cluster_pages(tmp_path, monkeypatch):
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+    from arquimedes.index import rebuild_index
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    mid1 = "mat_one"
+    mid2 = "mat_two"
+    for mid, title in ((mid1, "One"), (mid2, "Two")):
+        meta = _make_meta(mid, title)
+        mat_dir = tmp_path / "extracted" / mid
+        mat_dir.mkdir(parents=True)
+        (mat_dir / "meta.json").write_text(json.dumps(meta))
+        (mat_dir / "chunks.jsonl").write_text("")
+        (mat_dir / "annotations.jsonl").write_text("")
+    (manifests / "materials.jsonl").write_text(
+        "\n".join([
+            json.dumps({"material_id": mid1, "file_hash": mid1, "relative_path": f"Research/{mid1}.pdf", "file_type": "pdf", "domain": "research", "collection": "papers", "ingested_at": "2026-04-05T12:00:00+00:00"}),
+            json.dumps({"material_id": mid2, "file_hash": mid2, "relative_path": f"Research/{mid2}.pdf", "file_type": "pdf", "domain": "research", "collection": "papers", "ingested_at": "2026-04-05T12:00:00+00:00"}),
+        ]),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+
+    cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive Space Framework",
+        "slug": "archive-space-framework",
+        "aliases": [],
+        "descriptor": "Shared archival spatial idea.",
+        "confidence": 0.9,
+        "material_ids": [mid1, mid2],
+        "source_concepts": [
+            {"material_id": mid1, "concept_name": "archive space", "relevance": "high", "source_pages": [1], "evidence_spans": [], "confidence": 0.9},
+            {"material_id": mid2, "concept_name": "archive framework", "relevance": "high", "source_pages": [2], "evidence_spans": [], "confidence": 0.9},
+        ],
+        "wiki_path": "wiki/research/papers/concepts/archive-space-framework.md",
+    }
+    local_cluster_path(tmp_path, "research", "papers").parent.mkdir(parents=True, exist_ok=True)
+    local_cluster_path(tmp_path, "research", "papers").write_text(json.dumps(cluster) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True, "collections": 1, "total_concepts": 0, "clusters": 1, "multi_material": 1})
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    concept_page = (tmp_path / "wiki" / "research" / "papers" / "concepts" / "archive-space-framework.md").read_text()
+    collection_page = (tmp_path / "wiki" / "research" / "papers" / "_index.md").read_text()
+    material_page = (tmp_path / "wiki" / "research" / "papers" / f"{mid1}.md").read_text()
+    concept_index = (tmp_path / "wiki" / "research" / "papers" / "concepts" / "_index.md").read_text()
+    assert "# Archive Space Framework" in concept_page
+    assert "concepts/archive-space-framework.md" in collection_page
+    assert "concepts/archive-space-framework.md" in material_page
+    assert "Archive Space Framework" in concept_index
+
+
+def test_compile_renders_single_material_local_concept_home(tmp_path, monkeypatch):
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+    from arquimedes.index import rebuild_index
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    mid = "mat_single"
+    meta = _make_meta(mid, "Single")
+    mat_dir = tmp_path / "extracted" / mid
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps(meta))
+    (mat_dir / "chunks.jsonl").write_text("")
+    (mat_dir / "annotations.jsonl").write_text("")
+    (manifests / "materials.jsonl").write_text(
+        json.dumps({"material_id": mid, "file_hash": mid, "relative_path": f"Research/{mid}.pdf", "file_type": "pdf", "domain": "research", "collection": "papers", "ingested_at": "2026-04-05T12:00:00+00:00"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+
+    cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Single Concept Home",
+        "slug": "single-concept-home",
+        "aliases": [],
+        "descriptor": "Single-material concept home.",
+        "confidence": 1.0,
+        "material_ids": [mid],
+        "source_concepts": [
+            {"material_id": mid, "concept_name": "single concept", "relevance": "high", "source_pages": [1], "evidence_spans": [], "confidence": 1.0},
+        ],
+        "wiki_path": "wiki/research/papers/concepts/single-concept-home.md",
+    }
+    local_cluster_path(tmp_path, "research", "papers").parent.mkdir(parents=True, exist_ok=True)
+    local_cluster_path(tmp_path, "research", "papers").write_text(json.dumps(cluster) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True, "collections": 1, "total_concepts": 0, "clusters": 1, "multi_material": 0})
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    assert (tmp_path / "wiki" / "research" / "papers" / "concepts" / "single-concept-home.md").exists()
+    assert "concepts/single-concept-home.md" in (tmp_path / "wiki" / "research" / "papers" / f"{mid}.md").read_text()
 
 
 def test_compile_runs_quick_lint_after_compile(tmp_path, monkeypatch):

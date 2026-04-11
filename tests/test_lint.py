@@ -615,6 +615,134 @@ def test_cluster_audit_rewrites_resolved_reviews_to_validated_and_backfills_miss
     assert by_cluster["concept_002"]["finding_type"] == "validated"
 
 
+def test_local_cluster_audit_writes_collection_scoped_findings(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive and Space",
+        "slug": "archive-and-space",
+        "material_ids": ["mat_001"],
+        "source_concepts": [
+            {
+                "material_id": "mat_001",
+                "concept_name": "archive and space",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["archive and space"],
+                "confidence": 0.9,
+            }
+        ],
+        "wiki_path": "wiki/research/papers/concepts/archive-and-space.md",
+    }
+    _write_jsonl(root / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl", [cluster])
+
+    monkeypatch.setattr(
+        "arquimedes.lint._local_rows_in_scope_not_in_clusters",
+        lambda *_args, **_kwargs: (
+            [("archive and space", "archive and space", "mat_001", "high", "[1]", '["archive and space"]', 0.9, "local", "")],
+            [("mat_001", "One", "Summary", '["archive"]')],
+        ),
+    )
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(stage)
+            return json.dumps({
+                "bridge_updates": [],
+                "new_bridges": [],
+                    "review_updates": [],
+                    "new_reviews": [
+                    {
+                            "cluster_ref": "research__papers__local_0001",
+                        "finding_type": "validated",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "This local cluster still looks coherent inside the collection.",
+                        "recommendation": "Keep it as-is.",
+                    }
+                ],
+                "_finished": True,
+            })
+
+        return fn
+
+    material_info = _build_material_info(root, [{"material_id": "mat_001"}])
+    reviews, discovery = _run_cluster_audit(root, [cluster], material_info, "test-route", llm_factory)
+
+    audit_stamp = json.loads((root / "derived" / "collections" / "research__papers" / "local_audit_stamp.json").read_text(encoding="utf-8"))
+    stored = [
+        json.loads(line)
+        for line in (root / "derived" / "lint" / "cluster_reviews.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert calls == ["lint"]
+    assert discovery == 0
+    assert [row["cluster_id"] for row in reviews] == ["research__papers__local_0001"]
+    assert reviews[0]["wiki_path"] == "wiki/research/papers/concepts/archive-and-space.md"
+    assert audit_stamp["cluster_reviews"] == 1
+    assert [row["cluster_id"] for row in stored] == ["research__papers__local_0001"]
+
+
+def test_local_cluster_audit_skips_busy_collection_scope(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive and Space",
+        "slug": "archive-and-space",
+        "material_ids": ["mat_001"],
+        "source_concepts": [
+            {
+                "material_id": "mat_001",
+                "concept_name": "archive and space",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["archive and space"],
+                "confidence": 0.9,
+            }
+        ],
+        "wiki_path": "wiki/research/papers/concepts/archive-and-space.md",
+    }
+    _write_jsonl(
+        root / "derived" / "lint" / "cluster_reviews.jsonl",
+        [{
+            "review_id": "research__papers__local_0001",
+            "cluster_id": "research__papers__local_0001",
+            "finding_type": "validated",
+            "severity": "low",
+            "status": "validated",
+            "note": "Stored review.",
+            "recommendation": "Keep it.",
+            "input_fingerprint": "fp",
+            "wiki_path": "wiki/research/papers/concepts/archive-and-space.md",
+        }],
+    )
+    gate_path = root / "derived" / "collections" / "research__papers" / ".audit.lock"
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_path.write_text("busy\n", encoding="utf-8")
+
+    material_info = _build_material_info(root, [{"material_id": "mat_001"}])
+    reviews, discovery = _run_cluster_audit(
+        root,
+        [cluster],
+        material_info,
+        "test-route",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("llm should not run")),
+    )
+
+    assert discovery == 0
+    assert [row["cluster_id"] for row in reviews] == ["research__papers__local_0001"]
+    assert not (root / "derived" / "collections" / "research__papers" / "local_audit_stamp.json").exists()
+
+
 def test_cluster_audit_local_rows_only_keep_unbridged_concepts():
     bridge_clusters = [
         {
@@ -1319,7 +1447,7 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
             assert "SQL evidence file:" in prompt
             assert "Work file:" not in prompt
             assert "main takeaways" in prompt.lower()
-            assert "important bridge concepts" in prompt.lower()
+            assert "important local clusters" in prompt.lower()
             assert "methodological conclusions" in prompt.lower()
             assert "main content learnings" in prompt.lower()
             assert "new_materials" in prompt
@@ -1546,8 +1674,10 @@ def test_collection_reflection_evidence_uses_material_conclusions_and_keeps_chun
 
     clusters = [
         {
-            "cluster_id": "concept_001",
+            "cluster_id": "research__papers__local_0001",
             "canonical_name": "Archive and Space",
+            "domain": "research",
+            "collection": "papers",
             "material_ids": ["mat_001"],
             "source_concepts": [
                 {
@@ -1620,7 +1750,7 @@ def test_collection_reflection_evidence_uses_material_conclusions_and_keeps_chun
         {"important_material_ids": ["mat_001"]},
         Tool(),
     )
-    assert payload["bridge_concepts"][0]["main_takeaways"] == ["Shared archive frame"]
+    assert payload["local_clusters"][0]["main_takeaways"] == ["Shared archive frame"]
     assert len(payload["new_materials"]) == 1
     assert len(payload["old_materials"]) == 1
     first_new = payload["new_materials"][0]

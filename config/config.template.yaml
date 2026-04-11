@@ -128,9 +128,13 @@ library_root: "~/Arquimedes-Library"
 #   host: "0.0.0.0"
 #   port: 8420
 
+# clustering:
+#   parallel_collections: 4
+
 # Lint scheduling
 # lint:
 #   post_compile_quick: true   # run `arq lint --quick` automatically after compile
+#   parallel_collection_audits: 4
 #   full_schedule_min_hours: 168
 #   graph_schedule:
 #     min_interval_hours: 168

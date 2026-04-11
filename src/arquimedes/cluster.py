@@ -7,11 +7,13 @@ Writes derived/bridge_concept_clusters.jsonl and derived/bridge_cluster_stamp.js
 
 from __future__ import annotations
 
+import os
 import json
 import logging
 import re
 import sqlite3
 import shutil
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +36,36 @@ logger = logging.getLogger(__name__)
 _SLUG_RE = re.compile(r"[^a-z0-9-]+")
 _MULTI_DASH_RE = re.compile(r"-{2,}")
 _WORD_RE = re.compile(r"[a-z0-9]+")
+
+
+def _collection_scope(domain: str, collection: str) -> tuple[str, str]:
+    return ((domain or "practice").strip() or "practice", (collection or "_general").strip() or "_general")
+
+
+def local_collection_key(domain: str, collection: str) -> str:
+    domain, collection = _collection_scope(domain, collection)
+    return f"{domain}__{collection}"
+
+
+def local_cluster_dir(root: Path, domain: str, collection: str) -> Path:
+    return root / "derived" / "collections" / local_collection_key(domain, collection)
+
+
+def local_cluster_path(root: Path, domain: str, collection: str) -> Path:
+    return local_cluster_dir(root, domain, collection) / "local_concept_clusters.jsonl"
+
+
+def local_cluster_stamp_path(root: Path, domain: str, collection: str) -> Path:
+    return local_cluster_dir(root, domain, collection) / "local_cluster_stamp.json"
+
+
+def _local_cluster_gate_path(root: Path, domain: str, collection: str) -> Path:
+    return local_cluster_dir(root, domain, collection) / ".cluster.lock"
+
+
+def local_concept_wiki_path(domain: str, collection: str, slug: str) -> str:
+    domain, collection = _collection_scope(domain, collection)
+    return f"wiki/{domain}/{collection}/concepts/{slug}.md"
 
 
 def slugify(name: str) -> str:
@@ -194,6 +226,46 @@ def _write_jsonl(path: Path, rows: list[dict]) -> None:
     if rows:
         text += "\n"
     path.write_text(text, encoding="utf-8")
+
+
+def _next_local_cluster_index(domain: str, collection: str, clusters: list[dict]) -> int:
+    prefix = f"{local_collection_key(domain, collection)}__local_"
+    max_idx = 0
+    for cluster in clusters:
+        cid = str(cluster.get("cluster_id", "")).strip()
+        match = re.fullmatch(rf"{re.escape(prefix)}(\d{{4}})", cid)
+        if match:
+            max_idx = max(max_idx, int(match.group(1)))
+    return max_idx + 1
+
+
+def normalize_local_clusters(domain: str, collection: str, cluster_records: list[dict]) -> list[dict]:
+    domain, collection = _collection_scope(domain, collection)
+    next_idx = _next_local_cluster_index(domain, collection, cluster_records)
+    prefix = f"{local_collection_key(domain, collection)}__local_"
+    normalized = []
+    for cluster in cluster_records:
+        row = dict(cluster)
+        slug = str(row.get("slug", "")).strip() or slugify(str(row.get("canonical_name", "")).strip())
+        cid = str(row.get("cluster_id", "")).strip()
+        if not re.fullmatch(rf"{re.escape(prefix)}\d{{4}}", cid):
+            cid = f"{prefix}{next_idx:04d}"
+            next_idx += 1
+        material_ids = [str(mid).strip() for mid in row.get("material_ids", []) if str(mid).strip()]
+        normalized.append({
+            "cluster_id": cid,
+            "domain": domain,
+            "collection": collection,
+            "canonical_name": str(row.get("canonical_name", "")).strip(),
+            "slug": slug,
+            "aliases": _dedupe_aliases([str(alias) for alias in row.get("aliases", [])]),
+            "descriptor": str(row.get("descriptor", "")).strip(),
+            "material_ids": sorted(dict.fromkeys(material_ids)),
+            "source_concepts": row.get("source_concepts", []),
+            "confidence": float(row.get("confidence", 0.0) or 0.0),
+            "wiki_path": local_concept_wiki_path(domain, collection, slug),
+        })
+    return normalized
 
 
 def _attach_run_provenance(records: list[dict], route_signature: str, run_at: str) -> list[dict]:
@@ -420,6 +492,19 @@ def _load_manifest_index(root: Path) -> dict[str, dict]:
     return manifest_index
 
 
+def _collection_material_ids(
+    manifest_index: dict[str, dict],
+    domain: str,
+    collection: str,
+) -> set[str]:
+    domain, collection = _collection_scope(domain, collection)
+    return {
+        mid
+        for mid, row in manifest_index.items()
+        if _collection_scope(str(row.get("domain", "")), str(row.get("collection", ""))) == (domain, collection)
+    }
+
+
 def _parse_iso_datetime(value: object) -> datetime | None:
     """Parse an ISO datetime string into an aware datetime when possible."""
     text = str(value or "").strip()
@@ -454,6 +539,23 @@ def _clustered_at_from_stamp(root: Path) -> datetime | None:
         return None
 
 
+def _local_clustered_at_from_stamp(root: Path, domain: str, collection: str) -> datetime | None:
+    stamp_path = local_cluster_stamp_path(root, domain, collection)
+    if not stamp_path.exists():
+        return None
+    try:
+        stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+    clustered_at = _parse_iso_datetime(stamp.get("clustered_at"))
+    if clustered_at is not None:
+        return clustered_at
+    try:
+        return datetime.fromtimestamp(stamp_path.stat().st_mtime, timezone.utc)
+    except OSError:
+        return None
+
+
 def _pending_bridge_material_rows(
     material_rows: list[tuple],
     manifest_index: dict[str, dict],
@@ -473,6 +575,18 @@ def _pending_bridge_material_rows(
     return pending
 
 
+def _pending_local_material_rows(
+    material_rows: list[tuple],
+    manifest_index: dict[str, dict],
+    domain: str,
+    collection: str,
+    clustered_at: datetime | None,
+) -> list[tuple]:
+    material_ids = _collection_material_ids(manifest_index, domain, collection)
+    rows = [row for row in material_rows if row and str(row[0]) in material_ids]
+    return _pending_bridge_material_rows(rows, manifest_index, clustered_at)
+
+
 def _pending_bridge_concept_rows(
     concept_rows: list[tuple],
     manifest_index: dict[str, dict],
@@ -490,6 +604,93 @@ def _pending_bridge_concept_rows(
         if ingested_at is None or ingested_at > clustered_at:
             pending.append(row)
     return pending
+
+
+def _pending_local_concept_rows(
+    concept_rows: list[tuple],
+    manifest_index: dict[str, dict],
+    domain: str,
+    collection: str,
+    clustered_at: datetime | None,
+) -> list[tuple]:
+    material_ids = _collection_material_ids(manifest_index, domain, collection)
+    rows = [row for row in concept_rows if row and str(row[2]) in material_ids]
+    return _pending_bridge_concept_rows(rows, manifest_index, clustered_at)
+
+
+def _parallel_collection_workers(config: dict, scope_count: int, *, allow_parallel: bool) -> int:
+    if not allow_parallel or scope_count <= 1:
+        return 1
+    clustering_cfg = config.get("clustering", {}) if isinstance(config, dict) else {}
+    configured = int(clustering_cfg.get("parallel_collections", 1) or 1)
+    return max(1, min(scope_count, configured))
+
+
+def local_cluster_fingerprint(
+    domain: str,
+    collection: str,
+    config: dict | None = None,
+) -> str:
+    if config is None:
+        config = load_config()
+    root = get_project_root()
+    db_path = root / "indexes" / "search.sqlite"
+    if not db_path.exists():
+        return ""
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        concept_rows = _load_concept_rows(con)
+        material_rows = _load_material_rows(con)
+    finally:
+        con.close()
+    manifest_index = _load_manifest_index(root)
+    clustered_at = _local_clustered_at_from_stamp(root, domain, collection)
+    pending_material_rows = _pending_local_material_rows(material_rows, manifest_index, domain, collection, clustered_at)
+    pending_concept_rows = _pending_local_concept_rows(concept_rows, manifest_index, domain, collection, clustered_at)
+    return enrich_stamps.canonical_hash(list(pending_material_rows), list(pending_concept_rows))
+
+
+def is_local_clustering_stale(
+    domain: str,
+    collection: str,
+    config: dict | None = None,
+    *,
+    force: bool = False,
+) -> bool:
+    if force:
+        return True
+    if config is None:
+        config = load_config()
+    root = get_project_root()
+    stamp_path = local_cluster_stamp_path(root, domain, collection)
+    clusters_path = local_cluster_path(root, domain, collection)
+    if not stamp_path.exists() or not clusters_path.exists():
+        return True
+    try:
+        stamp = json.loads(stamp_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return True
+    if stamp.get("total_concepts", 0) > 0 and stamp.get("clusters", 0) == 0:
+        return True
+    clustered_at = _local_clustered_at_from_stamp(root, domain, collection)
+    if clustered_at is None:
+        return True
+    manifest_index = _load_manifest_index(root)
+    db_path = root / "indexes" / "search.sqlite"
+    if not db_path.exists():
+        return True
+    material_ids = _collection_material_ids(manifest_index, domain, collection)
+    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        for row in _load_material_rows(con):
+            if not row or str(row[0]) not in material_ids:
+                continue
+            ingested_at = _parse_iso_datetime(manifest_index.get(str(row[0]), {}).get("ingested_at"))
+            if ingested_at is None or ingested_at > clustered_at:
+                return True
+    finally:
+        con.close()
+    return False
 
 
 def bridge_cluster_fingerprint(config: dict | None = None) -> str:
@@ -1005,6 +1206,230 @@ def _validate_bridge_and_attach_provenance(
     return clean_clusters
 
 
+def _cluster_scopes(
+    manifest_index: dict[str, dict],
+    *,
+    domain: str | None = None,
+    collection: str | None = None,
+) -> list[tuple[str, str]]:
+    scopes = {
+        _collection_scope(str(row.get("domain", "")), str(row.get("collection", "")))
+        for row in manifest_index.values()
+        if isinstance(row, dict)
+    }
+    filtered = []
+    for item_domain, item_collection in scopes:
+        if domain and item_domain != domain:
+            continue
+        if collection and item_collection != collection:
+            continue
+        filtered.append((item_domain, item_collection))
+    return sorted(filtered)
+
+
+def cluster_concepts(
+    config: dict | None = None,
+    *,
+    llm_fn: LlmFn | None = None,
+    llm_state: dict | None = None,
+    force: bool = False,
+    domain: str | None = None,
+    collection: str | None = None,
+) -> dict:
+    if config is None:
+        config = load_config()
+    root = get_project_root()
+    log_path = root / "logs" / "cluster.log"
+    cluster_start_time = datetime.now()
+
+    def _log_value(value) -> str:
+        return str(value).replace("\t", " ").replace("\n", " ").strip()
+
+    def _append_log(*fields) -> None:
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with open(log_path, "a", encoding="utf-8") as f:
+                f.write("\t".join(_log_value(field) for field in fields) + "\n")
+        except Exception:
+            pass
+
+    domain_filter = (domain or "").strip() or None
+    collection_filter = (collection or "").strip() or None
+    _append_log(cluster_start_time.isoformat(), "START", "local", domain_filter or "*", collection_filter or "*", force)
+
+    try:
+        db_path = root / "indexes" / "search.sqlite"
+        if not db_path.exists():
+            raise FileNotFoundError(f"Search index not found at {db_path}. Run `arq index rebuild` first.")
+
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        try:
+            concept_rows = _load_concept_rows(con)
+            material_rows = _load_material_rows(con)
+        finally:
+            con.close()
+
+        if not concept_rows:
+            raise EnrichmentError("No concepts in index. Run `arq enrich` on materials first.")
+
+        manifest_index = _load_manifest_index(root)
+        scopes = _cluster_scopes(manifest_index, domain=domain_filter, collection=collection_filter)
+        if not scopes:
+            return {"collections": 0, "total_concepts": 0, "clusters": 0, "multi_material": 0, "skipped": True}
+
+        if llm_fn is None:
+            base_llm_fn = None
+        else:
+            base_llm_fn = llm_fn
+
+        route_signature = get_model_id(config, "cluster")
+        total_concepts = 0
+        total_clusters = 0
+        total_multi = 0
+        changed = 0
+        workers = _parallel_collection_workers(config, len(scopes), allow_parallel=base_llm_fn is None and llm_state is None)
+
+        def _one(scope_domain: str, scope_collection: str) -> dict:
+            scope_key = f"{scope_domain}/{scope_collection}"
+            gate_path = _local_cluster_gate_path(root, scope_domain, scope_collection)
+            gate_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                gate_fd = os.open(gate_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                _append_log(datetime.now().isoformat(), "SCOPE_SKIP", scope_domain, scope_collection, "busy")
+                existing = load_local_clusters(root, domain=scope_domain, collection=scope_collection)
+                return {"total_concepts": 0, "clusters": len(existing), "multi_material": sum(1 for row in existing if len(row.get("material_ids", [])) > 1), "changed": 0}
+
+            try:
+                os.write(gate_fd, f"{os.getpid()}\n".encode())
+                _append_log(datetime.now().isoformat(), "SCOPE_START", scope_domain, scope_collection, force)
+                if not is_local_clustering_stale(scope_domain, scope_collection, config, force=force):
+                    existing = load_local_clusters(root, domain=scope_domain, collection=scope_collection)
+                    _append_log(datetime.now().isoformat(), "SCOPE_SKIP", scope_domain, scope_collection, "up_to_date")
+                    return {"total_concepts": 0, "clusters": len(existing), "multi_material": sum(1 for row in existing if len(row.get("material_ids", [])) > 1), "changed": 0}
+
+                clustered_at = None if force else _local_clustered_at_from_stamp(root, scope_domain, scope_collection)
+                pending_material_rows = _pending_local_material_rows(material_rows, manifest_index, scope_domain, scope_collection, clustered_at)
+                pending_concept_rows = _pending_local_concept_rows(concept_rows, manifest_index, scope_domain, scope_collection, clustered_at)
+                existing = load_local_clusters(root, domain=scope_domain, collection=scope_collection)
+                scoped_material_ids = _collection_material_ids(manifest_index, scope_domain, scope_collection)
+                scoped_concept_rows = [row for row in concept_rows if row and str(row[2]) in scoped_material_ids]
+                scoped_material_rows = [row for row in material_rows if row and str(row[0]) in scoped_material_ids]
+
+                if not pending_concept_rows:
+                    local_cluster_path(root, scope_domain, scope_collection).parent.mkdir(parents=True, exist_ok=True)
+                    _write_jsonl(local_cluster_path(root, scope_domain, scope_collection), existing)
+                    local_cluster_stamp_path(root, scope_domain, scope_collection).write_text(
+                        json.dumps({
+                            "clustered_at": datetime.now(timezone.utc).isoformat(),
+                            "fingerprint": local_cluster_fingerprint(scope_domain, scope_collection, config),
+                            "route_signature": route_signature,
+                            "total_concepts": 0,
+                            "clusters": len(existing),
+                            "domain": scope_domain,
+                            "collection": scope_collection,
+                        }, indent=2),
+                        encoding="utf-8",
+                    )
+                    _append_log(datetime.now().isoformat(), "SCOPE_DONE", scope_domain, scope_collection, "no_pending_concepts")
+                    return {"total_concepts": 0, "clusters": len(existing), "multi_material": sum(1 for row in existing if len(row.get("material_ids", [])) > 1), "changed": 0}
+
+                scope_llm_fn = base_llm_fn or make_cli_llm_fn(config, "cluster")
+                bridge_packets_path = _stage_bridge_packet_input(root, pending_concept_rows, pending_material_rows)
+                bridge_memory_path = _stage_bridge_memory_input(root, existing)
+                try:
+                    user_msg = _build_bridge_prompt(bridge_packets_path, bridge_memory_path)
+                    raw_text = scope_llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
+                    parsed = parse_json_or_repair(scope_llm_fn, raw_text, _BRIDGE_DELTA_SCHEMA)
+                    if not isinstance(parsed, dict):
+                        raise EnrichmentError(f"Cluster output is not a JSON object for {scope_key}")
+                    if parsed.get("_finished") is not True:
+                        raise EnrichmentError(f"Cluster output missing _finished=true for {scope_key}")
+                    parsed = dict(parsed)
+                    parsed.pop("_finished", None)
+                    missing_output_fields = [field for field in _REQUIRED_BRIDGE_DELTA_FIELDS if field not in parsed]
+                    if missing_output_fields:
+                        raise EnrichmentError(
+                            f"Cluster output missing required fields for {scope_key}: {', '.join(missing_output_fields)}"
+                        )
+                finally:
+                    _cleanup_paths(bridge_packets_path, bridge_memory_path)
+
+                concept_index = _build_concept_index(scoped_concept_rows)
+                material_titles = {str(mid): str(title or mid) for mid, title, *_ in scoped_material_rows}
+                raw_clusters = _apply_bridge_delta(existing, parsed)
+                validated = _validate_bridge_and_attach_provenance(raw_clusters, concept_index, material_titles)
+                clusters = normalize_local_clusters(scope_domain, scope_collection, validated)
+
+                run_at = datetime.now(timezone.utc).isoformat()
+                _attach_run_provenance(clusters, route_signature, run_at)
+                _write_jsonl(local_cluster_path(root, scope_domain, scope_collection), clusters)
+                local_cluster_stamp_path(root, scope_domain, scope_collection).write_text(
+                    json.dumps({
+                        "clustered_at": run_at,
+                        "fingerprint": local_cluster_fingerprint(scope_domain, scope_collection, config),
+                        "route_signature": route_signature,
+                        "total_concepts": len(pending_concept_rows),
+                        "clusters": len(clusters),
+                        "domain": scope_domain,
+                        "collection": scope_collection,
+                    }, indent=2),
+                    encoding="utf-8",
+                )
+
+                _append_log(datetime.now().isoformat(), "SCOPE_DONE", scope_domain, scope_collection, f"concepts={len(pending_concept_rows)} clusters={len(clusters)}")
+                return {
+                    "total_concepts": len(pending_concept_rows),
+                    "clusters": len(clusters),
+                    "multi_material": sum(1 for row in clusters if len(row.get("material_ids", [])) > 1),
+                    "changed": 1,
+                }
+            except Exception as exc:
+                _append_log(datetime.now().isoformat(), "SCOPE_FAILED", scope_domain, scope_collection, exc)
+                raise
+            finally:
+                try:
+                    os.close(gate_fd)
+                except OSError:
+                    pass
+                try:
+                    gate_path.unlink()
+                except OSError:
+                    pass
+
+        if workers > 1:
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                futures = [pool.submit(_one, scope_domain, scope_collection) for scope_domain, scope_collection in scopes]
+                for future in as_completed(futures):
+                    result = future.result()
+                    total_concepts += result["total_concepts"]
+                    total_clusters += result["clusters"]
+                    total_multi += result["multi_material"]
+                    changed += result["changed"]
+        else:
+            for scope_domain, scope_collection in scopes:
+                result = _one(scope_domain, scope_collection)
+                total_concepts += result["total_concepts"]
+                total_clusters += result["clusters"]
+                total_multi += result["multi_material"]
+                changed += result["changed"]
+
+        cluster_end_time = datetime.now()
+        _append_log(cluster_start_time.isoformat(), cluster_end_time.isoformat(), "local", domain_filter or "*", collection_filter or "*", force, "DONE", f"collections={len(scopes)} changed={changed} clusters={total_clusters}")
+        return {
+            "collections": len(scopes),
+            "changed": changed,
+            "total_concepts": total_concepts,
+            "clusters": total_clusters,
+            "multi_material": total_multi,
+            "skipped": changed == 0,
+        }
+    except Exception as exc:
+        cluster_end_time = datetime.now()
+        _append_log(cluster_start_time.isoformat(), cluster_end_time.isoformat(), "local", domain_filter or "*", collection_filter or "*", force, "FAILED", exc)
+        raise
+
+
 # ---------------------------------------------------------------------------
 # Main clustering function
 # ---------------------------------------------------------------------------
@@ -1179,4 +1604,34 @@ def load_bridge_clusters(project_root: Path | None = None) -> list[dict]:
             slug = cluster.get("slug", "")
             cluster["wiki_path"] = f"wiki/shared/bridge-concepts/{slug}.md" if slug else ""
             clusters.append(cluster)
+    return clusters
+
+
+def load_local_clusters(
+    project_root: Path | None = None,
+    *,
+    domain: str | None = None,
+    collection: str | None = None,
+) -> list[dict]:
+    if project_root is None:
+        project_root = get_project_root()
+    paths = []
+    if domain is not None or collection is not None:
+        paths = [local_cluster_path(project_root, domain or "practice", collection or "_general")]
+    else:
+        paths = sorted((project_root / "derived" / "collections").glob("*/local_concept_clusters.jsonl"))
+    clusters = []
+    for path in paths:
+        if not path.exists():
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            cluster = json.loads(line)
+            scope_domain, scope_collection = _collection_scope(
+                str(cluster.get("domain", "") or path.parent.name.split("__", 1)[0]),
+                str(cluster.get("collection", "") or (path.parent.name.split("__", 1)[1] if "__" in path.parent.name else "_general")),
+            )
+            clusters.extend(normalize_local_clusters(scope_domain, scope_collection, [cluster]))
     return clusters

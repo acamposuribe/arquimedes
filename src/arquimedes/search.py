@@ -118,6 +118,8 @@ class CanonicalClusterHit:
     aliases: list[str]
     material_count: int
     wiki_path: str
+    domain: str = ""
+    collection: str = ""
 
     def to_dict(self) -> dict:
         d: dict[str, Any] = {
@@ -130,6 +132,10 @@ class CanonicalClusterHit:
             d["aliases"] = self.aliases
         if self.wiki_path:
             d["wiki_path"] = self.wiki_path
+        if self.domain:
+            d["domain"] = self.domain
+        if self.collection:
+            d["collection"] = self.collection
         return d
 
 
@@ -642,22 +648,91 @@ def _search_canonical_clusters(
     query: str,
     limit: int = 5,
 ) -> list[CanonicalClusterHit]:
-    """Return canonical concept clusters matching query via concept_clusters_fts."""
-    # Gracefully skip if the FTS table is absent (pre-memory-rebuild indexes)
-    try:
-        rows = con.execute(
+    hits: list[CanonicalClusterHit] = []
+    seen: set[str] = set()
+
+    for sql, params, is_local in (
+        (
             """SELECT cc.cluster_id, cc.canonical_name, cc.slug,
-                      cc.aliases, cc.material_count, cc.wiki_path
+                      cc.aliases, cc.material_count, cc.wiki_path, cc.domain, cc.collection
+               FROM local_concept_clusters_fts
+               JOIN local_concept_clusters cc ON local_concept_clusters_fts.rowid = cc.rowid
+               WHERE local_concept_clusters_fts MATCH ?
+               ORDER BY local_concept_clusters_fts.rank
+               LIMIT ?""",
+            [query, limit],
+            True,
+        ),
+        (
+            """SELECT cc.cluster_id, cc.canonical_name, cc.slug,
+                      cc.aliases, cc.material_count, cc.wiki_path, '' AS domain, '' AS collection
                FROM concept_clusters_fts
                JOIN concept_clusters cc ON concept_clusters_fts.rowid = cc.rowid
                WHERE concept_clusters_fts MATCH ?
                ORDER BY concept_clusters_fts.rank
                LIMIT ?""",
             [query, limit],
+            False,
+        ),
+    ):
+        try:
+            rows = con.execute(sql, params).fetchall()
+        except sqlite3.OperationalError:
+            rows = []
+        for row in rows:
+            cluster_id = row["cluster_id"]
+            if cluster_id in seen:
+                continue
+            seen.add(cluster_id)
+            try:
+                aliases = json.loads(row["aliases"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                aliases = []
+            hits.append(CanonicalClusterHit(
+                cluster_id=cluster_id,
+                canonical_name=row["canonical_name"],
+                slug=row["slug"],
+                aliases=aliases,
+                material_count=row["material_count"] or 0,
+                wiki_path=row["wiki_path"] or "",
+                domain=row["domain"] or "",
+                collection=row["collection"] or "",
+            ))
+            if len(hits) >= limit:
+                return hits
+    return hits
+
+
+def _local_cluster_rows_for_material(con: sqlite3.Connection, material_id: str) -> list[sqlite3.Row]:
+    try:
+        return con.execute(
+            """SELECT lcc.cluster_id, lcc.canonical_name, lcc.slug, lcc.aliases,
+                      lcc.material_count, lcc.wiki_path, lcc.domain, lcc.collection
+               FROM local_cluster_materials lcm
+               JOIN local_concept_clusters lcc ON lcm.cluster_id = lcc.cluster_id
+               WHERE lcm.material_id = ?
+               ORDER BY lcc.canonical_name, lcc.cluster_id""",
+            [material_id],
         ).fetchall()
     except sqlite3.OperationalError:
         return []
 
+
+def _local_cluster_rows_for_collection(con: sqlite3.Connection, domain: str, collection: str) -> list[sqlite3.Row]:
+    try:
+        return con.execute(
+            """SELECT cluster_id, canonical_name, slug, aliases,
+                      material_count, wiki_path, domain, collection
+               FROM local_concept_clusters
+               WHERE domain = ? AND collection = ?
+               ORDER BY canonical_name, cluster_id""",
+            [domain, collection],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
+def _rows_to_cluster_hits(rows: list[sqlite3.Row]) -> list[CanonicalClusterHit]:
     hits: list[CanonicalClusterHit] = []
     for row in rows:
         try:
@@ -671,6 +746,8 @@ def _search_canonical_clusters(
             aliases=aliases,
             material_count=row["material_count"] or 0,
             wiki_path=row["wiki_path"] or "",
+            domain=row["domain"] or "",
+            collection=row["collection"] or "",
         ))
     return hits
 
@@ -746,8 +823,13 @@ def format_human(result: SearchResult) -> str:
         lines.append("Canonical concept clusters:")
         for cl in result.canonical_clusters:
             alias_str = f"  (aliases: {', '.join(cl.aliases[:3])})" if cl.aliases else ""
-            bridge_tag = " [main]" if "/bridge-concepts/" in cl.wiki_path else ""
-            lines.append(f"  • {cl.canonical_name}{bridge_tag}{alias_str}  [{cl.material_count} material(s)]")
+            if "/bridge-concepts/" in cl.wiki_path:
+                tag = " [global]"
+            elif cl.domain and cl.collection:
+                tag = f" [local {cl.domain}/{cl.collection}]"
+            else:
+                tag = ""
+            lines.append(f"  • {cl.canonical_name}{tag}{alias_str}  [{cl.material_count} material(s)]")
 
     return "\n".join(lines)
 
@@ -841,7 +923,24 @@ def _do_find_related(
         scores[mid] = scores.get(mid, 0.0) + conn.weight
         connections.setdefault(mid, []).append(conn)
 
-    # Shared canonical cluster membership (weight 2.0) — strongest signal
+    # Shared collection-local cluster membership (weight 2.5) — strongest same-collection signal
+    try:
+        cluster_rows = con.execute(
+            """SELECT lcm2.material_id, lcc.canonical_name
+               FROM local_cluster_materials lcm1
+               JOIN local_cluster_materials lcm2 ON lcm1.cluster_id = lcm2.cluster_id
+               JOIN local_concept_clusters lcc ON lcm1.cluster_id = lcc.cluster_id
+               WHERE lcm1.material_id = ? AND lcm2.material_id != ?""",
+            [material_id, material_id],
+        ).fetchall()
+        for row in cluster_rows:
+            _add(row["material_id"], Connection(
+                type="shared_local_cluster", value=row["canonical_name"], weight=2.5
+            ))
+    except sqlite3.OperationalError:
+        pass
+
+    # Shared global cluster membership (weight 2.0) — strongest cross-collection signal
     try:
         cluster_rows = con.execute(
             """SELECT cm2.material_id, cc.canonical_name
@@ -853,7 +952,7 @@ def _do_find_related(
         ).fetchall()
         for row in cluster_rows:
             _add(row["material_id"], Connection(
-                type="shared_cluster", value=row["canonical_name"], weight=2.0
+                type="shared_global_cluster", value=row["canonical_name"], weight=2.0
             ))
     except sqlite3.OperationalError:
         pass  # cluster tables absent (pre-clustering index)
@@ -954,8 +1053,57 @@ def format_related_human(material_id: str, related: list[RelatedMaterial]) -> st
         lines.append(f"  {i:>2}. {r.title[:60]} ({r.material_id})  score={r.score:.2f}")
         for conn in r.connections[:5]:
             facet_label = f" [{conn.facet}]" if conn.facet else ""
-            prefix = "★ " if conn.type == "shared_cluster" else "  "
+            prefix = "★ " if conn.type in {"shared_local_cluster", "shared_global_cluster"} else "  "
             lines.append(f"      {prefix}{conn.type}{facet_label}: {conn.value}")
+    return "\n".join(lines)
+
+
+def get_material_clusters(
+    material_id: str,
+    config: dict | None = None,
+) -> list[CanonicalClusterHit]:
+    if config is None:
+        config = load_config()
+    index_path = get_index_path(config)
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+    con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        return _rows_to_cluster_hits(_local_cluster_rows_for_material(con, material_id))
+    finally:
+        con.close()
+
+
+def get_collection_clusters(
+    domain: str,
+    collection: str,
+    config: dict | None = None,
+) -> list[CanonicalClusterHit]:
+    if config is None:
+        config = load_config()
+    index_path = get_index_path(config)
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+    con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        return _rows_to_cluster_hits(_local_cluster_rows_for_collection(con, domain, collection))
+    finally:
+        con.close()
+
+
+def format_cluster_hits_human(label: str, hits: list[CanonicalClusterHit]) -> str:
+    if not hits:
+        return f"No local clusters found for {label}."
+    lines = [f"Local clusters for {label}:\n"]
+    for idx, hit in enumerate(hits, 1):
+        scope = f" [{hit.domain}/{hit.collection}]" if hit.domain and hit.collection else ""
+        lines.append(f"  {idx:>2}. {hit.canonical_name}{scope} ({hit.cluster_id})  materials={hit.material_count}")
     return "\n".join(lines)
 
 

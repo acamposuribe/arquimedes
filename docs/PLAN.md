@@ -138,16 +138,16 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 
 ## Collection Graph Step 1: Collection-First Semantic Homes
 
-- [ ] Rehome moved materials so collection assignment stays trustworthy after ingest
-- [ ] Add collection-local cluster artifacts, stamps, and stable ids under `derived/collections/`
-- [ ] Add `arq cluster-local` with per-collection stale detection, scheduling, and internal gates
-- [ ] Project the local graph into SQLite and register local concept wiki pages
-- [ ] Compile collection-local concept pages and make material/collection pages prefer them
-- [ ] Re-ground collection reflections in local concept homes
-- [ ] Reuse the current cluster-audit model as collection-local audit with parallel fanout and per-collection gates
-- [ ] Add collection -> local concepts and material -> local concepts traversal
-- [ ] Keep default lexical search global while preserving deterministic cross-collection relatedness during the transition
-- [ ] Add a one-time Step 1 migration script for legacy bridge-era repos so current data can bootstrap local concept homes and collection continuity without re-enrichment or re-reflection
+- [x] Rehome moved materials so collection assignment stays trustworthy after ingest
+- [x] Add collection-local cluster artifacts, stamps, and stable ids under `derived/collections/`
+- [x] Make `arq cluster` collection-local with per-collection stale detection, scheduling, and internal gates
+- [x] Project the local graph into SQLite and register local cluster wiki pages
+- [x] Compile collection-local cluster pages and make material/collection pages prefer them
+- [x] Re-ground collection reflections in local clusters
+- [x] Reuse the current cluster-audit model as collection-local audit with parallel fanout and per-collection gates
+- [x] Add collection -> local clusters and material -> local clusters traversal
+- [x] Keep default lexical search global while preserving deterministic cross-collection relatedness during the transition
+- [x] Add a one-time Step 1 migration script for legacy bridge-era repos so current data can bootstrap local clusters and collection continuity without re-enrichment or re-reflection
 
 ## Phase 7: Agent Tools
 

@@ -1,6 +1,6 @@
 # Arquimedes — Collection Graph Architecture: Implementation Plan
 
-> **Status:** Proposed
+> **Status:** In progress
 > **Date:** 2026-04-09
 > **Spec:** [Collection graph architecture](../specs/2026-04-09-collection-graph-design.md)
 > **Related specs:** [Full system design](../specs/2026-04-04-arquimedes-knowledge-system-design.md), [Phase 5 wiki compiler](../completed/specs/2026-04-05-phase5-wiki-compiler-design.md), [Phase 6 lint](../completed/specs/2026-04-05-phase6-lint-design.md)
@@ -12,7 +12,7 @@ Make collections first-order semantic homes without losing global associative me
 The rollout is intentionally split into two implementation steps:
 
 1. **Step 1: Local collection graph**
-   Each collection becomes its own semantic neighborhood with local clustering, local concept pages, and collection-first reflection.
+   Each collection becomes its own semantic neighborhood with local clustering, local cluster pages, and collection-first reflection.
 2. **Step 2: Global bridge graph**
    A separate cross-collection bridge layer reconnects those local neighborhoods.
 
@@ -60,23 +60,23 @@ For a repo whose current data effectively lives inside one collection, the expec
 
 ### S1.1 Data model and artifact layout
 
-- [ ] Define canonical local-cluster artifact paths under `derived/collections/`
-- [ ] Define per-collection stamp files for staleness tracking
-- [ ] Define stable local cluster IDs scoped by collection
-- [ ] Define the local concept wiki path under `wiki/<domain>/<collection>/concepts/`
-- [ ] Define the local cluster JSON schema
+- [x] Define canonical local-cluster artifact paths under `derived/collections/`
+- [x] Define per-collection stamp files for staleness tracking
+- [x] Define stable local cluster IDs scoped by collection
+- [x] Define the local concept wiki path under `wiki/<domain>/<collection>/concepts/`
+- [x] Define the local cluster JSON schema
 
 ### S1.2 Local clustering command
 
-- [ ] Reframe Step 1 explicitly as a scoped adaptation of the current `arq cluster` machinery, not a new clustering algorithm
-- [ ] Add `arq cluster-local`
-- [ ] Add collection-scoping options
-- [ ] Implement per-collection stale detection
-- [ ] Build local-cluster prompt packets from one collection only
-- [ ] Persist local-cluster outputs and stamps per collection
-- [ ] Extend cluster logging with collection scope
-- [ ] Add collection-level scheduling and internal gates so only one clustering run per collection is active at a time
-- [ ] Add config for cross-collection parallelism, e.g. `clustering.parallel_collections`
+- [x] Reframe Step 1 explicitly as a scoped adaptation of the current `arq cluster` machinery, not a new clustering algorithm
+- [x] Make `arq cluster` collection-local
+- [x] Add collection-scoping options
+- [x] Implement per-collection stale detection
+- [x] Build local-cluster prompt packets from one collection only
+- [x] Persist local-cluster outputs and stamps per collection
+- [x] Extend cluster logging with collection scope
+- [x] Add collection-level scheduling and internal gates so only one clustering run per collection is active at a time
+- [x] Add config for cross-collection parallelism, e.g. `clustering.parallel_collections`
 
 Notes:
 
@@ -87,30 +87,30 @@ Notes:
 
 ### S1.3 Local graph projection
 
-- [ ] Add SQLite tables for local concept clusters and memberships
-- [ ] Add alias and relation tables for the local graph
-- [ ] Register local concept pages in `wiki_pages`
-- [ ] Add freshness / rebuild support for the local graph projection
+- [x] Add SQLite tables for local concept clusters and memberships
+- [x] Add alias and relation tables for the local graph
+- [x] Register local cluster pages in `wiki_pages`
+- [x] Add freshness / rebuild support for the local graph projection
 
 ### S1.4 Compile changes
 
-- [ ] Compile local concept pages into each collection tree
-- [ ] Change collection pages to render local concept homes
-- [ ] Change material pages to link first to local concept homes
-- [ ] Add deterministic indexes for local concept navigation where useful
+- [x] Compile local cluster pages into each collection tree
+- [x] Change collection pages to render local clusters first
+- [x] Change material pages to link first to local clusters
+- [x] Add deterministic indexes for local concept navigation where useful
 
 ### S1.5 Collection reflection changes
 
-- [ ] Make collection reflection evidence packets treat local clusters as the primary concept layer
-- [ ] Keep material and chunk evidence as supporting context
-- [ ] Preserve incremental reruns per collection
+- [x] Make collection reflection evidence packets treat local clusters as the primary concept layer
+- [x] Keep material and chunk evidence as supporting context
+- [x] Preserve incremental reruns per collection
 
 ### S1.6 Local audit changes
 
-- [ ] Reuse the current cluster-audit pattern for local audit rather than designing a new audit subsystem
-- [ ] Change audit inputs, work files, findings, and refresh cycles to collection scope
-- [ ] Add scheduling and internal gates so only one local audit run per collection is active at a time
-- [ ] Add config for cross-collection audit parallelism, e.g. `lint.parallel_collection_audits`
+- [x] Reuse the current cluster-audit pattern for local audit rather than designing a new audit subsystem
+- [x] Change audit inputs, work files, findings, and refresh cycles to collection scope
+- [x] Add scheduling and internal gates so only one local audit run per collection is active at a time
+- [x] Add config for cross-collection audit parallelism, e.g. `lint.parallel_collection_audits`
 
 Notes:
 
@@ -120,28 +120,28 @@ Notes:
 
 ### S1.7 Search and agent traversal
 
-- [ ] Add collection -> local concepts traversal
-- [ ] Add material -> local concepts traversal
-- [ ] Preserve global lexical search across the whole corpus
-- [ ] Preserve deterministic cross-collection relatedness during the transition
+- [x] Add collection -> local clusters traversal
+- [x] Add material -> local clusters traversal
+- [x] Preserve global lexical search across the whole corpus
+- [x] Preserve deterministic cross-collection relatedness during the transition
 
 ### S1.8 Verification
 
-- [ ] Test per-collection stale detection
-- [ ] Test that local clusters never span collections
-- [ ] Test local concept page compilation
-- [ ] Test collection pages using local concept homes
-- [ ] Test local graph projection into SQLite
-- [ ] Test multi-collection scheduling with one internal gate per collection
-- [ ] Test collection-local audit scheduling and collection-scoped findings
+- [x] Test per-collection stale detection
+- [x] Test that local clusters never span collections
+- [x] Test local cluster page compilation
+- [x] Test collection pages using local clusters
+- [x] Test local graph projection into SQLite
+- [x] Test multi-collection scheduling with one internal gate per collection
+- [x] Test collection-local audit scheduling and collection-scoped findings
 
 ### Step 1 exit criteria
 
-- [ ] Every enriched collection can produce local clusters
-- [ ] Collection pages render local concept homes
-- [ ] Material pages link to local concept homes
-- [ ] Collection reflections are grounded in local semantic structure
-- [ ] No local cluster spans collections
+- [x] Every enriched collection can produce local clusters
+- [x] Collection pages render local clusters
+- [x] Material pages link to local clusters
+- [x] Collection reflections are grounded in local semantic structure
+- [x] No local cluster spans collections
 
 ---
 
@@ -171,21 +171,22 @@ Notes:
 ### S2.4 Compile changes
 
 - [ ] Keep `wiki/shared/bridge-concepts/` as the bridge publication area
-- [ ] Update bridge pages to cite local concept pages as members
-- [ ] Add backlinks from local concept pages to bridge memberships where useful
-- [ ] Distinguish local concept homes from bridge concepts in shared indexes
+- [ ] Update bridge pages to cite local cluster pages as members
+- [ ] Add backlinks from local cluster pages to bridge memberships where useful
+- [ ] Distinguish local clusters from bridge concepts in shared indexes
 
 ### S2.5 Lint changes
 
 - [ ] Add a distinct global bridge audit layer on top of Step 1 local audit
 - [ ] Keep collection reflection focused on collection meaning
 - [ ] Move cross-collection synthesis into the global bridge layer
-- [ ] Update graph-maintenance prompts and findings to reason over both layers explicitly
+- [ ] Re-evaluate whether graph maintenance should exist at all in Step 2 before adapting it to the two-layer graph
 
 Notes:
 
 - Step 2 should assume collection-local audit already exists.
 - The lint work in Step 2 is about the new global bridge layer and graph-wide synthesis, not about making audit local for the first time.
+- Graph maintenance is explicitly marked for re-thinking before any Step 2 adaptation work. Removal is allowed if it still does not justify its complexity.
 
 ### S2.6 Search and retrieval
 
@@ -220,9 +221,9 @@ Notes:
 
 ### Migration
 
-- [ ] Provide deterministic migration for old bridge-memory tables where possible
-- [ ] Decide what the existing `derived/bridge_concept_clusters.jsonl` means during Step 1
-- [ ] Add upgrade notes for existing repos
+- [x] Provide deterministic migration for old bridge-memory tables where possible
+- [x] Decide what the existing `derived/bridge_concept_clusters.jsonl` means during Step 1
+- [x] Add upgrade notes for existing repos
 
 Migration requirements for Step 1:
 
@@ -233,8 +234,8 @@ Migration requirements for Step 1:
 
 ### Operational safety
 
-- [ ] Make collection assignment refreshable so moved materials can be rehomed
-- [ ] Keep logs and stamps auditable by collection scope
+- [x] Make collection assignment refreshable so moved materials can be rehomed
+- [x] Keep logs and stamps auditable by collection scope
 - [ ] Avoid any design that forces a full-corpus semantic rebuild after a small collection change
 
 ## Immediate Next Order
@@ -243,7 +244,7 @@ Recommended execution sequence:
 
 1. make collection assignment rehomable and trustworthy
 2. add local-cluster artifacts, stamps, and SQL tables
-3. implement `arq cluster-local`
-4. compile local concept pages and collection-home pages
+3. implement collection-local `arq cluster`
+4. compile local cluster pages and collection-home pages
 5. re-ground collection reflections in local clusters
 6. implement global bridging over local semantic outputs

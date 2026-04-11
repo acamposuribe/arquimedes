@@ -8,7 +8,8 @@ from pathlib import Path
 import pytest
 
 from arquimedes.index import rebuild_index
-from arquimedes.search import SearchResult, format_human, search
+from arquimedes.memory import memory_rebuild
+from arquimedes.search import SearchResult, format_human, get_collection_clusters, get_material_clusters, search
 
 
 # --- Fixtures (reuse helpers from test_index pattern) ---
@@ -675,6 +676,15 @@ def _write_concepts(mat_dir: Path, concepts: list[dict]) -> None:
     )
 
 
+def _write_local_clusters(root: Path, domain: str, collection: str, clusters: list[dict]) -> None:
+    cluster_dir = root / "derived" / "collections" / f"{domain}__{collection}"
+    cluster_dir.mkdir(parents=True, exist_ok=True)
+    (cluster_dir / "local_concept_clusters.jsonl").write_text(
+        "\n".join(json.dumps(cluster) for cluster in clusters) + "\n",
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def concepts_repo(tmp_path, monkeypatch):
     """Two materials: mat_alpha shares a concept with mat_beta; different keywords and authors."""
@@ -750,6 +760,22 @@ def concepts_repo(tmp_path, monkeypatch):
 
     monkeypatch.chdir(tmp_path)
     rebuild_index()
+    _write_local_clusters(tmp_path, "research", "_general", [
+        {
+            "cluster_id": "research___general__local_0001",
+            "domain": "research",
+            "collection": "_general",
+            "canonical_name": "Archival Habitat Cluster",
+            "slug": "archival-habitat-cluster",
+            "aliases": ["archival habitat"],
+            "confidence": 0.95,
+            "source_concepts": [
+                {"material_id": "mat_alpha", "concept_name": "archival habitat", "relevance": "high", "source_pages": [2, 3], "evidence_spans": ["the archival habitat"], "confidence": 1.0},
+                {"material_id": "mat_beta", "concept_name": "archival habitat", "relevance": "high", "source_pages": [1, 5], "evidence_spans": ["archival habitat concept"], "confidence": 0.95},
+            ],
+        }
+    ])
+    memory_rebuild()
     return tmp_path
 
 
@@ -839,6 +865,13 @@ class TestFindRelated:
         assert beta is not None
         types = {c.type for c in beta.connections}
         assert "shared_concept" in types
+
+    def test_shared_local_cluster_contributes(self, concepts_repo):
+        related = find_related("mat_alpha")
+        beta = next((r for r in related if r.material_id == "mat_beta"), None)
+        assert beta is not None
+        types = {c.type for c in beta.connections}
+        assert "shared_local_cluster" in types
 
     def test_shared_author_contributes(self, concepts_repo):
         related = find_related("mat_alpha")
@@ -965,6 +998,21 @@ class TestListConcepts:
         entry = next(e for e in entries if e.material_count == 2)
         # Both mat_alpha and mat_beta have relevance "high" for archival habitat
         assert "high" in entry.relevance_summary
+
+
+class TestLocalClusterTraversal:
+    def test_search_surfaces_local_clusters(self, concepts_repo):
+        result = search("archival habitat")
+        ids = [cluster.cluster_id for cluster in result.canonical_clusters]
+        assert "research___general__local_0001" in ids
+
+    def test_get_material_clusters_returns_local_clusters(self, concepts_repo):
+        hits = get_material_clusters("mat_alpha")
+        assert [hit.cluster_id for hit in hits] == ["research___general__local_0001"]
+
+    def test_get_collection_clusters_returns_local_clusters(self, concepts_repo):
+        hits = get_collection_clusters("research", "_general")
+        assert [hit.cluster_id for hit in hits] == ["research___general__local_0001"]
 
 
 # --- Concept normalization ---

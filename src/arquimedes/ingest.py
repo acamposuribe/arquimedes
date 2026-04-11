@@ -109,6 +109,31 @@ def scan_library(library_root: Path) -> list[Path]:
     return sorted(unique)
 
 
+def _refresh_extracted_scope(project_root: Path, entry: MaterialManifest) -> None:
+    meta_path = project_root / "extracted" / entry.material_id / "meta.json"
+    if not meta_path.exists():
+        return
+    try:
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return
+    if not isinstance(meta, dict):
+        return
+    changed = False
+    for key, value in {
+        "file_hash": entry.file_hash,
+        "source_path": entry.relative_path,
+        "domain": entry.domain,
+        "collection": entry.collection,
+        "ingested_at": entry.ingested_at,
+    }.items():
+        if meta.get(key) != value:
+            meta[key] = value
+            changed = True
+    if changed:
+        meta_path.write_text(json.dumps(meta, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
+
+
 def ingest(
     path: str | None = None,
     config: dict | None = None,
@@ -149,8 +174,10 @@ def ingest(
     # Load existing manifest
     manifest = load_manifest(project_root)
     existing_hashes = {m.file_hash for m in manifest.values()}
+    existing_by_hash = {m.file_hash: m for m in manifest.values()}
 
     new_materials: list[MaterialManifest] = []
+    manifest_changed = False
 
     for file_path in files:
         file_type = _detect_file_type(file_path)
@@ -159,14 +186,63 @@ def ingest(
 
         # Compute identity
         material_id = compute_material_id(file_path)
+        file_hash = compute_file_hash(file_path)
 
-        # Skip if already registered (same content)
+        # Refresh path-derived scope for already-registered materials.
         if material_id in manifest:
+            existing = manifest[material_id]
+            try:
+                relative = file_path.resolve().relative_to(library_root.resolve())
+            except ValueError:
+                relative = Path(file_path.name)
+            domain = _derive_domain(relative)
+            collection = _derive_collection(relative)
+            if domain and (
+                existing.relative_path != str(relative)
+                or existing.domain != domain
+                or existing.collection != collection
+            ):
+                manifest[material_id] = MaterialManifest(
+                    material_id=existing.material_id,
+                    file_hash=file_hash,
+                    relative_path=str(relative),
+                    file_type=existing.file_type,
+                    domain=domain,
+                    collection=collection,
+                    ingested_at=datetime.now(timezone.utc).isoformat(),
+                    ingested_by=existing.ingested_by,
+                )
+                _refresh_extracted_scope(project_root, manifest[material_id])
+                manifest_changed = True
             continue
 
         # Also check by hash for safety
-        file_hash = compute_file_hash(file_path)
         if file_hash in existing_hashes:
+            existing = existing_by_hash[file_hash]
+            try:
+                relative = file_path.resolve().relative_to(library_root.resolve())
+            except ValueError:
+                relative = Path(file_path.name)
+            domain = _derive_domain(relative)
+            collection = _derive_collection(relative)
+            if domain and (
+                existing.material_id == material_id
+                or existing.relative_path != str(relative)
+                or existing.domain != domain
+                or existing.collection != collection
+            ):
+                manifest[existing.material_id] = MaterialManifest(
+                    material_id=existing.material_id,
+                    file_hash=file_hash,
+                    relative_path=str(relative),
+                    file_type=existing.file_type,
+                    domain=domain,
+                    collection=collection,
+                    ingested_at=datetime.now(timezone.utc).isoformat(),
+                    ingested_by=existing.ingested_by,
+                )
+                _refresh_extracted_scope(project_root, manifest[existing.material_id])
+                manifest_changed = True
             continue
 
         # Derive collection from subfolder structure
@@ -194,9 +270,10 @@ def ingest(
 
         manifest[material_id] = entry
         new_materials.append(entry)
+        manifest_changed = True
 
     # Save updated manifest
-    if new_materials:
+    if manifest_changed:
         save_manifest(project_root, manifest)
 
     return new_materials

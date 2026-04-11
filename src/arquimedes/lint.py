@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 from arquimedes.cluster import (
+    _collection_scope,
     _attach_run_provenance,
     _build_source_concept,
     _derive_cluster_confidence,
@@ -41,6 +42,11 @@ from arquimedes.cluster import (
     is_bridge_clustering_stale,
     bridge_cluster_fingerprint,
     load_bridge_clusters,
+    load_local_clusters,
+    local_cluster_dir,
+    local_cluster_fingerprint,
+    local_cluster_stamp_path,
+    normalize_local_clusters,
     slugify,
 )
 from arquimedes.compile import compile_wiki
@@ -70,6 +76,8 @@ REPORT_PATH = Path("wiki/_lint_report.md")
 LINT_STAGE_STAMP_PATH = Path(LINT_DIR) / "lint_stamp.json"
 CLUSTER_AUDIT_STATE_PATH = Path(LINT_DIR) / "cluster_audit_state.json"
 GRAPH_REFLECTION_STAMP_PATH = Path(LINT_DIR) / "graph_reflection_stamp.json"
+LOCAL_AUDIT_STATE_NAME = "local_audit_state.json"
+LOCAL_AUDIT_STAMP_NAME = "local_audit_stamp.json"
 DEFAULT_GRAPH_REFLECTION_INTERVAL_HOURS = 168.0
 DEFAULT_GRAPH_REFLECTION_MIN_CLUSTER_DELTA = 3
 DEFAULT_GRAPH_REFLECTION_MIN_MATERIAL_DELTA = 5
@@ -639,6 +647,31 @@ class ReflectionIndexTool:
                     """
                     SELECT cc.cluster_id, cc.canonical_name, cc.slug, cc.aliases, cc.material_count,
                            cc.wiki_path
+                    FROM local_concept_clusters_fts
+                    JOIN local_concept_clusters cc ON local_concept_clusters_fts.rowid = cc.rowid
+                    WHERE local_concept_clusters_fts MATCH ?
+                    ORDER BY local_concept_clusters_fts.rank
+                    LIMIT ?
+                    """,
+                    [query, limit],
+                ).fetchall()
+            except sqlite3.OperationalError:
+                rows = []
+            for row in rows:
+                clusters.append({
+                    "kind": "cluster",
+                    "cluster_id": row["cluster_id"],
+                    "canonical_name": row["canonical_name"],
+                    "slug": row["slug"],
+                    "aliases": _parse_json_list(row["aliases"]),
+                    "material_count": row["material_count"] or 0,
+                    "wiki_path": row["wiki_path"] or "",
+                })
+            try:
+                rows = self.con.execute(
+                    """
+                    SELECT cc.cluster_id, cc.canonical_name, cc.slug, cc.aliases, cc.material_count,
+                           cc.wiki_path
                     FROM concept_clusters_fts
                     JOIN concept_clusters cc ON concept_clusters_fts.rowid = cc.rowid
                     WHERE concept_clusters_fts MATCH ?
@@ -750,6 +783,19 @@ class ReflectionIndexTool:
                     keywords = _parse_json_list(row["keywords"])
                 except Exception:
                     keywords = []
+                try:
+                    local_clusters = self.con.execute(
+                        """
+                        SELECT lcc.cluster_id, lcc.canonical_name, lcc.slug, lcc.wiki_path
+                        FROM local_cluster_materials lcm
+                        JOIN local_concept_clusters lcc ON lcm.cluster_id = lcc.cluster_id
+                        WHERE lcm.material_id = ?
+                        ORDER BY lcc.canonical_name, lcc.cluster_id
+                        """,
+                        [record_id],
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    local_clusters = []
                 return {
                     "kind": "material",
                     "material_id": row["material_id"],
@@ -761,9 +807,68 @@ class ReflectionIndexTool:
                     "year": row["year"],
                     "authors": authors,
                     "keywords": keywords,
+                    "local_clusters": [
+                        {
+                            "cluster_id": cluster["cluster_id"],
+                            "canonical_name": cluster["canonical_name"],
+                            "slug": cluster["slug"],
+                            "wiki_path": cluster["wiki_path"],
+                        }
+                        for cluster in local_clusters
+                    ],
                     "evidence": self._material_evidence(record_id),
                 }
             if kind == "concept":
+                row = self.con.execute(
+                """
+                SELECT cluster_id, canonical_name, slug, aliases, confidence, wiki_path, material_count
+                FROM local_concept_clusters
+                WHERE cluster_id = ?
+                """,
+                [record_id],
+                ).fetchone()
+                if row is not None:
+                    reflection = self.con.execute(
+                    """
+                    SELECT cluster_id, slug, canonical_name, main_takeaways, main_tensions,
+                           open_questions, why_this_concept_matters, supporting_material_ids,
+                           supporting_evidence, input_fingerprint, wiki_path
+                    FROM concept_reflections
+                    WHERE cluster_id = ?
+                    """,
+                    [record_id],
+                    ).fetchone()
+                    material_rows = self.con.execute(
+                    """
+                    SELECT material_id, relevance, source_pages, evidence_spans, confidence
+                    FROM local_cluster_materials
+                    WHERE cluster_id = ?
+                    ORDER BY confidence DESC, material_id
+                    """,
+                    [record_id],
+                    ).fetchall()
+                    aliases = _parse_json_list(row["aliases"])
+                    return {
+                        "kind": "concept",
+                        "cluster_id": row["cluster_id"],
+                        "canonical_name": row["canonical_name"],
+                        "slug": row["slug"],
+                        "aliases": aliases,
+                        "confidence": row["confidence"],
+                        "wiki_path": row["wiki_path"],
+                        "material_count": row["material_count"],
+                        "cluster_materials": [
+                            {
+                                "material_id": r["material_id"],
+                                "relevance": r["relevance"],
+                                "source_pages": _parse_json_list(r["source_pages"]),
+                                "evidence_spans": _parse_json_list(r["evidence_spans"]),
+                                "confidence": r["confidence"],
+                            }
+                            for r in material_rows
+                        ],
+                        "reflection": self._row_to_dict(reflection) if reflection else {},
+                    }
                 row = self.con.execute(
                 """
                 SELECT cluster_id, canonical_name, slug, aliases, confidence, wiki_path, material_count
@@ -847,11 +952,33 @@ class ReflectionIndexTool:
                 """,
                 [domain, collection],
                 ).fetchall()
+                try:
+                    local_clusters = self.con.execute(
+                    """
+                    SELECT cluster_id, canonical_name, slug, wiki_path, material_count
+                    FROM local_concept_clusters
+                    WHERE domain = ? AND collection = ?
+                    ORDER BY canonical_name, cluster_id
+                    """,
+                    [domain, collection],
+                    ).fetchall()
+                except sqlite3.OperationalError:
+                    local_clusters = []
                 return {
                     "kind": "collection",
                     "domain": domain,
                     "collection": collection,
                     "wiki_page": self._row_to_dict(wiki_row) if wiki_row else {},
+                    "local_clusters": [
+                        {
+                            "cluster_id": row["cluster_id"],
+                            "canonical_name": row["canonical_name"],
+                            "slug": row["slug"],
+                            "wiki_path": row["wiki_path"],
+                            "material_count": row["material_count"],
+                        }
+                        for row in local_clusters
+                    ],
                     "members": [
                         {
                             "material_id": row["material_id"],
@@ -1057,7 +1184,108 @@ def _material_titles_from_metas(metas: dict[str, dict]) -> dict[str, str]:
 
 
 def _current_concepts(root: Path) -> list[dict]:
-    return load_bridge_clusters(root)
+    return load_local_clusters(root) or load_bridge_clusters(root)
+
+
+def _cluster_scope(cluster: dict) -> tuple[str, str] | None:
+    wiki_path = str(cluster.get("wiki_path", "") or "").strip()
+    if "/bridge-concepts/" in wiki_path:
+        return None
+    domain = str(cluster.get("domain", "") or "").strip()
+    collection = str(cluster.get("collection", "") or "").strip()
+    cluster_id = str(cluster.get("cluster_id", "") or "").strip()
+    if not (domain or collection or "__local_" in cluster_id or "/concepts/" in wiki_path):
+        return None
+    return _collection_scope(domain, collection)
+
+
+def _clusters_are_local(clusters: list[dict]) -> bool:
+    return any(_cluster_scope(cluster) is not None for cluster in clusters if isinstance(cluster, dict))
+
+
+def _group_clusters_by_scope(clusters: list[dict]) -> dict[tuple[str, str], list[dict]]:
+    grouped: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    for cluster in clusters:
+        if not isinstance(cluster, dict):
+            continue
+        scope = _cluster_scope(cluster)
+        if scope is not None:
+            grouped[scope].append(cluster)
+    return grouped
+
+
+def _local_audit_state_path(root: Path, domain: str, collection: str) -> Path:
+    return local_cluster_dir(root, domain, collection) / LOCAL_AUDIT_STATE_NAME
+
+
+def _local_audit_stamp_path(root: Path, domain: str, collection: str) -> Path:
+    return local_cluster_dir(root, domain, collection) / LOCAL_AUDIT_STAMP_NAME
+
+
+def _local_audit_gate_path(root: Path, domain: str, collection: str) -> Path:
+    return local_cluster_dir(root, domain, collection) / ".audit.lock"
+
+
+def _parallel_collection_audit_workers(config: dict | None = None) -> int:
+    lint_cfg = _lint_schedule_config(config)
+    try:
+        return max(1, int(lint_cfg.get("parallel_collection_audits", 4) or 4))
+    except (TypeError, ValueError):
+        return 4
+
+
+def _latest_local_clustered_at(root: Path) -> str:
+    latest_dt: datetime | None = None
+    latest_raw = ""
+    for path in sorted((root / "derived" / "collections").glob("*/local_cluster_stamp.json")):
+        clustered_at = str((_load_json(path, {}) or {}).get("clustered_at", "") or "")
+        parsed = _parse_iso_datetime(clustered_at)
+        if parsed is None:
+            continue
+        if latest_dt is None or parsed > latest_dt:
+            latest_dt = parsed
+            latest_raw = clustered_at
+    return latest_raw
+
+
+def _scope_material_info(material_info: dict[str, dict], domain: str, collection: str) -> dict[str, dict]:
+    target_scope = _collection_scope(domain, collection)
+    return {
+        mid: info
+        for mid, info in material_info.items()
+        if isinstance(info, dict)
+        and _collection_scope(info.get("domain", ""), info.get("collection", "")) == target_scope
+    }
+
+
+def _local_rows_in_scope_not_in_clusters(
+    root: Path,
+    domain: str,
+    collection: str,
+    scope_clusters: list[dict],
+    material_info: dict[str, dict],
+) -> tuple[list[tuple], list[tuple]]:
+    local_rows, material_rows = _load_local_concepts(root)
+    if not local_rows or not material_rows:
+        return [], []
+    target_scope = _collection_scope(domain, collection)
+    scoped_local_rows = []
+    for row in local_rows:
+        try:
+            _concept_name, _concept_key, material_id, _relevance, _source_pages, _evidence_spans, _confidence, _concept_type, _descriptor = _split_concept_row(row)
+        except ValueError:
+            continue
+        info = material_info.get(material_id, {})
+        if _collection_scope(info.get("domain", ""), info.get("collection", "")) == target_scope:
+            scoped_local_rows.append(row)
+    if not scoped_local_rows:
+        return [], []
+    pending_local_rows = _filter_local_rows_not_in_bridge(scoped_local_rows, scope_clusters)
+    if not pending_local_rows:
+        return [], []
+    pending_material_ids = {str(row[2]).strip() for row in pending_local_rows if row and str(row[2]).strip()}
+    pending_material_rows = [row for row in material_rows if row and str(row[0]).strip() in pending_material_ids]
+    return pending_local_rows, pending_material_rows
 
 
 def _load_local_concepts(root: Path) -> tuple[list[tuple], list[tuple]]:
@@ -1652,6 +1880,9 @@ def _existing_by_key(path: Path, key_field: str) -> dict[str, dict]:
 
 
 def _current_clustered_at(root: Path) -> str:
+    local_clustered_at = _latest_local_clustered_at(root)
+    if local_clustered_at:
+        return local_clustered_at
     stamp = _read_stamp(root / "derived" / "bridge_cluster_stamp.json")
     if not stamp:
         return ""
@@ -1691,6 +1922,22 @@ def _bridge_cluster_stage_due(root: Path, stamp_key: str, artifact_path: Path, s
 
 
 def _cluster_audit_due(root: Path, _bridge_clusters: list[dict]) -> tuple[bool, str]:
+    local_groups = _group_clusters_by_scope(_current_concepts(root))
+    if local_groups:
+        for (domain, collection), scope_clusters in sorted(local_groups.items()):
+            if not scope_clusters:
+                continue
+            cluster_stamp = _read_stamp(local_cluster_stamp_path(root, domain, collection))
+            clustered_at = _parse_iso_datetime(cluster_stamp.get("clustered_at"))
+            audit_stamp = _read_stamp(_local_audit_stamp_path(root, domain, collection))
+            audited_at = _parse_iso_datetime(audit_stamp.get("audited_at"))
+            if audited_at is None:
+                return True, f"local audit stamp missing for {domain}/{collection}"
+            if clustered_at is None:
+                return True, f"local cluster stamp missing for {domain}/{collection}"
+            if audited_at < clustered_at:
+                return True, f"latest clustering is newer than local audit for {domain}/{collection}"
+        return False, "local audit already ran after latest clustering"
     artifact_path = root / LINT_DIR / "cluster_reviews.jsonl"
     return _bridge_cluster_stage_due(
         root,
@@ -2660,7 +2907,7 @@ def _format_collection_material_concept(row: dict) -> str:
     return concept_name
 
 
-def _collection_reflection_bridge_concepts(
+def _collection_reflection_local_clusters(
     domain: str,
     collection: str,
     metas: list[dict],
@@ -2668,8 +2915,11 @@ def _collection_reflection_bridge_concepts(
     tool: ReflectionIndexTool | None = None,
 ) -> list[dict]:
     material_ids = {str(meta.get("material_id", "")).strip() for meta in metas if str(meta.get("material_id", "")).strip()}
+    target_scope = _collection_scope(domain, collection)
     overlapping = []
     for cluster in clusters:
+        if _cluster_scope(cluster) != target_scope:
+            continue
         overlap = material_ids & {str(mid).strip() for mid in _safe_list(cluster.get("material_ids", []))}
         if not overlap:
             continue
@@ -2835,7 +3085,7 @@ def _build_collection_reflection_evidence_payload(
         "domain": domain,
         "collection": collection,
         "title": f"{domain.replace('_', ' ').title()} / {collection.replace('_', ' ').title()}",
-        "bridge_concepts": _collection_reflection_bridge_concepts(domain, collection, metas, clusters, tool),
+        "local_clusters": _collection_reflection_local_clusters(domain, collection, metas, clusters, tool),
         "new_materials": materials["new_materials"],
         "old_materials": materials["old_materials"],
     }
@@ -2923,9 +3173,23 @@ def _collection_reflection_fingerprint(domain: str, collection: str, metas: list
         for meta in metas
         if str(meta.get("material_id", "")).strip()
     })
+    target_scope = _collection_scope(domain, collection)
+    local_clusters = sorted(
+        [
+            {
+                "cluster_id": str(cluster.get("cluster_id", "")).strip(),
+                "canonical_name": str(cluster.get("canonical_name", "")).strip(),
+                "material_ids": sorted(_safe_list(cluster.get("material_ids", []))),
+            }
+            for cluster in clusters
+            if _cluster_scope(cluster) == target_scope
+        ],
+        key=lambda row: row["cluster_id"],
+    )
     return canonical_hash({
         "collection_key": _collection_reflection_key(domain, collection),
         "material_ids": material_ids,
+        "local_clusters": local_clusters,
     })
 
 
@@ -3037,10 +3301,10 @@ def _collection_reflection_prompt(
         "You are an architecture research librarian writing reflective synthesis for a collection page.\n"
         "\n"
         "Your job is not to restate the collection page. Your job is to explain what the collection is doing as a whole: "
-        "the main takeaways, the main tensions, the important materials and bridge concepts, and the open questions that should stay visible.\n"
+        "the main takeaways, the main tensions, the important materials and local clusters, and the open questions that should stay visible.\n"
         "\n"
         "Use the collection wiki page as the current public state of the collection. Use the staged SQL-evidence file for "
-        "the supporting materials, methodological conclusions, main content learnings, chunks, annotations, figures, and compact bridge-concept "
+        "the supporting materials, methodological conclusions, main content learnings, chunks, annotations, figures, and compact local-concept "
         "summaries that ground the synthesis. Preserve prior "
         "conclusions when they still hold, but revise them when the evidence changes.\n"
         "\n"
@@ -3051,7 +3315,7 @@ def _collection_reflection_prompt(
         "\n"
         "For each reflection, be specific and cumulative. Prefer concrete main takeaways over generic summaries. "
         "Write the reflection as a synthesis, not as a list of facts. The reflection should usually cover: "
-        "the collection's central through-line, the strongest supporting materials, the most important bridge concepts, "
+        "the collection's central through-line, the strongest supporting materials, the most important local clusters, "
         "the main tensions or ambiguities, the open questions worth tracking, and a concise statement of why this collection matters to the larger corpus.\n"
         "If this is the first run, still write a strong first synthesis instead of waiting for prior history.\n"
         "\n"
@@ -3070,13 +3334,13 @@ def _collection_reflection_prompt(
         "old_materials are materials already present in the previous collection reflection; they are only compact continuity context.\n"
         "The chunks inside new_materials are ordered by usefulness; source=search is the strongest match to the collection queries, while source=fallback is only secondary support.\n"
         "The chunks are only secondary support.\n"
-        "The bridge_concepts entries are short synthesized cues from the concept reflections, not raw membership ids.\n"
+        "The local_clusters entries are short synthesized cues from the concept reflections, not raw membership ids.\n"
         "Treat the new_materials as the main evidence for this run and the old_materials as compact background continuity.\n"
         "Treat the methodological conclusions and main content learnings as the primary material-level evidence; the chunks are only a small supporting slice.\n"
         "Return only the reflection fields requested by the schema: main_takeaways, main_tensions, important_material_ids, important_cluster_ids, open_questions, why_this_collection_matters, and _finished.\n"
         "If one reflection field should remain exactly as the current reflection already states it, you may return null for that field and the pipeline will preserve the stored value for that key.\n"
         "Do not return collection metadata, fingerprints, or wiki paths.\n"
-        "Write a strong reflection that includes the main takeaways, main tensions, important materials, important bridge concepts, open questions, and why this collection matters.\n"
+        "Write a strong reflection that includes the main takeaways, main tensions, important materials, important local clusters, open questions, and why this collection matters.\n"
         "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
         "Do not leave the work file as a mere summary of the page. Use the evidence to surface the collection's role, stakes, and unresolved questions.\n"
         "Return final JSON only.\n"
@@ -3400,6 +3664,9 @@ def _run_cluster_audit(
     llm_factory=None,
     tool: ReflectionIndexTool | None = None,
 ) -> tuple[list[dict], int]:
+    if _clusters_are_local(clusters):
+        return _run_local_cluster_audit(root, clusters, material_info, route_signature, llm_factory, tool)
+
     existing_path = root / LINT_DIR / "cluster_reviews.jsonl"
     existing_rows = _load_jsonl(existing_path)
     local_rows, material_rows = _local_rows_not_in_bridge(root, clusters)
@@ -3652,6 +3919,321 @@ def _run_cluster_audit(
     _cleanup_paths(input_path, bridge_input_path, reviews_input_path, bridge_packets_path or Path())
     _cleanup_cluster_audit_debug_artifacts(root)
     return reviews_work, int(bridge_changed)
+
+
+def _run_local_cluster_audit(
+    root: Path,
+    clusters: list[dict],
+    material_info: dict[str, dict],
+    route_signature: str = "",
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+) -> tuple[list[dict], int]:
+    existing_path = root / LINT_DIR / "cluster_reviews.jsonl"
+    existing_rows = _load_jsonl(existing_path)
+    local_groups = _group_clusters_by_scope(clusters)
+    local_cluster_ids = {
+        str(cluster.get("cluster_id", "")).strip()
+        for cluster in clusters
+        if str(cluster.get("cluster_id", "")).strip()
+    }
+    preserved_rows = [
+        row for row in existing_rows
+        if str(row.get("cluster_id", "")).strip() not in local_cluster_ids
+    ]
+    workers = max(1, min(len(local_groups), _parallel_collection_audit_workers(load_config())))
+
+    def _one(domain: str, collection: str, scope_clusters: list[dict]) -> tuple[list[dict], int]:
+        gate_path = _local_audit_gate_path(root, domain, collection)
+        gate_path.parent.mkdir(parents=True, exist_ok=True)
+        scope_cluster_ids = {
+            str(cluster.get("cluster_id", "")).strip()
+            for cluster in scope_clusters
+            if str(cluster.get("cluster_id", "")).strip()
+        }
+        scope_existing_rows = [
+            row for row in existing_rows
+            if str(row.get("cluster_id", "")).strip() in scope_cluster_ids
+        ]
+        if gate_path.exists():
+            return scope_existing_rows, 0
+
+        gate_path.write_text(str(os.getpid()), encoding="utf-8")
+        try:
+            scope_root = local_cluster_dir(root, domain, collection)
+            local_rows, material_rows = _local_rows_in_scope_not_in_clusters(root, domain, collection, scope_clusters, material_info)
+            existing_cluster_by_id = {
+                str(cluster.get("cluster_id", "")).strip(): cluster
+                for cluster in scope_clusters
+                if str(cluster.get("cluster_id", "")).strip()
+            }
+            canonical_existing_reviews = _cluster_audit_canonicalize_existing_reviews(scope_existing_rows, existing_cluster_by_id)
+            target_clusters, cluster_fingerprints = _cluster_audit_target_clusters(scope_clusters, canonical_existing_reviews, route_signature)
+            target_cluster_ids = {
+                str(target.get("cluster_id", "")).strip()
+                for target in target_clusters
+                if str(target.get("cluster_id", "")).strip()
+            }
+            current_pending_local_fingerprint = _cluster_audit_pending_local_fingerprint(local_rows, route_signature)
+            audit_state = _read_stamp(_local_audit_state_path(root, domain, collection))
+            prior_pending_local_fingerprint = str(audit_state.get("pending_local_fingerprint", "") or "")
+            pending_local_changed = bool(local_rows and material_rows) and current_pending_local_fingerprint != prior_pending_local_fingerprint
+
+            normalized_reviews = [canonical_existing_reviews[key] for key in sorted(canonical_existing_reviews)]
+            normalized_reviews = _ensure_cluster_audit_review_coverage(normalized_reviews, scope_clusters)
+            normalized_reviews = _cluster_audit_finalize_reviews(normalized_reviews, cluster_fingerprints)
+
+            if not target_cluster_ids and not pending_local_changed:
+                run_at = datetime.now(timezone.utc).isoformat()
+                if normalized_reviews != scope_existing_rows:
+                    _attach_run_provenance(normalized_reviews, route_signature, run_at)
+                _write_stamp(
+                    _local_audit_state_path(root, domain, collection),
+                    {
+                        "pending_local_fingerprint": current_pending_local_fingerprint,
+                        "pending_local_concepts": len(local_rows),
+                    },
+                )
+                _write_stamp(
+                    _local_audit_stamp_path(root, domain, collection),
+                    {
+                        "audited_at": run_at,
+                        "cluster_reviews": len(normalized_reviews),
+                    },
+                )
+                return normalized_reviews, 0
+
+            bridge_packets_path = None
+            if local_rows and material_rows:
+                bridge_packets_path = _stage_bridge_packet_input(
+                    scope_root,
+                    local_rows,
+                    material_rows,
+                    max_local_concepts_per_material=None,
+                    max_bridge_candidates_per_material=None,
+                    max_evidence_snippets_per_material=None,
+                )
+
+            bridge_input_path, reviews_input_path = _cluster_audit_input_paths(scope_root)
+            reviewable_clusters = [
+                cluster
+                for cluster in scope_clusters
+                if str(cluster.get("cluster_id", "")).strip() in target_cluster_ids
+            ]
+            packet = {
+                "bridge_memory": str(bridge_input_path),
+                "cluster_reviews": str(reviews_input_path),
+                "bridge_packets": str(bridge_packets_path) if bridge_packets_path else "",
+            }
+            input_path = _cluster_audit_input_path(scope_root)
+            _write_json(input_path, packet)
+            _write_jsonl(bridge_input_path, reviewable_clusters)
+            _stage_cluster_audit_reviews_input(reviews_input_path, canonical_existing_reviews, target_cluster_ids)
+            llm_fn = llm_factory("lint")
+            system, user = _cluster_audit_prompt(scope_root, input_path, bridge_input_path, reviews_input_path)
+
+            def _record_cluster_audit_raw_response(raw_text: str, phase: str) -> None:
+                path = _cluster_audit_raw_response_path(scope_root, phase)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(str(raw_text), encoding="utf-8")
+
+            parsed = _run_reflection_prompt_with_context(
+                llm_fn,
+                system,
+                user,
+                _CLUSTER_AUDIT_DELTA_SCHEMA,
+                tool,
+                raw_response_recorder=_record_cluster_audit_raw_response,
+            )
+            _write_json(_cluster_audit_parsed_response_path(scope_root), parsed if isinstance(parsed, dict) else {"raw": parsed})
+            if not isinstance(parsed, dict):
+                raise EnrichmentError("Cluster audit output must be a JSON object")
+            if parsed.get("_finished") is not True:
+                raise EnrichmentError("Cluster audit output missing _finished=true")
+            parsed.pop("_finished", None)
+
+            bridge_updates = parsed.get("bridge_updates", [])
+            new_bridges = parsed.get("new_bridges", [])
+            review_updates = parsed.get("review_updates", [])
+            new_reviews = parsed.get("new_reviews", [])
+            if not isinstance(bridge_updates, list):
+                raise EnrichmentError("Cluster audit output field 'bridge_updates' must be a list")
+            if not isinstance(new_bridges, list):
+                raise EnrichmentError("Cluster audit output field 'new_bridges' must be a list")
+            if not isinstance(review_updates, list):
+                raise EnrichmentError("Cluster audit output field 'review_updates' must be a list")
+            if not isinstance(new_reviews, list):
+                raise EnrichmentError("Cluster audit output field 'new_reviews' must be a list")
+
+            context_requested = bool(parsed.get("context_requested"))
+            context_request_count = int(parsed.get("context_request_count", 0) or 0)
+            updated_cluster_ids: set[str] = set()
+            for idx, candidate in enumerate(bridge_updates, start=1):
+                if not isinstance(candidate, dict):
+                    raise EnrichmentError(f"bridge_updates[{idx}] must be an object")
+                cluster_id = str(candidate.get("cluster_id", "")).strip()
+                if not cluster_id:
+                    raise EnrichmentError(f"bridge_updates[{idx}] is missing cluster_id")
+                if cluster_id not in existing_cluster_by_id:
+                    raise EnrichmentError(f"bridge_updates[{idx}] references unknown cluster_id '{cluster_id}'")
+                if cluster_id not in target_cluster_ids:
+                    raise EnrichmentError(f"bridge_updates[{idx}] references cluster_id '{cluster_id}' outside audit_targets")
+                if cluster_id in updated_cluster_ids:
+                    raise EnrichmentError(f"bridge_updates[{idx}] duplicates cluster_id '{cluster_id}'")
+                updated_cluster_ids.add(cluster_id)
+
+            for idx, review in enumerate(review_updates, start=1):
+                if not isinstance(review, dict):
+                    raise EnrichmentError(f"review_updates[{idx}] must be an object")
+                cluster_id = str(review.get("cluster_id", "")).strip() or str(review.get("cluster_ref", "")).strip()
+                if not cluster_id:
+                    raise EnrichmentError(f"review_updates[{idx}] is missing cluster_id")
+                if cluster_id not in target_cluster_ids:
+                    raise EnrichmentError(f"review_updates[{idx}] references cluster_id '{cluster_id}' outside audit_targets")
+
+            concept_index = _cluster_audit_mutable_concept_index(local_rows)
+            assigned_pairs = _cover_pairs_from_clusters(scope_clusters)
+            updated_scope_rows = []
+            for idx, candidate in enumerate(bridge_updates, start=1):
+                cluster_id = str(candidate.get("cluster_id", "")).strip()
+                updated_scope_rows.append(
+                    _cluster_audit_apply_bridge_update(
+                        candidate,
+                        existing_cluster_by_id[cluster_id],
+                        concept_index,
+                        assigned_pairs,
+                        label=f"bridge_updates[{idx}]",
+                    )
+                )
+
+            new_cluster_candidates = []
+            new_cluster_refs: list[tuple[str, dict]] = []
+            dropped_new_cluster_refs: set[str] = set()
+            for idx, candidate in enumerate(new_bridges, start=1):
+                if not isinstance(candidate, dict):
+                    raise EnrichmentError(f"new_bridges[{idx}] must be an object")
+                bridge_ref = str(candidate.get("bridge_ref", "")).strip()
+                if not bridge_ref:
+                    raise EnrichmentError(f"new_bridges[{idx}] is missing bridge_ref")
+                validated = _cluster_audit_validate_bridge_candidate(
+                    candidate,
+                    concept_index,
+                    assigned_pairs,
+                    label=f"new_bridges[{idx}]",
+                )
+                if validated is None:
+                    dropped_new_cluster_refs.add(bridge_ref)
+                    continue
+                new_cluster_refs.append((bridge_ref, validated))
+                new_cluster_candidates.append(validated)
+
+            assigned_new_clusters = normalize_local_clusters(domain, collection, new_cluster_candidates) if new_cluster_candidates else []
+            bridge_ref_map = {
+                bridge_ref: assigned_new_clusters[idx]
+                for idx, (bridge_ref, _candidate) in enumerate(new_cluster_refs)
+                if idx < len(assigned_new_clusters)
+            }
+
+            normalized_new_reviews = []
+            for idx, review in enumerate(new_reviews, start=1):
+                if not isinstance(review, dict):
+                    raise EnrichmentError(f"new_reviews[{idx}] must be an object")
+                cluster_ref = _cluster_audit_review_ref(review)
+                if not cluster_ref:
+                    raise EnrichmentError(f"new_reviews[{idx}] is missing cluster_ref")
+                if cluster_ref in bridge_ref_map:
+                    normalized_new_reviews.append(review)
+                    continue
+                if cluster_ref in dropped_new_cluster_refs:
+                    continue
+                if cluster_ref in existing_cluster_by_id and cluster_ref not in target_cluster_ids:
+                    raise EnrichmentError(f"new_reviews[{idx}] references cluster_id '{cluster_ref}' outside audit_targets")
+                normalized_new_reviews.append(review)
+            bridge_refs = {**existing_cluster_by_id, **bridge_ref_map}
+
+            scope_work = sorted([
+                *[cluster for cluster in scope_clusters if str(cluster.get("cluster_id", "")).strip() not in updated_cluster_ids],
+                *updated_scope_rows,
+                *assigned_new_clusters,
+            ], key=lambda c: c.get("cluster_id", ""))
+            reviews_work, reviewed_cluster_ids = _cluster_audit_apply_review_delta(scope_existing_rows, review_updates, normalized_new_reviews, bridge_refs)
+            required_review_ids = set(target_cluster_ids) | {
+                str(cluster.get("cluster_id", "")).strip()
+                for cluster in assigned_new_clusters
+                if str(cluster.get("cluster_id", "")).strip()
+            }
+            missing_review_ids = sorted(cluster_id for cluster_id in required_review_ids if cluster_id not in reviewed_cluster_ids)
+            if missing_review_ids:
+                raise EnrichmentError(
+                    "Cluster audit must update review rows for every target or new bridge cluster: "
+                    + ", ".join(missing_review_ids)
+                )
+            reviews_work = _ensure_cluster_audit_review_coverage(reviews_work, scope_work)
+            final_cluster_fingerprints = _cluster_audit_cluster_fingerprints(scope_work, route_signature)
+            reviews_work = _cluster_audit_finalize_reviews(
+                reviews_work,
+                final_cluster_fingerprints,
+                context_requested=context_requested,
+                context_request_count=context_request_count,
+            )
+
+            cluster_changed = scope_work != scope_clusters
+            run_at = datetime.now(timezone.utc).isoformat()
+            _attach_run_provenance(reviews_work, route_signature, run_at)
+            _attach_run_provenance(scope_work, route_signature, run_at)
+            _write_jsonl(local_cluster_dir(root, domain, collection) / "local_concept_clusters.jsonl", scope_work)
+            local_cluster_stamp_path(root, domain, collection).write_text(
+                json.dumps(
+                    {
+                        "clustered_at": run_at,
+                        "fingerprint": local_cluster_fingerprint(domain, collection, load_config()),
+                        "clusters": len(scope_work),
+                        "bridge_concepts": sum(len(cluster.get("source_concepts", [])) for cluster in scope_work),
+                    },
+                    separators=(",", ":"),
+                ),
+                encoding="utf-8",
+            )
+            remaining_local_rows = _filter_local_rows_not_in_bridge(local_rows, scope_work)
+            _write_stamp(
+                _local_audit_state_path(root, domain, collection),
+                {
+                    "pending_local_fingerprint": _cluster_audit_pending_local_fingerprint(remaining_local_rows, route_signature),
+                    "pending_local_concepts": len(remaining_local_rows),
+                },
+            )
+            _write_stamp(
+                _local_audit_stamp_path(root, domain, collection),
+                {
+                    "audited_at": run_at,
+                    "cluster_reviews": len(reviews_work),
+                },
+            )
+            _cleanup_paths(input_path, bridge_input_path, reviews_input_path, bridge_packets_path or Path())
+            _cleanup_cluster_audit_debug_artifacts(scope_root)
+            return reviews_work, int(cluster_changed)
+        finally:
+            try:
+                gate_path.unlink()
+            except OSError:
+                pass
+
+    results: list[tuple[list[dict], int]] = []
+    scope_items = sorted(local_groups.items())
+    if len(scope_items) > 1 and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_one, domain, collection, scope_clusters) for (domain, collection), scope_clusters in scope_items]
+            for fut in as_completed(futures):
+                results.append(fut.result())
+    else:
+        for (domain, collection), scope_clusters in scope_items:
+            results.append(_one(domain, collection, scope_clusters))
+
+    merged_reviews = preserved_rows + [row for reviews, _changed in results for row in reviews]
+    merged_reviews.sort(key=lambda row: str(row.get("cluster_id", "")))
+    _write_jsonl(existing_path, merged_reviews)
+    _write_lint_stage_stamp(root, audited_at=datetime.now(timezone.utc).isoformat())
+    return merged_reviews, sum(changed for _reviews, changed in results)
 
 
 def _run_concept_reflections(
@@ -3946,6 +4528,7 @@ def run_reflective_lint(
                 )
                 cluster_review_count = len(cluster_reviews)
                 _refresh_sql_and_wiki()
+                clusters = _current_concepts(root)
                 bridge_clusters = load_bridge_clusters(root)
                 skipped = False
             elif not skip_reason:
@@ -3954,9 +4537,11 @@ def run_reflective_lint(
         if "concept-reflection" in selected_stages:
             concept_due, concept_reason = _concept_reflection_due(root)
             if concept_due:
-                concept_refs = _run_concept_reflections(root, bridge_clusters, material_info, llm_factory, tool, lint_route_signature)
+                concept_refs = _run_concept_reflections(root, clusters, material_info, llm_factory, tool, lint_route_signature)
                 concept_reflection_count = len(concept_refs)
                 _refresh_sql_and_wiki()
+                clusters = _current_concepts(root)
+                bridge_clusters = load_bridge_clusters(root)
                 skipped = False
             elif not skip_reason:
                 skip_reason = concept_reason
@@ -3964,9 +4549,11 @@ def run_reflective_lint(
         if "collection-reflection" in selected_stages:
             collection_due, collection_reason = _collection_reflection_due(root)
             if collection_due:
-                collection_refs = _run_collection_reflections(root, groups, bridge_clusters, llm_factory, tool, lint_route_signature)
+                collection_refs = _run_collection_reflections(root, groups, clusters, llm_factory, tool, lint_route_signature)
                 collection_reflection_count = len(collection_refs)
                 _refresh_sql_and_wiki()
+                clusters = _current_concepts(root)
+                bridge_clusters = load_bridge_clusters(root)
                 skipped = False
             elif not skip_reason:
                 skip_reason = collection_reason
@@ -3989,7 +4576,7 @@ def run_reflective_lint(
                     cluster_reviews,
                     concept_refs,
                     collection_refs,
-                    bridge_clusters,
+                    clusters,
                     manifest_records,
                     llm_factory,
                     tool,

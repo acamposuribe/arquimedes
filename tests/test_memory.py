@@ -80,6 +80,13 @@ def _write_bridge_clusters(root: Path, clusters: list[dict]) -> None:
     (derived / "bridge_concept_clusters.jsonl").write_text(lines)
 
 
+def _write_local_clusters(root: Path, domain: str, collection: str, clusters: list[dict]) -> None:
+    derived = root / "derived" / "collections" / f"{domain}__{collection}"
+    derived.mkdir(parents=True, exist_ok=True)
+    lines = "\n".join(json.dumps(c) for c in clusters) + "\n"
+    (derived / "local_concept_clusters.jsonl").write_text(lines)
+
+
 def _add_material(repo: Path, mid: str = "aabbcc112233", **meta_overrides) -> Path:
     mat_dir = repo / "extracted" / mid
     _write_meta(mat_dir, mid, **meta_overrides)
@@ -359,6 +366,73 @@ class TestWikiPages:
         assert row is not None
         assert "bridge-concepts" in row[0]
 
+    def test_local_concept_pages_and_tables_written(self, repo):
+        for mid in [_MID_A, _MID_B]:
+            mat_dir = repo / "extracted" / mid
+            _write_meta(mat_dir, mid, domain="research", collection="papers")
+            _write_minimal_extracted(mat_dir, mid)
+        _write_manifest(repo, [_MID_A, _MID_B], domain="research", collection="papers")
+        rebuild_index()
+        _write_local_clusters(repo, "research", "papers", [{
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "canonical_name": "Archive Space Framework",
+            "slug": "archive-space-framework",
+            "aliases": ["archival space framework"],
+            "confidence": 0.9,
+            "wiki_path": "wiki/research/papers/concepts/archive-space-framework.md",
+            "source_concepts": [
+                {
+                    "material_id": _MID_A,
+                    "concept_name": "archival habitat",
+                    "relevance": "high",
+                    "source_pages": [3],
+                    "evidence_spans": ["the archive as built form"],
+                    "confidence": 0.88,
+                },
+                {
+                    "material_id": _MID_B,
+                    "concept_name": "archive architecture",
+                    "relevance": "medium",
+                    "source_pages": [7],
+                    "evidence_spans": ["structures of collective memory"],
+                    "confidence": 0.75,
+                },
+            ],
+        }])
+
+        counts = memory_rebuild()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        cluster_row = con.execute(
+            "SELECT domain, collection, wiki_path, material_count FROM local_concept_clusters WHERE cluster_id=?",
+            ("research__papers__local_0001",),
+        ).fetchone()
+        alias_rows = con.execute(
+            "SELECT alias FROM local_concept_cluster_aliases WHERE cluster_id=?",
+            ("research__papers__local_0001",),
+        ).fetchall()
+        relation_rows = con.execute(
+            "SELECT related_cluster_id FROM local_cluster_relations WHERE cluster_id=?",
+            ("research__papers__local_0001",),
+        ).fetchall()
+        wiki_row = con.execute(
+            "SELECT path FROM wiki_pages WHERE page_type='concept' AND page_id=?",
+            ("research__papers__local_0001",),
+        ).fetchone()
+        material_rows = con.execute(
+            "SELECT material_id FROM local_cluster_materials WHERE cluster_id=? ORDER BY material_id",
+            ("research__papers__local_0001",),
+        ).fetchall()
+        con.close()
+
+        assert counts["local_clusters"] == 1
+        assert cluster_row == ("research", "papers", "wiki/research/papers/concepts/archive-space-framework.md", 2)
+        assert alias_rows == [("archival space framework",)]
+        assert relation_rows == []
+        assert wiki_row == ("wiki/research/papers/concepts/archive-space-framework.md",)
+        assert material_rows == [(_MID_A,), (_MID_B,)]
+
 
 class TestReflectionTables:
     def test_reflection_records_are_queryable(self, repo):
@@ -508,3 +582,37 @@ class TestMemoryEnsure:
         _write_manifest(repo, [_MID_A, _MID_B, mid3])
         rebuilt, _ = memory_ensure()
         assert rebuilt is True
+
+    def test_ensure_rebuilds_when_local_clusters_change(self, repo):
+        for mid in [_MID_A, _MID_B]:
+            mat_dir = repo / "extracted" / mid
+            _write_meta(mat_dir, mid, domain="research", collection="papers")
+            _write_minimal_extracted(mat_dir, mid)
+        _write_manifest(repo, [_MID_A, _MID_B], domain="research", collection="papers")
+        rebuild_index()
+        _write_local_clusters(repo, "research", "papers", [{
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "canonical_name": "Archive Space Framework",
+            "slug": "archive-space-framework",
+            "aliases": [],
+            "confidence": 0.9,
+            "source_concepts": [{"material_id": _MID_A}, {"material_id": _MID_B}],
+        }])
+        memory_rebuild()
+
+        _write_local_clusters(repo, "research", "papers", [{
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "canonical_name": "Archive and Memory Framework",
+            "slug": "archive-and-memory-framework",
+            "aliases": [],
+            "confidence": 0.9,
+            "source_concepts": [{"material_id": _MID_A}, {"material_id": _MID_B}],
+        }])
+
+        rebuilt, counts = memory_ensure()
+        assert rebuilt is True
+        assert counts["local_clusters"] == 1

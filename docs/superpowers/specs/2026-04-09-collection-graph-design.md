@@ -83,7 +83,7 @@ Its scope is exactly one `(domain, collection)` pair.
 It owns:
 
 - local clustering of material-level concept candidates
-- local concept pages
+- local cluster pages
 - collection-local cluster audit
 - collection reflection
 - material-to-home-concept relationships
@@ -103,15 +103,15 @@ It owns:
 
 ## Semantic Units
 
-### Material concept candidate
+### Local concept
 
-This remains the Phase 3 local semantic hook.
+This remains the Phase 3 material-level semantic hook.
 
 Artifact:
 
 - `extracted/<material_id>/concepts.jsonl`
 
-It is still the raw evidence layer.
+It is still the raw evidence layer for one material.
 
 ### Local collection cluster
 
@@ -178,8 +178,8 @@ The local collection graph is the semantic home of a material.
 
 That means:
 
-- material pages should link first to local concept homes
-- collection pages should summarize local concept homes first
+- material pages should link first to local clusters
+- collection pages should summarize local clusters first
 - local cluster audit should judge concept quality inside the collection
 
 ### Global ownership
@@ -190,7 +190,7 @@ Its job is to explain cross-collection connection and synthesis.
 
 That means:
 
-- bridge pages should cite contributing local concept pages
+- bridge pages should cite contributing local cluster pages
 - bridge membership should be explainable in terms of local-cluster evidence
 - the global graph should not own all semantic identity by default
 
@@ -246,7 +246,7 @@ The practical test for whether Step 1 is correct is simple:
 
 After `arq index rebuild`, the semantic publication path becomes:
 
-`cluster-local -> compile -> memory rebuild`
+`cluster -> compile -> memory rebuild`
 
 In Step 1, local collection clustering becomes the first-class semantic layer even if the existing global bridge layer is temporarily retained for continuity. In implementation terms, this is basically what is now called `arq cluster`, but updated to live within collection bounds rather than full-corpus bounds.
 
@@ -262,9 +262,9 @@ This should be understood literally:
 
 Recommended commands:
 
-- `arq cluster-local`
-- `arq cluster-local --domain research --collection papers`
-- `arq cluster-local --collection papers`
+- `arq cluster`
+- `arq cluster --domain research --collection papers`
+- `arq cluster --collection papers`
 
 `arq cluster` can later become an umbrella command, but Step 1 should make collection scope explicit.
 
@@ -321,7 +321,7 @@ For one `(domain, collection)`:
 
 - local cluster JSONL
 - local cluster stamp
-- local concept pages
+- local cluster pages
 - collection page concept section
 - collection reflection grounded in those local clusters
 
@@ -353,7 +353,7 @@ Step 2 reintroduces large-scale conceptual connection as its own layer.
 
 After Step 2, the semantic publication path becomes:
 
-`cluster-local -> bridge-global -> compile -> memory rebuild`
+`cluster -> bridge-global -> compile -> memory rebuild`
 
 ### Command shape
 
@@ -400,7 +400,7 @@ This keeps the global bridge layer sparse and meaningful.
 
 ## Wiki Changes
 
-### Collection-local concept pages
+### Collection-local cluster pages
 
 Step 1 should add:
 
@@ -410,12 +410,12 @@ These pages are the semantic homes for materials in that collection.
 
 ### Collection pages
 
-Collection pages should shift from “materials plus overlapping bridge concepts” to “materials plus local concept homes”.
+Collection pages should shift from “materials plus overlapping bridge concepts” to “materials plus local clusters”.
 
 They should render:
 
 - materials
-- local concept homes
+- local clusters
 - top facets
 - recent additions
 - collection reflection
@@ -438,7 +438,7 @@ Suggested new tables:
 
 - `local_concept_clusters`
 - `local_cluster_materials`
-- `local_cluster_aliases`
+- `local_concept_cluster_aliases`
 - `local_cluster_relations`
 
 These should carry `domain` and `collection` as first-class scope columns.
@@ -457,7 +457,7 @@ The important requirement is structural:
 
 - material pages
 - collection pages
-- local concept pages
+- local cluster pages
 - global bridge pages
 
 ## Search And Agent Traversal
@@ -467,8 +467,8 @@ Global search should remain the default.
 But the memory should support:
 
 - open a collection as a semantic record
-- list a collection’s local concept homes
-- traverse from a material to its local concept homes
+- list a collection’s local clusters
+- traverse from a material to its local clusters
 - traverse from a local concept to its global bridges
 - traverse from a global bridge back into contributing collections
 
@@ -490,7 +490,7 @@ This architecture scales better because:
 Recommended rollout:
 
 1. add local-cluster artifacts, stamps, and tables
-2. compile local concept pages
+2. compile local cluster pages
 3. ground collection reflections primarily in local clusters
 4. temporarily retain the existing bridge layer for continuity if needed
 5. replace raw-material global clustering with global bridging over local semantic outputs

@@ -42,7 +42,7 @@ iCloud folder (shared)
   → arq ingest (register in manifest)
   → arq extract (deterministic extraction + LLM enrichment)
   → arq index rebuild (SQLite FTS5 over extracted/enriched artifacts)
-  → arq cluster-local (collection-local concept clustering)
+  → arq cluster (collection-local concept clustering)
   → arq compile (wiki generation; auto-runs arq memory rebuild)
   → git commit + push (extracted/, wiki/, manifests/)
   → Collaborators auto-pull (arq sync daemon)
@@ -144,7 +144,7 @@ Collections let collaborators scope work to a subset of materials — useful for
 - **Direct files**: materials directly inside `Research/` or `Practice/` (no subfolder) get collection `_general`
 - **Rehoming is path-authoritative**: if an already-known file moves within the library, a later ingest refreshes its manifest `relative_path`, `domain`, and `collection`, and updates the extracted raw scope fields accordingly. Folder placement is not frozen at first ingest.
 - **Filter, not silo**: collections are a search filter. All materials remain in the global index and are findable without specifying a collection.
-- **Semantic home**: collections are also the primary semantic neighborhoods for clustering, local concept pages, collection reflection, and local audit.
+- **Semantic home**: collections are also the primary semantic neighborhoods for clustering, local cluster pages, collection reflection, and local audit.
 - **Search scoping**: `arq search --collection thermal-mass "Mediterranean climate"` searches only that subset
 - **Agent use**: collaborators can tell their agent "search collection thermal-mass" to focus on project-relevant materials
 
@@ -338,7 +338,7 @@ The corresponding stage stamp stores the model, prompt version, schema version, 
   - program, material_system, structural_system
   - historical_period, course/topic, studio/project
 
-**Collection-local clustering** (`arq cluster-local`):
+**Collection-local clustering** (`arq cluster`):
 - The clustering-stage LLM still reads a staged packet JSON file plus a compact memory snapshot and returns a structured JSON delta with `links_to_existing[]`, `new_clusters[]`, and `_finished`.
 - The key Step 1 change is scope, not prompt semantics: each run sees only one collection's pending concepts and that collection's existing local concept memory.
 - The pipeline validates every referenced `{material_id, concept_name}` pair against indexed concepts, rejects unknown cluster ids, enforces multi-material local homes, and then rewrites each collection's `derived/collections/<domain>__<collection>/local_concept_clusters.jsonl` programmatically rather than asking the model to edit that file in place.
@@ -455,16 +455,16 @@ The wiki is a published semantic artifact owned by the compiler/server maintaine
 
 **Currently maintainer-owned pages:**
 - all material pages under `wiki/practice/**` and `wiki/research/**`
-- all collection-local concept pages under `wiki/<domain>/<collection>/concepts/`
+- all collection-local cluster pages under `wiki/<domain>/<collection>/concepts/`
 - shared concept indexes and legacy bridge pages when present
 - all generated glossary and `_index.md` pages
 
 These pages are kept current by the semantic publication pipeline:
-`cluster-local -> compile -> memory rebuild`
+`cluster -> compile -> memory rebuild`
 
 At the end of Step 1 of the collection-graph rollout, the primary semantic publication loop is collection-first:
 
-`ingest -> extract -> index rebuild -> cluster-local -> compile -> memory rebuild`
+`ingest -> extract -> index rebuild -> cluster -> compile -> memory rebuild`
 
 Legacy bridge artifacts such as `derived/bridge_concept_clusters.jsonl` may still exist during the transition and may continue to support some cross-collection continuity features, but they are no longer the primary semantic publication layer. Step 2 introduces a distinct global bridge graph built from local semantic outputs rather than from raw material-level global clustering.
 
@@ -494,16 +494,16 @@ Phase 6 is complete. The detailed design lives in [the archived phase-6 spec](..
 - **Cluster audit**: review bridge clusters incrementally, but allow merges, splits, renames, and broader reorganization when new evidence reveals a better cross-material structure; the goal is a stronger current bridge graph, not preservation for its own sake
 - **Concept reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters` for bridge concepts from staged evidence
 - **Collection reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_collection_matters` for collections, with new materials treated more richly than old ones
-- **Graph maintenance**: capture unresolved semantic maintenance concerns that deterministic lint cannot judge well, then project them into SQL-backed findings and a visible maintenance page
+- **Graph maintenance**: currently captures unresolved semantic maintenance concerns that deterministic lint cannot judge well, but this layer is provisional and should be re-evaluated in Step 2 before it is carried forward into the two-layer graph
 
 ### Output:
 - `arq lint` → prints a report to stdout (JSON or human-readable)
 - `arq lint --report` → writes a detailed report to `wiki/_lint_report.md`
 - `arq lint --fix` → auto-applies deterministic fixes and accepted reflective updates, then rebuilds memory
 - reflective passes emit structured artifacts under `derived/lint/`
-- graph maintenance is rendered into `wiki/shared/maintenance/graph-health.md` from SQL-backed findings
+- graph maintenance is currently rendered into `wiki/shared/maintenance/graph-health.md` from SQL-backed findings, but Step 2 may remove or replace this layer
 - SQL projection of collection reflections must preserve `why_this_collection_matters` alongside the list fields so collaborators and agents can query the collection-level synthesis, not only render it in markdown
-- operator logs for `arq enrich`, `arq cluster-local`, and `arq lint` live under `logs/` and must always include an explicit terminal success/failure record
+- operator logs for `arq enrich`, `arq cluster`, and `arq lint` live under `logs/` and must always include an explicit terminal success/failure record
 
 ### Integration with the server agent:
 The watcher should run `arq lint --quick` (deterministic checks only) after each compile, and `arq lint --full` (including reflective passes with refreshes between stages) on a scheduled basis.
@@ -522,9 +522,9 @@ The watcher should run `arq lint --quick` (deterministic checks only) after each
 | `arq search --deep <query>` | Multi-layer auto-drill search |
 | `arq search --facet domain=practice --facet scale=building <query>` | Faceted search |
 | `arq search --collection thermal-mass-paper <query>` | Search within a collection |
-| `arq cluster-local` | Build or refresh collection-local concept homes |
-| `arq material-concepts <material_id>` | Traverse from a material to its local concept homes |
-| `arq collection-concepts <domain> <collection>` | Traverse from a collection to its local concept homes |
+| `arq cluster` | Build or refresh collection-local clusters |
+| `arq material-clusters <material_id>` | Traverse from a material to its local clusters |
+| `arq collection-clusters <domain> <collection>` | Traverse from a collection to its local clusters |
 | `arq read <material_id>` | Full extracted content |
 | `arq read <material_id> --page 5` | Specific page |
 | `arq figures <material_id>` | List figures with descriptions |

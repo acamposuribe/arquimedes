@@ -9,7 +9,7 @@ Arquimedes publishes one shared knowledge system with three synchronized layers:
 - **Extracted / enriched artifacts** in `extracted/`
   - raw text, chunks, annotations, figures, enriched summaries, concepts
 - **Published wiki** in `wiki/`
-  - material pages, collection-local concept pages, glossary, `_index.md` pages
+  - material pages, collection-local cluster pages, glossary, `_index.md` pages
 - **Machine-queryable memory** in `indexes/search.sqlite`
   - search index, local concept graph, bridge tables, wiki identities
 
@@ -23,7 +23,7 @@ The SQLite index is the operational semantic memory for agents and tools.
 Collaborators contribute by adding files to the shared library root folder.
 
 They do **not**:
-- run `arq cluster-local`
+- run `arq cluster`
 - run `arq compile`
 - republish semantic structure
 
@@ -91,9 +91,9 @@ When a collaborator adds a file to the shared library root:
 - Makes materials, chunks, annotations, figures, and raw concept candidates searchable
 - No LLM
 
-5. **`arq cluster-local`**
-- Reads one collection-bounded packet at a time plus that collection's existing local concept memory
-- Groups concepts into collection-local concept homes
+5. **`arq cluster`**
+- Reads one collection-bounded packet at a time plus that collection's existing local cluster memory
+- Groups concepts into collection-local clusters
 - Writes `derived/collections/<domain>__<collection>/local_concept_clusters.jsonl`
 - Uses the stage-specific route list for `cluster` when configured, with the same legacy fallback behavior
 - **LLM required**
@@ -101,7 +101,7 @@ When a collaborator adds a file to the shared library root:
 6. **`arq compile`**
 - Deterministically renders the wiki:
   - material pages
-  - collection-local concept pages
+  - collection-local cluster pages
   - glossary
   - `_index.md` pages
 - No LLM
@@ -123,7 +123,7 @@ When a collaborator adds a file to the shared library root:
 ### LLM-required steps
 
 - `arq extract` (enrichment stage)
-- `arq cluster-local`
+- `arq cluster`
 - `arq lint --full` (scheduled reflective maintenance pass)
 
 ### Deterministic steps
@@ -150,7 +150,7 @@ Operationally, this is not optional before collaborator search after new pulls. 
 
 That means collaborators regain:
 - full search index
-- collection-local concept homes
+- collection-local clusters
 - related-material graph
 - wiki page identities in SQLite
 
@@ -160,7 +160,7 @@ without any LLM access and without re-running clustering or compile.
 
 Semantic publication belongs only to the server-maintainer path:
 
-`ingest -> extract -> index rebuild -> cluster-local -> compile -> memory rebuild -> commit/push`
+`ingest -> extract -> index rebuild -> cluster -> compile -> memory rebuild -> commit/push`
 
 Collaborators only rebuild deterministic local projections:
 
@@ -170,7 +170,7 @@ Collaborators only rebuild deterministic local projections:
 
 - `extract` = parse and understand the source
 - `index rebuild` = make evidence searchable
-- `cluster-local` = form collection-local concept homes
+- `cluster` = form collection-local clusters
 - `compile` = publish the collection-first wiki
 - `memory rebuild` = make the published local graph queryable by agents
 
@@ -180,7 +180,7 @@ For existing bridge-era repos that need to move into Step 1 without recomputing 
 
 `./.venv/bin/python scripts/migrate_step1_local_graph.py`
 
-If the repo contains more than one collection scope, pass `--domain` and `--collection` explicitly. The script is a one-shot bootstrap for current data: it seeds local concept homes from existing bridge clusters, remaps local audit continuity where possible, and rewrites collection reflections onto the new local-cluster fingerprints without re-enrichment, re-clustering, or re-reflection.
+If the repo contains more than one collection scope, pass `--domain` and `--collection` explicitly. The script is a one-shot bootstrap for current data: it seeds local clusters from existing bridge clusters, remaps local audit continuity where possible, rewrites concept and collection reflections onto local ids and local-cluster fingerprints, and then runs deterministic compile plus memory rebuild without re-enrichment, re-clustering, or re-reflection.
 
 This is how Arquimedes stays both:
 - a readable wiki for humans

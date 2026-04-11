@@ -1,7 +1,7 @@
 # Arquimedes — Collection Graph Architecture: Implementation Plan
 
-> **Status:** In progress
-> **Date:** 2026-04-09
+> **Status:** Complete
+> **Date:** 2026-04-11
 > **Spec:** [Collection graph architecture](../specs/2026-04-09-collection-graph-design.md)
 > **Related specs:** [Full system design](../specs/2026-04-04-arquimedes-knowledge-system-design.md), [Phase 5 wiki compiler](../completed/specs/2026-04-05-phase5-wiki-compiler-design.md), [Phase 6 lint](../completed/specs/2026-04-05-phase6-lint-design.md)
 
@@ -149,65 +149,78 @@ Notes:
 
 ### S2.1 Bridge input contract
 
-- [ ] Define canonical global bridge artifact paths
-- [ ] Define a global bridge stamp file
-- [ ] Define the bridge-member schema using local clusters as members
-- [ ] Define promotion rules from local clusters into the bridge pool
+- [x] Define canonical global bridge artifact paths
+- [x] Define a global bridge stamp file
+- [x] Define the bridge-member schema using local clusters as members
+- [x] Define the Step 2 bridge input around collection-local clusters plus compact hosting-collection context
+- [x] Define the Step 2 bridge output to include bridge-level synthesis and suggested new sources
+- [x] Define the exact incremental input packet and response schema for bridge clustering
+- [x] Define the bridge prompt goals and thresholds
 
 ### S2.2 Global bridging command
 
-- [ ] Add `arq bridge-global`
-- [ ] Build staged bridge packets from promoted local clusters and collection reflections
-- [ ] Load existing global bridge memory independently from local-cluster memory
-- [ ] Make stale detection depend on promoted local-cluster changes, not all raw materials
+- [x] Run the first Step 2 execution boundary as `arq lint --stage global-bridge`
+- [x] Keep global bridging owned by the lint `global-bridge` stage; no standalone `arq bridge-global` command
+- [x] Replace deterministic bridge promotion with an incremental LLM bridge pass over collection-local clusters
+- [x] Load existing global bridge memory independently from local-cluster memory
+- [x] Make stale detection depend on changed collection-local clusters and changed collection reflections, not all raw materials
+- [x] Skip the Step 2 pass entirely when fewer than two collections are in scope
 
 ### S2.3 Bridge projection
 
-- [ ] Extend SQLite graph tables so global bridge rows point back to local clusters
-- [ ] Add traversal from local concept -> global bridge
-- [ ] Add traversal from global bridge -> contributing local clusters
-- [ ] Preserve searchable bridge aliases and page identities
+- [x] Extend SQLite graph tables so global bridge rows point back to local clusters
+- [x] Add traversal from local concept -> global bridge
+- [x] Add traversal from global bridge -> contributing local clusters
+- [x] Preserve searchable bridge aliases and page identities
 
 ### S2.4 Compile changes
 
-- [ ] Keep `wiki/shared/bridge-concepts/` as the bridge publication area
-- [ ] Update bridge pages to cite local cluster pages as members
-- [ ] Add backlinks from local cluster pages to bridge memberships where useful
-- [ ] Distinguish local clusters from bridge concepts in shared indexes
+- [x] Keep `wiki/shared/bridge-concepts/` as the bridge publication area
+- [x] Update bridge pages to cite local cluster pages as members
+- [x] Add backlinks from local cluster pages to bridge memberships where useful
+- [x] Distinguish local clusters from bridge concepts in shared indexes
 
 ### S2.5 Lint changes
 
-- [ ] Add a distinct global bridge audit layer on top of Step 1 local audit
-- [ ] Keep collection reflection focused on collection meaning
-- [ ] Move cross-collection synthesis into the global bridge layer
-- [ ] Re-evaluate whether graph maintenance should exist at all in Step 2 before adapting it to the two-layer graph
+- [x] Add a distinct global bridge layer on top of Step 1 local audit
+- [x] Keep collection reflection focused on collection meaning
+- [x] Move cross-collection synthesis into the global bridge layer
+- [x] Move bridge-level reflection into the global-bridge clustering pass itself
+- [x] Remove the separate bridge concept-reflection pass from the target design
+- [x] Re-evaluate graph maintenance in Step 2 and keep it only as a minimal backlog fed by collection reflections and global bridge pages
 
 Notes:
 
 - Step 2 should assume collection-local audit already exists.
 - The lint work in Step 2 is about the new global bridge layer and graph-wide synthesis, not about making audit local for the first time.
-- Graph maintenance is explicitly marked for re-thinking before any Step 2 adaptation work. Removal is allowed if it still does not justify its complexity.
+- Step 2 global bridging should mirror the current collection-clustering pattern: pending member packet, existing bridge memory, incremental `links_to_existing` or `new_clusters`, and no deterministic lexical promotion heuristic.
+- Graph maintenance has been narrowed to a small corpus-level prioritization layer. It should not inspect collection-local audit threads directly; it should only summarize unresolved needs that remain visible after collection reflection and global bridging.
 
 ### S2.6 Search and retrieval
 
-- [ ] Add graph traversal helpers:
+- [x] Add graph traversal helpers:
   material -> local concept -> global bridge -> other local concepts -> materials
-- [ ] Keep default search global
-- [ ] Distinguish local-home overlap from bridge overlap in relatedness explanations
+- [x] Keep default search global
+- [x] Distinguish local-home overlap from bridge overlap in relatedness explanations
 
 ### S2.7 Verification
 
-- [ ] Test that global bridge clusters contain members from multiple collection scopes
-- [ ] Test local concept -> bridge traversal
-- [ ] Test bridge-page compilation from local-cluster inputs
-- [ ] Test bridge stale detection using promoted local-cluster changes
+- [x] Test that global bridge clusters contain members from multiple collection scopes
+- [x] Test local concept -> bridge traversal
+- [x] Test bridge-page compilation from local-cluster inputs
+- [x] Test bridge stale detection using promoted local-cluster changes
 
 ### Step 2 exit criteria
 
-- [ ] Cross-collection semantic publication no longer depends on raw material-level global clustering
-- [ ] Bridge pages are built from local semantic outputs
-- [ ] Agents can traverse both local homes and global bridges
-- [ ] The system remains globally associative without flattening all concept homes into one layer
+- [x] Cross-collection semantic publication no longer depends on raw material-level global clustering
+- [x] Bridge pages are built from local semantic outputs
+- [x] Agents can traverse both local homes and global bridges
+- [x] The system remains globally associative without flattening all concept homes into one layer
+
+Notes:
+
+- The active Step 2 publication path is `cluster -> lint(global-bridge) -> compile -> memory rebuild`.
+- Legacy raw-material bridge artifacts may still remain in the repo as compatibility surfaces or migration inputs, but the collection-graph publication path no longer depends on them.
 
 ---
 
@@ -215,9 +228,9 @@ Notes:
 
 ### Docs
 
-- [ ] Update the main system spec when Step 1 ships
-- [ ] Update `docs/PIPELINE.md` with the new semantic publication order
-- [ ] Update `docs/PLAN.md` as milestones land
+- [x] Update the main system spec when Step 1 ships
+- [x] Update `docs/PIPELINE.md` with the new semantic publication order
+- [x] Update `docs/PLAN.md` as milestones land
 
 ### Migration
 
@@ -236,7 +249,11 @@ Migration requirements for Step 1:
 
 - [x] Make collection assignment refreshable so moved materials can be rehomed
 - [x] Keep logs and stamps auditable by collection scope
-- [ ] Avoid any design that forces a full-corpus semantic rebuild after a small collection change
+- [x] Avoid any design that forces a full-corpus semantic rebuild after a small collection change
+
+Notes:
+
+- Semantic recomputation is now collection-scoped in Step 1 and incremental in Step 2; a small collection change no longer requires rerunning whole-corpus clustering to restore the published graph.
 
 ## Immediate Next Order
 

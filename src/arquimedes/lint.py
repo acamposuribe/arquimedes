@@ -137,6 +137,12 @@ from arquimedes.lint_graph_reflection import (
     _graph_reflection_prompt,
     _graph_reflection_stage_dir,
 )
+from arquimedes.lint_global_bridge import (
+    _global_bridge_artifact_path,
+    _global_bridge_due,
+    _global_bridge_stamp_path,
+    load_global_bridge_clusters,
+)
 
 
 LINT_DIR = "derived/lint"
@@ -168,11 +174,12 @@ LINT_REFLECTIVE_STAGES = (
     "cluster-audit",
     "concept-reflection",
     "collection-reflection",
+    "global-bridge",
     "graph-maintenance",
 )
 _CLUSTER_AUDIT_DELTA_SCHEMA = '{"bridge_updates":[{"cluster_id":"existing bridge id","new_name":"string","new_aliases":["strings"],"new_source_concepts":[{"material_id":"string","concept_name":"string"}],"new_materials":["material ids"],"removed_materials":["material ids"]}],"new_bridges":[{"bridge_ref":"temporary id","canonical_name":"string","aliases":["strings"],"material_ids":["material ids"],"source_concepts":[{"material_id":"string","concept_name":"string"}]}],"review_updates":[{"cluster_id":"existing bridge id","finding_type":"string","severity":"low|medium|high","status":"open|validated","note":"string","recommendation":"string"}],"new_reviews":[{"cluster_ref":"existing bridge id or exact new_bridges.bridge_ref","bridge_ref":"optional alias for cluster_ref on new bridges","finding_type":"string","severity":"low|medium|high","status":"open|validated","note":"string","recommendation":"string"}],"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
-_CONCEPT_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"open_questions":["strings"]|null,"why_this_concept_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
-_COLLECTION_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"important_material_ids":["material ids"]|null,"important_cluster_ids":["cluster ids"]|null,"open_questions":["strings"]|null,"why_this_collection_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
+_CONCEPT_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"open_questions":["strings"]|null,"helpful_new_sources":["strings"]|null,"why_this_concept_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
+_COLLECTION_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"important_material_ids":["material ids"]|null,"important_cluster_ids":["cluster ids"]|null,"open_questions":["strings"]|null,"helpful_new_sources":["strings"]|null,"why_this_collection_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
 _GRAPH_REFLECTION_DELTA_SCHEMA = '{"findings":[{"finding_id":"string(optional)","finding_type":"string","severity":"low|medium|high","summary":"string","details":"string","affected_material_ids":["material ids"],"affected_cluster_ids":["cluster ids"],"candidate_future_sources":["strings"],"candidate_bridge_links":["strings"]}]|null,"_finished":true}'
 
 
@@ -899,7 +906,7 @@ class ReflectionIndexTool:
                     reflection = self.con.execute(
                     """
                     SELECT cluster_id, slug, canonical_name, main_takeaways, main_tensions,
-                           open_questions, why_this_concept_matters, supporting_material_ids,
+                              open_questions, helpful_new_sources, why_this_concept_matters, supporting_material_ids,
                            supporting_evidence, input_fingerprint, wiki_path
                     FROM concept_reflections
                     WHERE cluster_id = ?
@@ -950,7 +957,7 @@ class ReflectionIndexTool:
                 reflection = self.con.execute(
                 """
                 SELECT cluster_id, slug, canonical_name, main_takeaways, main_tensions,
-                       open_questions, why_this_concept_matters, supporting_material_ids,
+                      open_questions, helpful_new_sources, why_this_concept_matters, supporting_material_ids,
                        supporting_evidence, input_fingerprint, wiki_path
                 FROM concept_reflections
                 WHERE cluster_id = ?
@@ -1004,7 +1011,7 @@ class ReflectionIndexTool:
                 """
                 SELECT domain, collection, main_takeaways, main_tensions,
                        important_material_ids, important_cluster_ids,
-                       open_questions, why_this_collection_matters,
+                      open_questions, helpful_new_sources, why_this_collection_matters,
                        input_fingerprint, wiki_path
                 FROM collection_reflections
                 WHERE domain = ? AND collection = ?
@@ -1253,6 +1260,19 @@ def _material_titles_from_metas(metas: dict[str, dict]) -> dict[str, str]:
 
 def _current_concepts(root: Path) -> list[dict]:
     return load_local_clusters(root) or load_bridge_clusters(root)
+
+
+def _concept_reflection_targets(root: Path, clusters: list[dict]) -> list[dict]:
+    del root
+    targets: dict[str, dict] = {}
+    for cluster in clusters or []:
+        if not isinstance(cluster, dict):
+            continue
+        cluster_id = str(cluster.get("cluster_id") or cluster.get("bridge_id", "")).strip()
+        if not cluster_id:
+            continue
+        targets[cluster_id] = {**cluster, "cluster_id": cluster_id}
+    return list(targets.values())
 
 
 def _cluster_scope(cluster: dict) -> tuple[str, str] | None:
@@ -2143,7 +2163,6 @@ def _run_collection_reflections(
 def _run_graph_reflection(
     root: Path,
     deterministic_report: dict,
-    cluster_reviews: list[dict],
     concept_refs: list[dict],
     collection_refs: list[dict],
     bridge_clusters: list[dict],
@@ -2158,7 +2177,6 @@ def _run_graph_reflection(
         sys.modules[__name__],
         root,
         deterministic_report,
-        cluster_reviews,
         concept_refs,
         collection_refs,
         bridge_clusters,
@@ -2167,6 +2185,29 @@ def _run_graph_reflection(
         tool,
         route_signature,
     )
+
+
+def _run_global_bridges(
+    root: Path,
+    local_clusters: list[dict],
+    collection_refs: list[dict],
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+    route_signature: str = "",
+) -> dict:
+    from arquimedes.lint_global_bridge import _run_global_bridge_impl
+
+    return _run_global_bridge_impl(
+        sys.modules[__name__],
+        root,
+        local_clusters,
+        collection_refs,
+        llm_factory,
+        tool,
+        route_signature,
+    )
+
+
 def run_reflective_lint(
     config: dict,
     deterministic_report: dict,
@@ -2197,10 +2238,13 @@ def run_reflective_lint(
             "bridge_cluster_discovery": 0,
             "concept_reflections": 0,
             "collection_reflections": 0,
+            "global_bridges": 0,
             "graph_maintenance": 0,
             "stages": selected_stages,
             "applied": False,
             "skipped": True,
+            "global_bridge_skipped": True,
+            "global_bridge_skip_reason": "search index missing",
             "graph_skipped": True,
             "graph_skip_reason": "search index missing",
         }
@@ -2228,8 +2272,11 @@ def run_reflective_lint(
         cluster_review_count = 0
         concept_reflection_count = 0
         collection_reflection_count = 0
+        global_bridge_count = 0
         skipped = True
         skip_reason = ""
+        global_bridge_skipped = True
+        global_bridge_skip_reason = "stage not selected"
 
         if "cluster-audit" in selected_stages:
             cluster_due, cluster_reason = _cluster_audit_due(root, bridge_clusters)
@@ -2253,7 +2300,14 @@ def run_reflective_lint(
         if "concept-reflection" in selected_stages:
             concept_due, concept_reason = _concept_reflection_due(root)
             if concept_due:
-                concept_refs = _run_concept_reflections(root, clusters, material_info, llm_factory, tool, lint_route_signature)
+                concept_refs = _run_concept_reflections(
+                    root,
+                    _concept_reflection_targets(root, clusters),
+                    material_info,
+                    llm_factory,
+                    tool,
+                    lint_route_signature,
+                )
                 concept_reflection_count = len(concept_refs)
                 _refresh_sql_and_wiki()
                 clusters = _current_concepts(root)
@@ -2274,13 +2328,39 @@ def run_reflective_lint(
             elif not skip_reason:
                 skip_reason = collection_reason
 
+        if "global-bridge" in selected_stages:
+            local_clusters = load_local_clusters(root)
+            global_bridge_due, global_bridge_reason = _global_bridge_due(root, local_clusters, collection_refs)
+            if global_bridge_due:
+                global_bridge_result = _run_global_bridges(
+                    root,
+                    local_clusters,
+                    collection_refs,
+                    llm_factory,
+                    tool,
+                    lint_route_signature,
+                )
+                global_bridge_count = int(global_bridge_result.get("global_bridges", 0) or 0)
+                global_bridge_skipped = bool(global_bridge_result.get("global_bridge_skipped", False))
+                global_bridge_skip_reason = str(global_bridge_result.get("global_bridge_skip_reason", "") or "")
+                if not global_bridge_skipped:
+                    _refresh_sql_and_wiki()
+                    clusters = _current_concepts(root)
+                    bridge_clusters = load_global_bridge_clusters(root)
+                skipped = False
+            else:
+                global_bridge_count = 0
+                global_bridge_skipped = True
+                global_bridge_skip_reason = global_bridge_reason
+                if not skip_reason:
+                    skip_reason = global_bridge_reason
+
         if "graph-maintenance" in selected_stages:
             graph_due, graph_reason = _graph_reflection_due(
                 root,
                 config,
                 bridge_clusters,
                 manifest_records,
-                cluster_reviews,
                 concept_refs,
                 collection_refs,
                 deterministic_report,
@@ -2289,10 +2369,9 @@ def run_reflective_lint(
                 graph_result = _run_graph_reflection(
                     root,
                     deterministic_report,
-                    cluster_reviews,
                     concept_refs,
                     collection_refs,
-                    clusters,
+                    bridge_clusters,
                     manifest_records,
                     llm_factory,
                     tool,
@@ -2323,11 +2402,14 @@ def run_reflective_lint(
         "bridge_cluster_discovery": bridge_changes,
         "concept_reflections": concept_reflection_count,
         "collection_reflections": collection_reflection_count,
+        "global_bridges": global_bridge_count,
         "graph_maintenance": graph_maintenance,
         "stages": selected_stages,
         "applied": apply,
         "skipped": skipped,
         "skip_reason": skip_reason,
+        "global_bridge_skipped": global_bridge_skipped,
+        "global_bridge_skip_reason": global_bridge_skip_reason,
         "graph_skipped": graph_skipped,
         "graph_skip_reason": graph_skip_reason,
     }

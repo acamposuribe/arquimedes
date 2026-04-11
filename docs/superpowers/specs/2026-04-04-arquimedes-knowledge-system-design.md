@@ -73,7 +73,8 @@ arquimedes/
     index.py                         # SQLite FTS5 build + query
     search.py                        # search interface (card → chunk → deep)
     compile.py                       # wiki generation from extracted data
-    lint.py                          # wiki health checks
+    lint.py                          # wiki health checks + reflective maintenance
+    lint_global_bridge.py            # Step 2 global bridge artifact generation from local clusters
     watch.py                         # file watcher daemon (fsevents/poll + debounce)
     sync.py                          # auto-pull daemon for collaborators
     serve.py                         # FastAPI web UI server
@@ -470,6 +471,12 @@ At the end of Step 1 of the collection-graph rollout, the primary semantic publi
 
 Legacy bridge artifacts such as `derived/bridge_concept_clusters.jsonl` may still exist during the transition and may continue to support some cross-collection continuity features, but they are no longer the primary semantic publication layer. Step 2 introduces a distinct global bridge graph built from local semantic outputs rather than from raw material-level global clustering.
 
+The first Step 2 execution boundary lives inside lint as the `global-bridge` stage. That stage should write `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json` by running an incremental LLM clustering pass over collection-local clusters, using compact hosting-collection context plus existing global bridge memory. Compile renders shared bridge pages from those collection-cluster members, and memory/search project the same bridge layer into SQLite-backed traversal while the remaining legacy raw-material bridge publication path is still being retired. A separate public `arq bridge-global` command is not currently part of the design.
+
+Step 2 global bridging works only with collection-local clusters as members. Raw material-level concepts are not direct bridge members. The bridge-clustering pass itself should also emit bridge takeaways, tensions, open questions, helpful new sources, and why the bridge matters, so bridge-level reflection is part of clustering rather than a second pass layered on top.
+
+This Step 2 pass should only run when the repository currently has at least two collection scopes with local clusters. If there is only one collection in scope, the stage should skip rather than fabricate a global bridge layer from a single collection graph.
+
 Collaborators may read, search, and cite the wiki, but they should not treat these generated pages as hand-edited working documents. Their local responsibility is to rebuild deterministic machine layers (`index ensure`, integrated memory ensure), not to republish semantic structure.
 
 ### Link format:
@@ -494,16 +501,19 @@ Phase 6 is complete. The detailed design lives in [the archived phase-6 spec](..
 
 ### LLM-driven passes:
 - **Cluster audit**: review bridge clusters incrementally, but allow merges, splits, renames, and broader reorganization when new evidence reveals a better cross-material structure; the goal is a stronger current bridge graph, not preservation for its own sake
-- **Concept reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters` for bridge concepts from staged evidence
-- **Collection reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_collection_matters` for collections, with new materials treated more richly than old ones
-- **Graph maintenance**: currently captures unresolved semantic maintenance concerns that deterministic lint cannot judge well, but this layer is provisional and should be re-evaluated in Step 2 before it is carried forward into the two-layer graph
+- **Concept reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, `helpful_new_sources`, and `why_this_concept_matters` for collection-local concept pages from staged evidence; bridge pages should get their analogous synthesis directly from the global-bridge clustering pass
+- **Collection reflection**: synthesize `main_takeaways`, `main_tensions`, `open_questions`, `helpful_new_sources`, and `why_this_collection_matters` for collections, with new materials treated more richly than old ones
+- **Graph maintenance**: keep this as a minimal corpus-level backlog fed by collection reflections plus global bridge rows/pages, not by collection-local audit threads; its job is to surface unresolved cross-collection bridge gaps, collection-level tensions that are not yet reconciled, and promising next sources or bridge directions
+
+### Step 2 rollout pass:
+- **Global bridge stage**: incrementally clusters collection-local clusters into `derived/global_bridge_clusters.jsonl`, using compact hosting-collection context plus existing global bridge memory; the same pass also emits bridge-level synthesis fields, skips entirely when fewer than two collections are in scope, and is currently invoked through `arq lint --stage global-bridge` while the rest of the Step 2 graph migration lands incrementally
 
 ### Output:
 - `arq lint` → prints a report to stdout (JSON or human-readable)
 - `arq lint --report` → writes a detailed report to `wiki/_lint_report.md`
 - `arq lint --fix` → auto-applies deterministic fixes and accepted reflective updates, then rebuilds memory
 - reflective passes emit structured artifacts under `derived/lint/`
-- graph maintenance is currently rendered into `wiki/shared/maintenance/graph-health.md` from SQL-backed findings, but Step 2 may remove or replace this layer
+- graph maintenance is rendered into `wiki/shared/maintenance/graph-health.md` from SQL-backed findings and, in the current Step 2 slice, should stay intentionally minimal: a global backlog synthesized from collection and bridge signals rather than a second review pass over local clusters
 - SQL projection of collection reflections must preserve `why_this_collection_matters` alongside the list fields so collaborators and agents can query the collection-level synthesis, not only render it in markdown
 - operator logs for `arq enrich`, `arq cluster`, and `arq lint` live under `logs/` and must always include an explicit terminal success/failure record
 

@@ -412,7 +412,7 @@ def compile(full: bool, force_cluster: bool, recompile_pages: bool):
     "--stage",
     "stages",
     multiple=True,
-    type=click.Choice(["cluster-audit", "concept-reflection", "collection-reflection", "graph-maintenance"], case_sensitive=False),
+    type=click.Choice(["cluster-audit", "concept-reflection", "collection-reflection", "global-bridge", "graph-maintenance"], case_sensitive=False),
     help="Run only specific reflective stage(s). Repeatable.",
 )
 @click.option("--report", is_flag=True, help="Write report to wiki/_lint_report.md")
@@ -453,6 +453,7 @@ def lint(quick: bool, full: bool, stages: tuple[str, ...], report: bool, fix: bo
             click.echo(f"  cluster reviews:      {reflection.get('cluster_reviews', 0)}")
             click.echo(f"  concept reflections:  {reflection.get('concept_reflections', 0)}")
             click.echo(f"  collection reflections: {reflection.get('collection_reflections', 0)}")
+            click.echo(f"  global bridges:       {reflection.get('global_bridges', 0)}")
             click.echo(f"  graph maintenance:    {reflection.get('graph_maintenance', 0)}")
 
         click.echo(f"Lint report: {result.get('report_path')}")

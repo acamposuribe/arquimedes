@@ -9,7 +9,7 @@ import pytest
 
 from arquimedes.index import rebuild_index
 from arquimedes.memory import memory_rebuild
-from arquimedes.search import SearchResult, format_human, get_collection_clusters, get_material_clusters, search
+from arquimedes.search import SearchResult, format_human, get_bridge_member_clusters, get_cluster_global_bridges, get_collection_clusters, get_material_clusters, search
 
 
 # --- Fixtures (reuse helpers from test_index pattern) ---
@@ -685,6 +685,15 @@ def _write_local_clusters(root: Path, domain: str, collection: str, clusters: li
     )
 
 
+def _write_global_bridge_clusters(root: Path, clusters: list[dict]) -> None:
+    derived = root / "derived"
+    derived.mkdir(parents=True, exist_ok=True)
+    (derived / "global_bridge_clusters.jsonl").write_text(
+        "\n".join(json.dumps(cluster) for cluster in clusters) + "\n",
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def concepts_repo(tmp_path, monkeypatch):
     """Two materials: mat_alpha shares a concept with mat_beta; different keywords and authors."""
@@ -773,6 +782,29 @@ def concepts_repo(tmp_path, monkeypatch):
                 {"material_id": "mat_alpha", "concept_name": "archival habitat", "relevance": "high", "source_pages": [2, 3], "evidence_spans": ["the archival habitat"], "confidence": 1.0},
                 {"material_id": "mat_beta", "concept_name": "archival habitat", "relevance": "high", "source_pages": [1, 5], "evidence_spans": ["archival habitat concept"], "confidence": 0.95},
             ],
+        }
+    ])
+    _write_global_bridge_clusters(tmp_path, [
+        {
+            "bridge_id": "global_bridge__archival-habitat-cluster",
+            "canonical_name": "Archival Habitat Cluster",
+            "slug": "archival-habitat-cluster",
+            "aliases": ["archive habitat bridge"],
+            "descriptor": "Cross-collection bridge around archival habitat.",
+            "member_local_clusters": [
+                {
+                    "cluster_id": "research___general__local_0001",
+                    "domain": "research",
+                    "collection": "_general",
+                    "canonical_name": "Archival Habitat Cluster",
+                    "wiki_path": "wiki/research/_general/concepts/archival-habitat-cluster.md",
+                    "material_ids": ["mat_alpha", "mat_beta"],
+                }
+            ],
+            "domain_collection_keys": ["research___general", "practice__projects"],
+            "supporting_material_ids": ["mat_alpha", "mat_beta"],
+            "confidence": 0.9,
+            "wiki_path": "wiki/shared/bridge-concepts/archival-habitat-cluster.md",
         }
     ])
     memory_rebuild()
@@ -873,6 +905,13 @@ class TestFindRelated:
         types = {c.type for c in beta.connections}
         assert "shared_local_cluster" in types
 
+    def test_shared_global_bridge_contributes(self, concepts_repo):
+        related = find_related("mat_alpha")
+        beta = next((r for r in related if r.material_id == "mat_beta"), None)
+        assert beta is not None
+        types = {c.type for c in beta.connections}
+        assert "shared_global_cluster" in types
+
     def test_shared_author_contributes(self, concepts_repo):
         related = find_related("mat_alpha")
         beta = next((r for r in related if r.material_id == "mat_beta"), None)
@@ -912,7 +951,8 @@ class TestFindRelated:
         related = find_related("mat_alpha")
         out = format_related_human("mat_alpha", related)
         assert "mat_beta" in out
-        assert "shared_concept" in out
+        assert "shared local home:" in out
+        assert "shared bridge:" in out
 
     def test_no_related_empty_collection(self, tmp_path, monkeypatch):
         """Single-material collection → no related results."""
@@ -1012,6 +1052,14 @@ class TestLocalClusterTraversal:
 
     def test_get_collection_clusters_returns_local_clusters(self, concepts_repo):
         hits = get_collection_clusters("research", "_general")
+        assert [hit.cluster_id for hit in hits] == ["research___general__local_0001"]
+
+    def test_get_cluster_global_bridges_returns_bridge_hits(self, concepts_repo):
+        hits = get_cluster_global_bridges("research___general__local_0001")
+        assert [hit.cluster_id for hit in hits] == ["global_bridge__archival-habitat-cluster"]
+
+    def test_get_bridge_member_clusters_returns_local_hits(self, concepts_repo):
+        hits = get_bridge_member_clusters("global_bridge__archival-habitat-cluster")
         assert [hit.cluster_id for hit in hits] == ["research___general__local_0001"]
 
 

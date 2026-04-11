@@ -13,7 +13,7 @@ from click.testing import CliRunner
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import EnrichmentError, ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _cluster_audit_apply_bridge_update, _filter_local_rows_not_in_bridge, _graph_reflection_due, _load_manifest, _memory_state_stale, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, _stage_cluster_audit_reviews_input, run_deterministic_lint, run_lint
+from arquimedes.lint import EnrichmentError, ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _cluster_audit_apply_bridge_update, _filter_local_rows_not_in_bridge, _graph_reflection_due, _graph_reflection_packet, _load_manifest, _memory_state_stale, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, _stage_cluster_audit_reviews_input, run_deterministic_lint, run_lint
 from arquimedes.memory import memory_rebuild
 from arquimedes.cli import lint as lint_cmd
 
@@ -1304,6 +1304,7 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
                     "main_takeaways": ["Shared concern with spatial archives"],
                     "main_tensions": ["Theory vs. use"],
                     "open_questions": ["What is the archive doing?"],
+                    "helpful_new_sources": ["Archive design case studies with annotated floor plans."],
                     "why_this_concept_matters": "It shapes the whole corpus.",
                     "_finished": True,
                 }
@@ -1321,7 +1322,8 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
     assert "PROCESS_FINISHED" not in prompts[0]
     assert "Return final JSON only." in prompts[0]
     assert '"_finished"' in systems[0]
-    assert {"cluster_id", "slug", "canonical_name", "main_takeaways", "main_tensions", "open_questions", "why_this_concept_matters", "supporting_material_ids", "supporting_evidence", "input_fingerprint", "wiki_path"} <= set(first[0])
+    assert {"cluster_id", "slug", "canonical_name", "main_takeaways", "main_tensions", "open_questions", "helpful_new_sources", "why_this_concept_matters", "supporting_material_ids", "supporting_evidence", "input_fingerprint", "wiki_path"} <= set(first[0])
+    assert first[0]["helpful_new_sources"] == ["Archive design case studies with annotated floor plans."]
     assert not (root / "derived" / "tmp" / "concept_reflections" / "concept_001.work.json").exists()
 
     (root / "wiki" / "shared" / "concepts" / "archive-and-space.md").write_text("Concept page updated.", encoding="utf-8")
@@ -1454,6 +1456,7 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
             assert "old_materials" in prompt
             assert "chunks are only secondary support" in prompt.lower()
             assert "why this collection matters" in prompt.lower()
+            assert "helpful new sources" in prompt.lower()
             return json.dumps(
                 {
                     "main_takeaways": ["The collection centers archival space."],
@@ -1461,6 +1464,7 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
                     "important_material_ids": ["mat_001", "mat_002"],
                     "important_cluster_ids": ["concept_001"],
                     "open_questions": ["What else is in the archive?"],
+                    "helpful_new_sources": ["comparative archive conversion studies"],
                     "why_this_collection_matters": "It shapes the collection as a whole.",
                     "_finished": True,
                 }
@@ -1486,8 +1490,9 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
     assert len(first) == 1
     assert first[0]["collection_key"] == "research/papers"
     assert len(calls) == 1
+    assert first[0]["helpful_new_sources"] == ["comparative archive conversion studies"]
     assert first[0]["why_this_collection_matters"] == "It shapes the collection as a whole."
-    assert {"collection_key", "domain", "collection", "main_takeaways", "main_tensions", "important_material_ids", "important_cluster_ids", "open_questions", "why_this_collection_matters", "input_fingerprint", "wiki_path"} <= set(first[0])
+    assert {"collection_key", "domain", "collection", "main_takeaways", "main_tensions", "important_material_ids", "important_cluster_ids", "open_questions", "helpful_new_sources", "why_this_collection_matters", "input_fingerprint", "wiki_path"} <= set(first[0])
     assert "PROCESS_FINISHED" not in prompts[0]
     assert "Return final JSON only." in prompts[0]
     assert '"_finished"' in systems[0]
@@ -1606,6 +1611,7 @@ def test_collection_reflection_null_fields_preserve_existing_row_values(tmp_path
                 "important_material_ids": ["mat_001"],
                 "important_cluster_ids": ["concept_001"],
                 "open_questions": ["Stored question"],
+                "helpful_new_sources": ["Stored source"],
                 "why_this_collection_matters": "Stored reason.",
                 "input_fingerprint": "stale-fingerprint",
                 "wiki_path": "wiki/research/papers/_index.md",
@@ -1625,6 +1631,7 @@ def test_collection_reflection_null_fields_preserve_existing_row_values(tmp_path
                     "important_material_ids": None,
                     "important_cluster_ids": ["concept_001"],
                     "open_questions": None,
+                    "helpful_new_sources": None,
                     "why_this_collection_matters": None,
                     "_finished": True,
                 }
@@ -1653,6 +1660,7 @@ def test_collection_reflection_null_fields_preserve_existing_row_values(tmp_path
     assert result[0]["important_material_ids"] == ["mat_001"]
     assert result[0]["important_cluster_ids"] == ["concept_001"]
     assert result[0]["open_questions"] == ["Stored question"]
+    assert result[0]["helpful_new_sources"] == ["Stored source"]
     assert result[0]["why_this_collection_matters"] == "Stored reason."
 
     stored = [
@@ -1665,6 +1673,7 @@ def test_collection_reflection_null_fields_preserve_existing_row_values(tmp_path
     assert stored[0]["important_material_ids"] == ["mat_001"]
     assert stored[0]["important_cluster_ids"] == ["concept_001"]
     assert stored[0]["open_questions"] == ["Stored question"]
+    assert stored[0]["helpful_new_sources"] == ["Stored source"]
     assert stored[0]["why_this_collection_matters"] == "Stored reason."
 
 
@@ -1852,6 +1861,7 @@ def test_reflection_index_tool_open_collection_includes_collection_prose(tmp_pat
                 "important_material_ids": ["mat_001", "mat_002"],
                 "important_cluster_ids": [],
                 "open_questions": ["What else is in the archive?"],
+                "helpful_new_sources": ["Comparative archive reuse case studies."],
                 "why_this_collection_matters": "It gives the papers collection a coherent semantic role.",
                 "input_fingerprint": "fp-collection",
                 "wiki_path": "wiki/research/papers/_index.md",
@@ -1864,6 +1874,7 @@ def test_reflection_index_tool_open_collection_includes_collection_prose(tmp_pat
         record = tool.open_record("collection", "research/papers")
 
     assert record is not None
+    assert record["reflection"]["helpful_new_sources"] == ["Comparative archive reuse case studies."]
     assert record["reflection"]["why_this_collection_matters"] == "It gives the papers collection a coherent semantic role."
 
 
@@ -1885,20 +1896,6 @@ def test_graph_reflection_writes_page_and_skips_unchanged(tmp_path, monkeypatch)
             "low": 0,
         }
     }
-    cluster_reviews = [
-        {
-            "review_id": "concept_001:0:merge",
-            "cluster_id": "concept_001",
-            "finding_type": "merge",
-            "severity": "medium",
-            "recommendation": "Consider merging.",
-            "affected_material_ids": ["mat_001", "mat_002"],
-            "affected_concept_names": ["archive and space"],
-            "evidence": ["shared archive frame"],
-            "input_fingerprint": "abc",
-            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
-        }
-    ]
     concept_refs = [
         {
             "cluster_id": "concept_001",
@@ -1960,7 +1957,7 @@ def test_graph_reflection_writes_page_and_skips_unchanged(tmp_path, monkeypatch)
 
         return fn
 
-    first = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
+    first = _run_graph_reflection(root, deterministic_report, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
     assert first["graph_maintenance"] == 1
     assert len(calls) == 1
     assert "PROCESS_FINISHED" not in prompts[0]
@@ -1974,7 +1971,7 @@ def test_graph_reflection_writes_page_and_skips_unchanged(tmp_path, monkeypatch)
     assert len(findings) == 1
     assert "Archive and Space still wants a stronger link to architectural form." in findings[0]
 
-    second = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
+    second = _run_graph_reflection(root, deterministic_report, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
     assert second["graph_maintenance"] == 0
     assert len(calls) == 1
 
@@ -2014,20 +2011,6 @@ def test_graph_reflection_null_findings_preserve_existing_rows(tmp_path, monkeyp
             "low": 0,
         }
     }
-    cluster_reviews = [
-        {
-            "review_id": "concept_001:0:merge",
-            "cluster_id": "concept_001",
-            "finding_type": "merge",
-            "severity": "medium",
-            "recommendation": "Consider merging.",
-            "affected_material_ids": ["mat_001", "mat_002"],
-            "affected_concept_names": ["archive and space"],
-            "evidence": ["shared archive frame"],
-            "input_fingerprint": "abc",
-            "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
-        }
-    ]
     concept_refs = [
         {
             "cluster_id": "concept_001",
@@ -2067,7 +2050,7 @@ def test_graph_reflection_null_findings_preserve_existing_rows(tmp_path, monkeyp
 
         return fn
 
-    result = _run_graph_reflection(root, deterministic_report, cluster_reviews, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
+    result = _run_graph_reflection(root, deterministic_report, concept_refs, collection_refs, clusters, _load_manifest(root), llm_factory)
 
     assert result["graph_maintenance"] == 1
     assert len(calls) == 1
@@ -2135,6 +2118,7 @@ def test_concept_reflection_includes_prior_reflection_and_rich_evidence(tmp_path
                     "main_takeaways": ["Shared concern with spatial archives"],
                     "main_tensions": ["Theory vs. use"],
                     "open_questions": ["What is the archive doing?"],
+                    "helpful_new_sources": ["Recent archive conversion case studies."],
                     "why_this_concept_matters": "It shapes the whole corpus.",
                     "_finished": True,
                 }
@@ -2175,6 +2159,7 @@ def test_concept_reflection_null_fields_preserve_existing_row_values(tmp_path, m
                 "main_takeaways": ["Stored takeaway"],
                 "main_tensions": ["Stored tension"],
                 "open_questions": ["Stored question"],
+                "helpful_new_sources": ["Stored source idea"],
                 "why_this_concept_matters": "Stored reason.",
                 "supporting_material_ids": ["mat_001", "mat_002"],
                 "supporting_evidence": ["archive and space", "archive space"],
@@ -2194,6 +2179,7 @@ def test_concept_reflection_null_fields_preserve_existing_row_values(tmp_path, m
                     "main_takeaways": None,
                     "main_tensions": ["Updated tension"],
                     "open_questions": None,
+                    "helpful_new_sources": None,
                     "why_this_concept_matters": None,
                     "_finished": True,
                 }
@@ -2214,6 +2200,7 @@ def test_concept_reflection_null_fields_preserve_existing_row_values(tmp_path, m
     assert first[0]["main_takeaways"] == ["Stored takeaway"]
     assert first[0]["main_tensions"] == ["Updated tension"]
     assert first[0]["open_questions"] == ["Stored question"]
+    assert first[0]["helpful_new_sources"] == ["Stored source idea"]
     assert first[0]["why_this_concept_matters"] == "Stored reason."
 
     stored = [
@@ -2224,6 +2211,7 @@ def test_concept_reflection_null_fields_preserve_existing_row_values(tmp_path, m
     assert stored[0]["main_takeaways"] == ["Stored takeaway"]
     assert stored[0]["main_tensions"] == ["Updated tension"]
     assert stored[0]["open_questions"] == ["Stored question"]
+    assert stored[0]["helpful_new_sources"] == ["Stored source idea"]
     assert stored[0]["why_this_concept_matters"] == "Stored reason."
 
 
@@ -2260,7 +2248,9 @@ def test_concept_reflection_evidence_builder_respects_chunk_budget_and_caps(tmp_
 
     payload = _build_concept_reflection_evidence_payload(cluster, material_info, None)
 
-    assert set(payload) == {"cluster_id", "canonical_name", "slug", "aliases", "materials"}
+    assert {"cluster_id", "canonical_name", "slug", "aliases", "materials"} <= set(payload)
+    assert "member_local_clusters" not in payload
+    assert "bridge_synthesis" not in payload
     assert len(payload["materials"]) == 12
     assert all(set(material) == {"material_id", "title", "summary", "keywords", "evidence"} for material in payload["materials"])
     assert all("chunks" in material["evidence"] for material in payload["materials"])
@@ -2502,17 +2492,17 @@ def test_lint_cli_passes_stage_selection(tmp_path, monkeypatch):
         return {
             "mode": "staged",
             "deterministic": {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}},
-            "reflection": {"cluster_reviews": 0, "concept_reflections": 0, "collection_reflections": 0, "graph_maintenance": 0},
+            "reflection": {"cluster_reviews": 0, "concept_reflections": 0, "collection_reflections": 0, "global_bridges": 0, "graph_maintenance": 0},
             "fixes": None,
             "report_path": str(root / "wiki" / "_lint_report.md"),
         }
 
     monkeypatch.setattr(lint_mod, "run_lint", fake_run_lint)
 
-    result = runner.invoke(lint_cmd, ["--stage", "cluster-audit", "--json"], obj={})
+    result = runner.invoke(lint_cmd, ["--stage", "global-bridge", "--json"], obj={})
 
     assert result.exit_code == 0
-    assert captured["stages"] == ["cluster-audit"]
+    assert captured["stages"] == ["global-bridge"]
 
 
 def test_run_reflective_lint_only_runs_requested_stage(tmp_path, monkeypatch):
@@ -2545,6 +2535,10 @@ def test_run_reflective_lint_only_runs_requested_stage(tmp_path, monkeypatch):
         calls.append("collection-reflection")
         return [{"collection_key": "research/papers"}]
 
+    def fake_global_bridges(*_args, **_kwargs):
+        calls.append("global-bridge")
+        return {"global_bridges": 1, "global_bridge_skipped": False, "global_bridge_skip_reason": ""}
+
     def fake_graph_reflection(*_args, **_kwargs):
         calls.append("graph-maintenance")
         return {"graph_maintenance": 1, "graph_skipped": False, "graph_skip_reason": ""}
@@ -2554,6 +2548,7 @@ def test_run_reflective_lint_only_runs_requested_stage(tmp_path, monkeypatch):
     monkeypatch.setattr(lint_mod, "_run_cluster_audit", fake_cluster_audit)
     monkeypatch.setattr(lint_mod, "_run_concept_reflections", fake_concept_reflections)
     monkeypatch.setattr(lint_mod, "_run_collection_reflections", fake_collection_reflections)
+    monkeypatch.setattr(lint_mod, "_run_global_bridges", fake_global_bridges)
     monkeypatch.setattr(lint_mod, "_run_graph_reflection", fake_graph_reflection)
     monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
     monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
@@ -2569,9 +2564,488 @@ def test_run_reflective_lint_only_runs_requested_stage(tmp_path, monkeypatch):
     assert result["cluster_reviews"] == 1
     assert result["concept_reflections"] == 0
     assert result["collection_reflections"] == 0
+    assert result["global_bridges"] == 0
     assert result["graph_maintenance"] == 0
     assert result["stages"] == ["cluster-audit"]
+    assert result["global_bridge_skip_reason"] == "stage not selected"
     assert result["graph_skip_reason"] == "stage not selected"
+
+
+def test_run_reflective_lint_does_not_rerun_concept_reflections_after_global_bridge(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            self.root = _root
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    calls: list[list[str]] = []
+    local_cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "canonical_name": "Archive and Space",
+        "source_concepts": [{"material_id": "mat_001"}, {"material_id": "mat_002"}],
+    }
+
+    def fake_concept_reflections(_root, clusters, *_args, **_kwargs):
+        calls.append(sorted(str(cluster.get("cluster_id", "")).strip() for cluster in clusters))
+        return [{"cluster_id": cluster_id} for cluster_id in calls[-1] if cluster_id]
+
+    def fake_global_bridges(root, *_args, **_kwargs):
+        _write_jsonl(
+            root / "derived" / "global_bridge_clusters.jsonl",
+            [
+                {
+                    "bridge_id": "global_bridge__archive-and-space",
+                    "cluster_id": "global_bridge__archive-and-space",
+                    "canonical_name": "Archive and Space",
+                    "slug": "archive-and-space",
+                    "supporting_material_ids": ["mat_001", "mat_002"],
+                    "member_local_clusters": [
+                        {
+                            "cluster_id": "research__papers__local_0001",
+                            "material_ids": ["mat_001", "mat_002"],
+                        }
+                    ],
+                    "wiki_path": "wiki/shared/bridge-concepts/archive-and-space.md",
+                }
+            ],
+        )
+        return {"global_bridges": 1, "global_bridge_skipped": False, "global_bridge_skip_reason": ""}
+
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+    monkeypatch.setattr(lint_mod, "_concept_reflection_due", lambda *_args, **_kwargs: (True, "concept reflection due"))
+    monkeypatch.setattr(lint_mod, "_global_bridge_due", lambda *_args, **_kwargs: (True, "global bridge due"))
+    monkeypatch.setattr(lint_mod, "_run_concept_reflections", fake_concept_reflections)
+    monkeypatch.setattr(lint_mod, "_run_global_bridges", fake_global_bridges)
+    monkeypatch.setattr(lint_mod, "_current_concepts", lambda _root: [local_cluster])
+    monkeypatch.setattr(lint_mod, "load_local_clusters", lambda _root: [local_cluster])
+    monkeypatch.setattr(lint_mod, "load_bridge_clusters", lambda _root: [])
+
+    result = lint_mod.run_reflective_lint(
+        config,
+        {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}, "issues": []},
+        stages=["concept-reflection", "global-bridge"],
+    )
+
+    assert result["concept_reflections"] == 1
+    assert calls == [["research__papers__local_0001"]]
+
+
+def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            self.root = _root
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+
+    _write_jsonl(
+        root / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl",
+        [
+            {
+                "cluster_id": "research__papers__local_0001",
+                "domain": "research",
+                "collection": "papers",
+                "canonical_name": "Archive and Space",
+                "slug": "archive-and-space",
+                "aliases": ["Spatial Archive"],
+                "descriptor": "Archive as a spatial ordering device.",
+                "material_ids": ["mat_001", "mat_002"],
+                "source_concepts": [
+                    {"material_id": "mat_001", "concept_name": "archive and space"},
+                    {"material_id": "mat_002", "concept_name": "archive and space"},
+                ],
+                "confidence": 0.92,
+            }
+        ],
+    )
+    _write_jsonl(
+        root / "derived" / "collections" / "practice__projects" / "local_concept_clusters.jsonl",
+        [
+            {
+                "cluster_id": "practice__projects__local_0001",
+                "domain": "practice",
+                "collection": "projects",
+                "canonical_name": "Archive and Space",
+                "slug": "archive-and-space",
+                "aliases": ["Archive Spatial Memory"],
+                "descriptor": "Archive as a design memory scaffold.",
+                "material_ids": ["mat_010"],
+                "source_concepts": [{"material_id": "mat_010", "concept_name": "archive and space"}],
+                "confidence": 0.61,
+            },
+            {
+                "cluster_id": "practice__projects__local_0002",
+                "domain": "practice",
+                "collection": "projects",
+                "canonical_name": "Unique Workshop Detail",
+                "slug": "unique-workshop-detail",
+                "aliases": [],
+                "descriptor": "A one-off local topic.",
+                "material_ids": ["mat_011"],
+                "source_concepts": [{"material_id": "mat_011", "concept_name": "unique workshop detail"}],
+                "confidence": 0.95,
+            },
+        ],
+    )
+    _write_jsonl(
+        root / "derived" / "lint" / "collection_reflections.jsonl",
+        [
+            {
+                "collection_key": "research/papers",
+                "domain": "research",
+                "collection": "papers",
+                "important_material_ids": [],
+                "important_cluster_ids": ["research__papers__local_0001"],
+                "main_takeaways": ["Archive theory anchors the collection."],
+                "main_tensions": ["Theory risks becoming detached from design use."],
+                "open_questions": ["Which design archives should be compared next?"],
+                "why_this_collection_matters": "Papers define the theoretical archive frame.",
+            },
+            {
+                "collection_key": "practice/projects",
+                "domain": "practice",
+                "collection": "projects",
+                "important_material_ids": [],
+                "important_cluster_ids": ["practice__projects__local_0001"],
+                "main_takeaways": ["Archive thinking recurs across projects."],
+                "main_tensions": [],
+                "open_questions": [],
+                "why_this_collection_matters": "Projects keep returning to archive as a spatial system.",
+            }
+        ],
+    )
+
+    _write_jsonl(
+        root / "derived" / "lint" / "concept_reflections.jsonl",
+        [
+            {
+                "cluster_id": "research__papers__local_0001",
+                "main_takeaways": ["Archive is an ordering device."],
+                "main_tensions": ["Theory vs practice."],
+                "open_questions": ["How portable is the archive frame?"],
+                "helpful_new_sources": ["comparative project archive studies"],
+                "why_this_concept_matters": "It anchors the research side.",
+            },
+            {
+                "cluster_id": "practice__projects__local_0001",
+                "main_takeaways": ["Archive acts as design memory."],
+                "main_tensions": ["Memory vs delivery."],
+                "open_questions": ["How should design archives be maintained?"],
+                "helpful_new_sources": ["practice case studies"],
+                "why_this_concept_matters": "It grounds archive thinking in projects.",
+            },
+        ],
+    )
+
+    def llm_factory(_stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            assert "global bridge packet" in system.lower() or "global bridge packet" in messages[0]["content"].lower()
+            return json.dumps(
+                {
+                    "links_to_existing": [],
+                    "new_clusters": [
+                        {
+                            "canonical_name": "Archive and Space",
+                            "descriptor": "A global bridge connecting archive theory and design-memory practice.",
+                            "aliases": ["Archive as Spatial Framework"],
+                            "member_local_clusters": [
+                                {"cluster_id": "research__papers__local_0001"},
+                                {"cluster_id": "practice__projects__local_0001"},
+                            ],
+                            "bridge_takeaways": ["Archive thinking recurs across research and practice."],
+                            "bridge_tensions": ["Theory and practice frame archival space differently."],
+                            "bridge_open_questions": ["Which other collections should join this bridge?"],
+                            "helpful_new_sources": ["comparative archive design case studies"],
+                            "why_this_bridge_matters": "It turns archive into a shared cross-system perspective.",
+                        }
+                    ],
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    result = lint_mod.run_reflective_lint(
+        config,
+        {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}, "issues": []},
+        stages=["global-bridge"],
+        llm_factory=llm_factory,
+    )
+
+    bridge_rows = [
+        json.loads(line)
+        for line in (root / "derived" / "global_bridge_clusters.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+    assert result["global_bridges"] == 1
+    assert result["global_bridge_skipped"] is False
+    assert len(bridge_rows) == 1
+    assert bridge_rows[0]["canonical_name"] == "Archive and Space"
+    assert bridge_rows[0]["domain_collection_keys"] == ["practice/projects", "research/papers"]
+    assert bridge_rows[0]["bridge_takeaways"] == ["Archive thinking recurs across research and practice."]
+    assert bridge_rows[0]["bridge_tensions"] == ["Theory and practice frame archival space differently."]
+    assert bridge_rows[0]["bridge_open_questions"] == ["Which other collections should join this bridge?"]
+    assert bridge_rows[0]["helpful_new_sources"] == ["comparative archive design case studies"]
+    assert bridge_rows[0]["why_this_bridge_matters"] == "It turns archive into a shared cross-system perspective."
+    assert bridge_rows[0]["supporting_collection_reflections"][0]["collection_key"] == "practice/projects"
+    assert {member["cluster_id"] for member in bridge_rows[0]["member_local_clusters"]} == {
+        "practice__projects__local_0001",
+        "research__papers__local_0001",
+    }
+    assert bridge_rows[0]["bridge_id"] == "global_bridge__archive-and-space"
+    assert (root / "derived" / "global_bridge_stamp.json").exists()
+
+
+def test_global_bridge_memory_snapshot_omits_large_secondary_synthesis_fields():
+    from arquimedes.lint_global_bridge import _bridge_memory_snapshot
+
+    rows = _bridge_memory_snapshot(
+        [
+            {
+                "bridge_id": "global_bridge__archive-and-space",
+                "canonical_name": "Archive and Space",
+                "descriptor": "Shared archive perspective.",
+                "aliases": ["Archive as Spatial Framework"],
+                "member_local_clusters": [
+                    {
+                        "cluster_id": "research__papers__local_0001",
+                        "collection_key": "research/papers",
+                        "canonical_name": "Archive and Space",
+                    }
+                ],
+                "bridge_takeaways": ["Archive thinking recurs across collections."],
+                "bridge_tensions": ["Theory and practice frame archival space differently."],
+                "bridge_open_questions": ["Which other collections should join this bridge?"],
+                "helpful_new_sources": ["comparative archive design case studies"],
+                "why_this_bridge_matters": "It turns archive into a shared cross-system perspective.",
+            }
+        ]
+    )
+
+    assert len(rows) == 1
+    assert rows[0]["bridge_takeaways"] == ["Archive thinking recurs across collections."]
+    assert rows[0]["bridge_open_questions"] == ["Which other collections should join this bridge?"]
+    assert rows[0]["why_this_bridge_matters"] == "It turns archive into a shared cross-system perspective."
+    assert "bridge_tensions" not in rows[0]
+    assert "helpful_new_sources" not in rows[0]
+
+
+def test_run_reflective_lint_global_bridge_stage_skips_with_fewer_than_two_collections(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            self.root = _root
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+
+    _write_jsonl(
+        root / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl",
+        [
+            {
+                "cluster_id": "research__papers__local_0001",
+                "domain": "research",
+                "collection": "papers",
+                "canonical_name": "Archive and Space",
+                "slug": "archive-and-space",
+                "aliases": [],
+                "descriptor": "Archive as a spatial ordering device.",
+                "material_ids": ["mat_001", "mat_002"],
+                "source_concepts": [
+                    {"material_id": "mat_001", "concept_name": "archive and space"},
+                    {"material_id": "mat_002", "concept_name": "archive and space"},
+                ],
+                "confidence": 0.92,
+            }
+        ],
+    )
+    _write_jsonl(root / "derived" / "lint" / "collection_reflections.jsonl", [])
+
+    result = lint_mod.run_reflective_lint(
+        config,
+        {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}, "issues": []},
+        stages=["global-bridge"],
+    )
+
+    assert result["global_bridges"] == 0
+    assert result["global_bridge_skipped"] is True
+    assert result["global_bridge_skip_reason"] == "fewer than 2 collections"
+    assert not (root / "derived" / "global_bridge_clusters.jsonl").exists()
+
+
+def test_global_bridge_due_detects_local_cluster_and_collection_reflection_changes(tmp_path, monkeypatch):
+    from arquimedes.lint_global_bridge import _global_bridge_due, _global_bridge_inputs
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    local_clusters = [
+        {
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "canonical_name": "Archive and Space",
+            "slug": "archive-and-space",
+            "aliases": ["Spatial Archive"],
+            "descriptor": "Archive as a spatial ordering device.",
+            "material_ids": ["mat_001", "mat_002"],
+            "source_concepts": [
+                {"material_id": "mat_001", "concept_name": "archive and space"},
+                {"material_id": "mat_002", "concept_name": "archive and space"},
+            ],
+            "confidence": 0.92,
+        },
+        {
+            "cluster_id": "practice__projects__local_0001",
+            "domain": "practice",
+            "collection": "projects",
+            "canonical_name": "Archive and Space",
+            "slug": "archive-and-space",
+            "aliases": ["Archive Spatial Memory"],
+            "descriptor": "Archive as a design memory scaffold.",
+            "material_ids": ["mat_010"],
+            "source_concepts": [{"material_id": "mat_010", "concept_name": "archive and space"}],
+            "confidence": 0.61,
+        },
+    ]
+    collection_refs = [
+        {
+            "collection_key": "research/papers",
+            "domain": "research",
+            "collection": "papers",
+            "main_takeaways": ["Archive theory anchors the collection."],
+            "main_tensions": ["Theory risks becoming detached from design use."],
+            "open_questions": ["Which design archives should be compared next?"],
+            "why_this_collection_matters": "Papers define the theoretical archive frame.",
+        },
+        {
+            "collection_key": "practice/projects",
+            "domain": "practice",
+            "collection": "projects",
+            "main_takeaways": ["Archive thinking recurs across projects."],
+            "main_tensions": [],
+            "open_questions": [],
+            "why_this_collection_matters": "Projects keep returning to archive as a spatial system.",
+        },
+    ]
+
+    _write_jsonl(
+        root / "derived" / "lint" / "concept_reflections.jsonl",
+        [
+            {
+                "cluster_id": "research__papers__local_0001",
+                "main_takeaways": ["Archive is an ordering device."],
+                "main_tensions": ["Theory vs practice."],
+                "open_questions": ["How portable is the archive frame?"],
+                "helpful_new_sources": ["comparative project archive studies"],
+                "why_this_concept_matters": "It anchors the research side.",
+            },
+            {
+                "cluster_id": "practice__projects__local_0001",
+                "main_takeaways": ["Archive acts as design memory."],
+                "main_tensions": ["Memory vs delivery."],
+                "open_questions": ["How should design archives be maintained?"],
+                "helpful_new_sources": ["practice case studies"],
+                "why_this_concept_matters": "It grounds archive thinking in projects.",
+            },
+        ],
+    )
+
+    bundle = _global_bridge_inputs(root, local_clusters, collection_refs)
+    _write_jsonl(
+        root / "derived" / "global_bridge_clusters.jsonl",
+        [
+            {
+                "bridge_id": "global_bridge__archive-and-space",
+                "canonical_name": "Archive and Space",
+                "slug": "archive-and-space",
+                "descriptor": "A global bridge connecting archive theory and practice.",
+                "aliases": ["Archive as Spatial Framework"],
+                "member_local_clusters": [
+                    {
+                        "cluster_id": "research__papers__local_0001",
+                        "domain": "research",
+                        "collection": "papers",
+                        "collection_key": "research/papers",
+                        "canonical_name": "Archive and Space",
+                    },
+                    {
+                        "cluster_id": "practice__projects__local_0001",
+                        "domain": "practice",
+                        "collection": "projects",
+                        "collection_key": "practice/projects",
+                        "canonical_name": "Archive and Space",
+                    },
+                ],
+                "bridge_takeaways": ["Archive thinking recurs across research and practice."],
+                "bridge_open_questions": ["Which other collections should join this bridge?"],
+                "why_this_bridge_matters": "It turns archive into a shared cross-system perspective.",
+                "supporting_material_ids": ["mat_001", "mat_002", "mat_010"],
+            }
+        ],
+    )
+    _write_json(
+        root / "derived" / "global_bridge_stamp.json",
+        {
+            "input_fingerprint": bundle["input_fingerprint"],
+            "local_cluster_fingerprints": bundle["local_cluster_fingerprints"],
+            "collection_context_fingerprints": bundle["collection_context_fingerprints"],
+        },
+    )
+
+    due, reason = _global_bridge_due(root, local_clusters, collection_refs)
+    assert due is False
+    assert reason == "global bridge unchanged"
+
+    changed_local_clusters = [dict(cluster) for cluster in local_clusters]
+    changed_local_clusters[0]["descriptor"] = "Archive as a changed spatial ordering device."
+    due, reason = _global_bridge_due(root, changed_local_clusters, collection_refs)
+    assert due is True
+    assert reason == "pending local clusters or collection context changed"
+
+    changed_collection_refs = [dict(row) for row in collection_refs]
+    changed_collection_refs[0]["why_this_collection_matters"] = "Papers now frame archive as both theory and method."
+    due, reason = _global_bridge_due(root, local_clusters, changed_collection_refs)
+    assert due is True
+    assert reason == "pending local clusters or collection context changed"
 
 
 def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):
@@ -2775,18 +3249,6 @@ def test_graph_reflection_schedule_gate_is_coarse(tmp_path, monkeypatch):
     )
     rebuild_index(config)
     deterministic = run_deterministic_lint(config)
-    cluster_reviews = [
-        {
-            "cluster_id": "concept_001",
-            "finding_type": "merge",
-            "severity": "medium",
-            "recommendation": "Merge cautiously.",
-            "affected_material_ids": ["mat_001", "mat_002"],
-            "affected_concept_names": ["archive and space"],
-            "evidence": ["shared archive frame"],
-            "input_fingerprint": "abc",
-        }
-    ]
     concept_refs = [
         {
             "cluster_id": "concept_001",
@@ -2840,4 +3302,57 @@ def test_graph_reflection_schedule_gate_is_coarse(tmp_path, monkeypatch):
         },
     )
 
-    assert _graph_reflection_due(root, config, clusters, _load_manifest(root), cluster_reviews, concept_refs, collection_refs, deterministic) == (False, "graph reflection deferred by schedule")
+    assert _graph_reflection_due(root, config, clusters, _load_manifest(root), concept_refs, collection_refs, deterministic) == (False, "graph reflection deferred by schedule")
+
+
+def test_graph_reflection_packet_uses_only_collection_and_bridge_signals(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    deterministic = run_deterministic_lint(config)
+    bridge_clusters = [
+        {
+            "cluster_id": "bridge_001",
+            "canonical_name": "Archive and Space",
+            "domain_collection_keys": ["research/papers", "practice/projects"],
+            "material_ids": ["mat_001", "mat_002"],
+            "bridge_takeaways": ["Archive logic recurs across collections."],
+            "bridge_tensions": ["Theory and practice pull in different directions."],
+            "bridge_open_questions": ["What architectural form stabilizes the archive?"],
+            "helpful_new_sources": ["oral histories of archive reuse"],
+            "why_this_bridge_matters": "It is a cross-collection seam.",
+        }
+    ]
+    concept_refs = [
+        {
+            "cluster_id": "local_001",
+            "canonical_name": "Local Archive Detail",
+            "helpful_new_sources": ["site survey"],
+            "why_this_concept_matters": "Purely local.",
+        },
+    ]
+    collection_refs = [
+        {
+            "collection_key": "research/papers",
+            "main_takeaways": ["The collection centers archival space."],
+            "main_tensions": ["Theory vs use"],
+            "open_questions": ["What else is in the archive?"],
+            "why_this_collection_matters": "It establishes the research side.",
+        }
+    ]
+
+    packet = _graph_reflection_packet(
+        deterministic,
+        bridge_clusters,
+        concept_refs,
+        collection_refs,
+        _load_manifest(root),
+    )
+
+    assert "cluster_reviews" not in packet
+    assert "concept_threads" not in packet
+    assert packet["graph_state"]["global_bridges"] == 1
+    assert packet["graph_state"]["bridge_reflections"] == 1
+    assert packet["graph_state"]["collection_reflections"] == 1
+    assert packet["bridge_threads"][0]["bridge_id"] == "bridge_001"
+    assert packet["bridge_threads"][0]["helpful_new_sources"] == ["oral histories of archive reuse"]
+    assert packet["bridge_threads"][0]["why_this_bridge_matters"] == "It is a cross-collection seam."

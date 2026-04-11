@@ -19,7 +19,6 @@ def _graph_reflection_due(
     config: dict,
     clusters: list[dict],
     manifest_records: list[dict],
-    cluster_reviews: list[dict],
     concept_refs: list[dict],
     collection_refs: list[dict],
     deterministic_report: dict,
@@ -39,7 +38,6 @@ def _graph_reflection_due(
     payload = _graph_reflection_packet(
         deterministic_report,
         clusters,
-        cluster_reviews,
         concept_refs,
         collection_refs,
         manifest_records,
@@ -90,7 +88,6 @@ def _graph_reflection_existing_path(root: Path) -> Path:
 def _graph_reflection_packet(
     deterministic_report: dict,
     bridge_clusters: list[dict],
-    cluster_reviews: list[dict],
     concept_refs: list[dict],
     collection_refs: list[dict],
     manifest_records: list[dict],
@@ -106,39 +103,52 @@ def _graph_reflection_packet(
         c for c in bridge_clusters
         if len(dict.fromkeys(str(mid).strip() for mid in deps._safe_list(c.get("material_ids", [])) if str(mid).strip())) > 1
     ]
+    multi_collection_bridges = [
+        c for c in bridge_clusters
+        if len(dict.fromkeys(str(key).strip() for key in deps._safe_list(c.get("domain_collection_keys", [])) if str(key).strip())) > 1
+    ]
+    bridge_ids = {
+        str(cluster.get("cluster_id", "")).strip()
+        for cluster in bridge_clusters
+        if str(cluster.get("cluster_id", "")).strip()
+    }
+    bridge_reflections = [
+        row for row in bridge_clusters
+        if isinstance(row, dict)
+        and str(row.get("cluster_id", "")).strip() in bridge_ids
+        and (
+            deps._safe_list(row.get("bridge_takeaways", []))
+            or deps._safe_list(row.get("bridge_tensions", []))
+            or deps._safe_list(row.get("bridge_open_questions", []))
+            or deps._safe_list(row.get("helpful_new_sources", []))
+            or str(row.get("why_this_bridge_matters", "")).strip()
+        )
+    ]
 
-    severity_rank = {"high": 0, "medium": 1, "low": 2}
-    cluster_threads = []
-    for row in sorted(
-        (row for row in cluster_reviews if isinstance(row, dict)),
-        key=lambda r: (
-            severity_rank.get(str(r.get("severity", "")).strip().lower(), 3),
-            str(r.get("cluster_id", "")),
-            str(r.get("status", "")),
-        ),
-    )[:12]:
-        cluster_threads.append({
-            "cluster_id": str(row.get("cluster_id", "")).strip(),
-            "status": str(row.get("status", "")).strip(),
-            "note": str(row.get("note", "")).strip(),
-        })
-
-    def _compact_concept_reflection(row: dict) -> dict | None:
-        cluster_id = str(row.get("cluster_id", "")).strip()
+    def _compact_bridge_thread(row: dict) -> dict | None:
+        bridge_id = str(row.get("cluster_id", "")).strip()
         canonical_name = str(row.get("canonical_name", "")).strip()
-        takeaways = deps._safe_list(row.get("main_takeaways", []))[:2]
-        tensions = deps._safe_list(row.get("main_tensions", []))[:2]
-        questions = deps._safe_list(row.get("open_questions", []))[:3]
-        matter = str(row.get("why_this_concept_matters", "")).strip()
-        if not (cluster_id or canonical_name or takeaways or tensions or questions or matter):
+        takeaways = deps._safe_list(row.get("bridge_takeaways", []))[:2]
+        tensions = deps._safe_list(row.get("bridge_tensions", []))[:2]
+        questions = deps._safe_list(row.get("bridge_open_questions", []))[:3]
+        collection_keys = [
+            str(key).strip()
+            for key in deps._safe_list(row.get("domain_collection_keys", []))
+            if str(key).strip()
+        ][:4]
+        matter = str(row.get("why_this_bridge_matters", "")).strip()
+        helpful_new_sources = deps._safe_list(row.get("helpful_new_sources", []))[:3]
+        if not (bridge_id or canonical_name or takeaways or tensions or questions or collection_keys or helpful_new_sources or matter):
             return None
         return {
-            "cluster_id": cluster_id,
+            "bridge_id": bridge_id,
             "canonical_name": canonical_name,
-            "main_takeaways": takeaways,
-            "main_tensions": tensions,
-            "open_questions": questions,
-            "why_this_concept_matters": matter,
+            "domain_collection_keys": collection_keys,
+            "bridge_takeaways": takeaways,
+            "bridge_tensions": tensions,
+            "bridge_open_questions": questions,
+            "helpful_new_sources": helpful_new_sources,
+            "why_this_bridge_matters": matter,
         }
 
     def _compact_collection_reflection(row: dict) -> dict | None:
@@ -162,15 +172,13 @@ def _graph_reflection_packet(
         "summary": deterministic_report.get("summary", {}),
         "graph_state": {
             "materials": len(material_ids),
-            "bridge_clusters": len(bridge_clusters),
-            "multi_material_clusters": len(multi_material_clusters),
-            "bridge_concepts": sum(len(deps._safe_list(c.get("source_concepts", []))) for c in bridge_clusters),
-            "cluster_reviews": len(cluster_reviews),
-            "concept_reflections": len(concept_refs),
+            "global_bridges": len(bridge_clusters),
+            "multi_material_bridges": len(multi_material_clusters),
+            "multi_collection_bridges": len(multi_collection_bridges),
+            "bridge_reflections": len(bridge_reflections),
             "collection_reflections": len(collection_refs),
         },
-        "cluster_reviews": cluster_threads,
-        "concept_threads": [item for row in concept_refs if isinstance(row, dict) for item in [_compact_concept_reflection(row)] if item][:10],
+        "bridge_threads": [item for row in bridge_clusters for item in [_compact_bridge_thread(row)] if item][:10],
         "collection_threads": [item for row in collection_refs if isinstance(row, dict) for item in [_compact_collection_reflection(row)] if item][:10],
     }
 
@@ -184,8 +192,7 @@ def _graph_reflection_prompt(
         "You are an architecture research librarian writing structured graph-maintenance findings for SQL-backed storage.\n"
         "\n"
         "This is not a wiki page. It is a semantic maintenance record for the graph: what still feels unresolved, "
-        "what bridge areas are too thin or too broad, what concept homes are still missing, what collection "
-        "syntheses still need work, and what should be investigated next.\n"
+        "what bridge areas are too thin or too broad, what collection syntheses still need work, and what should be investigated next.\n"
         "\n"
         "Use the compact graph-state packet for the high-signal inputs. Use the current graph-findings file as the "
         "current stored state when it exists. Preserve useful prior material when it still fits, but revise stale "
@@ -203,11 +210,10 @@ def _graph_reflection_prompt(
         f"- Graph-state packet: {packet_path}\n"
         f"- Current graph findings file: {current_path}\n"
         "\n"
-        "The packet is ultra-compact graph state: summary counts, bridge-graph shape, cluster reviews, "
-        "concept threads, and collection threads.\n"
+        "The packet is ultra-compact graph state: summary counts, global bridge threads, and collection threads.\n"
         "The current graph findings file is the current stored state and may be empty on the first run.\n"
         "Write a prioritized maintenance record, not a raw list of everything. Focus on the few unresolved "
-        "semantic problems that matter most: weak bridge areas, missing concept homes, collection synthesis gaps, "
+        "semantic problems that matter most: weak bridge areas, collection synthesis gaps, "
         "and the next questions or sources that would move the graph forward.\n"
         "Return only the fields requested by the schema: findings and _finished.\n"
         "If the current findings list still fits the evidence exactly, you may return null for findings and the pipeline will preserve the stored list unchanged.\n"
@@ -275,7 +281,6 @@ def _run_graph_reflection_impl(
     deps: Any,
     root: Path,
     deterministic_report: dict,
-    cluster_reviews: list[dict],
     concept_refs: list[dict],
     collection_refs: list[dict],
     bridge_clusters: list[dict],
@@ -289,7 +294,6 @@ def _run_graph_reflection_impl(
     payload = deps._graph_reflection_packet(
         deterministic_report,
         bridge_clusters,
-        cluster_reviews,
         concept_refs,
         collection_refs,
         manifest_records,
@@ -329,8 +333,21 @@ def _run_graph_reflection_impl(
             "cluster_count": len({cluster.get("cluster_id", "") for cluster in bridge_clusters if cluster.get("cluster_id", "")}),
             "material_count": len({mid for cluster in bridge_clusters for mid in deps._safe_list(cluster.get("material_ids", [])) if mid}),
             "bridge_cluster_count": len([cluster for cluster in bridge_clusters if len(dict.fromkeys(deps._safe_list(cluster.get("material_ids", [])))) > 1]),
-            "cluster_review_count": len(cluster_reviews),
-            "concept_reflection_count": len(concept_refs),
+                "bridge_reflection_count": len(
+                    [
+                        cluster
+                        for cluster in bridge_clusters
+                        if any(
+                            [
+                                deps._safe_list(cluster.get("bridge_takeaways", [])),
+                                deps._safe_list(cluster.get("bridge_tensions", [])),
+                                deps._safe_list(cluster.get("bridge_open_questions", [])),
+                                deps._safe_list(cluster.get("helpful_new_sources", [])),
+                                str(cluster.get("why_this_bridge_matters", "")).strip(),
+                            ]
+                        )
+                    ]
+                ),
             "collection_reflection_count": len(collection_refs),
             "finding_count": len(normalized),
         },

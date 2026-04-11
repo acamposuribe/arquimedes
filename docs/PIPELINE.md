@@ -160,7 +160,7 @@ without any LLM access and without re-running clustering or compile.
 
 Semantic publication belongs only to the server-maintainer path:
 
-`ingest -> extract -> index rebuild -> cluster -> compile -> memory rebuild -> commit/push`
+`ingest -> extract -> index rebuild -> cluster -> lint(global-bridge and other reflective stages) -> compile -> memory rebuild -> commit/push`
 
 Collaborators only rebuild deterministic local projections:
 
@@ -171,10 +171,17 @@ Collaborators only rebuild deterministic local projections:
 - `extract` = parse and understand the source
 - `index rebuild` = make evidence searchable
 - `cluster` = form collection-local clusters
-- `compile` = publish the collection-first wiki
-- `memory rebuild` = make the published local graph queryable by agents
+- `lint(global-bridge)` = reconnect collection-local homes into shared bridge pages and bridge-level synthesis
+- `compile` = publish the collection-first wiki plus shared bridge layer
+- `memory rebuild` = make the published local+global graph queryable by agents
 
 Legacy bridge artifacts may still exist during the Step 1 transition and can continue to provide some continuity for cross-collection relatedness, but they are no longer the primary semantic publication layer. Step 2 adds a distinct global bridge graph built from local semantic outputs.
+
+The core Step 2 semantic publication slice is now:
+
+`cluster -> lint(global-bridge) -> compile -> memory rebuild`
+
+That bridge stage is incremental, operates on collection-local clusters plus compact collection context, and skips entirely when fewer than two collections are in scope.
 
 For existing bridge-era repos that need to move into Step 1 without recomputing current semantics, run the one-time migration script:
 

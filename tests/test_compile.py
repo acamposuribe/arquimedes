@@ -786,6 +786,7 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
             "main_takeaways": ["It links built form and archive practice."],
             "main_tensions": ["Storage vs. inhabitation"],
             "open_questions": ["What counts as an archive room?"],
+            "helpful_new_sources": ["Adaptive reuse archive case studies with plan drawings."],
             "why_this_concept_matters": "It anchors the corpus.",
             "input_fingerprint": "fp-concept",
         }) + "\n",
@@ -868,6 +869,8 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     concept_page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "archive-space-framework.md").read_text()
     assert "## Reflections" in concept_page
     assert "It anchors the corpus." in concept_page
+    assert "Helpful new sources" in concept_page
+    assert "Adaptive reuse archive case studies with plan drawings." in concept_page
     assert "## Recent Changes" in concept_page
     assert "Added one more cross-material source concept." in concept_page
     assert concept_page.index("## Reflections") < concept_page.index("## By Material")
@@ -901,6 +904,225 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     assert {r[0] for r in aliases} == {"archival space framework"}
 
 
+def test_compile_prefers_global_bridge_pages_when_present(tmp_path, monkeypatch):
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.index as index_mod
+    import arquimedes.memory as memory_mod
+
+    mid = "mat_001"
+    mid2 = "mat_002"
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n", encoding="utf-8")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "extracted").mkdir()
+
+    for material_id in (mid, mid2):
+        mat_dir = tmp_path / "extracted" / material_id
+        mat_dir.mkdir(parents=True)
+        (mat_dir / "meta.json").write_text(json.dumps({
+            "material_id": material_id,
+            "file_hash": material_id,
+            "source_path": f"Research/{material_id}.pdf",
+            "title": f"Document {material_id}",
+            "authors": ["Author One"],
+            "year": "2026",
+            "page_count": 1,
+            "file_type": "pdf",
+            "domain": "research",
+            "collection": "papers",
+            "summary": {"value": "Summary", "provenance": {}},
+            "keywords": {"value": ["archive"], "provenance": {}},
+            "document_type": {"value": "paper", "provenance": {}},
+            "facets": {},
+            "_enrichment_stamp": {"prompt_version": "enrich-v1.0", "enrichment_schema_version": "1"},
+        }), encoding="utf-8")
+        (mat_dir / "chunks.jsonl").write_text("", encoding="utf-8")
+        (mat_dir / "annotations.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "manifests" / "materials.jsonl").write_text(
+        "\n".join([
+            json.dumps({"material_id": mid, "file_hash": mid, "relative_path": f"Research/{mid}.pdf", "file_type": "pdf", "domain": "research", "collection": "papers", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+            json.dumps({"material_id": mid2, "file_hash": mid2, "relative_path": f"Research/{mid2}.pdf", "file_type": "pdf", "domain": "research", "collection": "papers", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+        ]),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    index_mod.rebuild_index()
+
+    local_cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive Space Framework",
+        "slug": "archive-space-framework",
+        "aliases": ["archival space framework"],
+        "confidence": 0.9,
+        "wiki_path": "wiki/research/papers/concepts/archive-space-framework.md",
+        "source_concepts": [
+            {"material_id": mid, "concept_name": "archive space", "relevance": "high", "source_pages": [1], "evidence_spans": ["archive space"], "confidence": 0.88},
+            {"material_id": mid2, "concept_name": "archive space framework", "relevance": "high", "source_pages": [1], "evidence_spans": ["archive space framework"], "confidence": 0.88},
+        ],
+        "material_ids": [mid, mid2],
+    }
+    bridge_cluster = {
+        "bridge_id": "global_bridge__archive-space-framework",
+        "canonical_name": "Archive Space Framework",
+        "slug": "archive-space-framework",
+        "aliases": ["cross-collection archive space"],
+        "descriptor": "A bridge joining local archive-space clusters.",
+        "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
+        "confidence": 0.88,
+        "supporting_material_ids": [mid, mid2],
+        "bridge_takeaways": ["Archive thinking recurs across collections."],
+        "bridge_tensions": ["Theory and practice frame archival space differently."],
+        "bridge_open_questions": ["Which other collections should join this bridge?"],
+        "supporting_collection_reflections": [
+            {
+                "collection_key": "research/papers",
+                "main_takeaways": ["Archive thinking recurs across papers."],
+                "main_tensions": ["Theory vs use"],
+                "open_questions": ["What other archives are missing?"],
+                "why_this_collection_matters": "The papers collection treats archive as an analytical frame.",
+            }
+        ],
+        "member_local_clusters": [{
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "canonical_name": "Archive Space Framework",
+            "descriptor": "A local concept home.",
+            "material_ids": [mid, mid2],
+            "wiki_path": "wiki/research/papers/concepts/archive-space-framework.md",
+            "promotion_reasons": ["high_confidence", "cross_collection_bridgeability"],
+        }],
+    }
+    (tmp_path / "derived" / "collections" / "research__papers").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl").write_text(json.dumps(local_cluster) + "\n", encoding="utf-8")
+    (tmp_path / "derived").mkdir(exist_ok=True)
+    (tmp_path / "derived" / "global_bridge_clusters.jsonl").write_text(json.dumps(bridge_cluster) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(index_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cluster_mod, "load_local_clusters", lambda root=None: [local_cluster])
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False: {"clusters": 1, "skipped": True})
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    bridge_page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "archive-space-framework.md").read_text(encoding="utf-8")
+    local_page = (tmp_path / "wiki" / "research" / "papers" / "concepts" / "archive-space-framework.md").read_text(encoding="utf-8")
+    assert "## Cross-Collection Synthesis" in bridge_page
+    assert "Archive thinking recurs across collections." in bridge_page
+    assert "Theory and practice frame archival space differently." in bridge_page
+    assert "The papers collection treats archive as an analytical frame." in bridge_page
+    assert "## Contributing Local Clusters" in bridge_page
+    assert "A local concept home." in bridge_page
+    assert "Promotion: high confidence, cross collection bridgeability" in bridge_page
+    assert "Document mat_001" in bridge_page
+    assert "## Global Bridges" in local_page
+    assert "wiki/shared/bridge-concepts/archive-space-framework.md" not in local_page
+    assert "A bridge joining local archive-space clusters." in local_page
+
+
+def test_compile_does_not_fallback_to_legacy_bridge_pages_when_local_clusters_exist(tmp_path, monkeypatch):
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.index as index_mod
+    import arquimedes.memory as memory_mod
+
+    mid = "mat_001"
+    mid2 = "mat_002"
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n", encoding="utf-8")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "extracted").mkdir()
+
+    for material_id in (mid, mid2):
+        mat_dir = tmp_path / "extracted" / material_id
+        mat_dir.mkdir(parents=True)
+        (mat_dir / "meta.json").write_text(json.dumps({
+            "material_id": material_id,
+            "file_hash": material_id,
+            "source_path": f"Research/{material_id}.pdf",
+            "title": f"Document {material_id}",
+            "authors": ["Author One"],
+            "year": "2026",
+            "page_count": 1,
+            "file_type": "pdf",
+            "domain": "research",
+            "collection": "papers",
+            "summary": {"value": "Summary", "provenance": {}},
+            "keywords": {"value": ["archive"], "provenance": {}},
+            "document_type": {"value": "paper", "provenance": {}},
+            "facets": {},
+            "_enrichment_stamp": {"prompt_version": "enrich-v1.0", "enrichment_schema_version": "1"},
+        }), encoding="utf-8")
+        (mat_dir / "chunks.jsonl").write_text("", encoding="utf-8")
+        (mat_dir / "annotations.jsonl").write_text("", encoding="utf-8")
+    (tmp_path / "manifests" / "materials.jsonl").write_text(
+        "\n".join([
+            json.dumps({"material_id": mid, "file_hash": mid, "relative_path": f"Research/{mid}.pdf", "file_type": "pdf", "domain": "research", "collection": "papers", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+            json.dumps({"material_id": mid2, "file_hash": mid2, "relative_path": f"Research/{mid2}.pdf", "file_type": "pdf", "domain": "research", "collection": "papers", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+        ]),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    index_mod.rebuild_index()
+
+    local_cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive Space Framework",
+        "slug": "archive-space-framework",
+        "aliases": [],
+        "confidence": 0.9,
+        "wiki_path": "wiki/research/papers/concepts/archive-space-framework.md",
+        "source_concepts": [
+            {"material_id": mid, "concept_name": "archive space", "relevance": "high", "source_pages": [1], "evidence_spans": ["archive space"], "confidence": 0.88},
+            {"material_id": mid2, "concept_name": "archive space framework", "relevance": "high", "source_pages": [1], "evidence_spans": ["archive space framework"], "confidence": 0.88},
+        ],
+        "material_ids": [mid, mid2],
+    }
+    legacy_bridge = {
+        "cluster_id": "legacy_bridge_001",
+        "canonical_name": "Legacy Raw Bridge",
+        "slug": "legacy-raw-bridge",
+        "aliases": [],
+        "wiki_path": "wiki/shared/bridge-concepts/legacy-raw-bridge.md",
+        "confidence": 0.8,
+        "material_ids": [mid, mid2],
+        "source_concepts": [
+            {"material_id": mid, "concept_name": "legacy raw bridge", "relevance": "high", "source_pages": [1], "evidence_spans": ["legacy"], "confidence": 0.8},
+            {"material_id": mid2, "concept_name": "legacy raw bridge", "relevance": "high", "source_pages": [1], "evidence_spans": ["legacy"], "confidence": 0.8},
+        ],
+    }
+    (tmp_path / "derived" / "collections" / "research__papers").mkdir(parents=True, exist_ok=True)
+    (tmp_path / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl").write_text(json.dumps(local_cluster) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(index_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cluster_mod, "load_local_clusters", lambda root=None: [local_cluster])
+    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [legacy_bridge])
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False: {"clusters": 1, "skipped": True})
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    assert not (tmp_path / "wiki" / "shared" / "bridge-concepts" / "legacy-raw-bridge.md").exists()
+
+
 # ---------------------------------------------------------------------------
 # Test: Collection pages
 # ---------------------------------------------------------------------------
@@ -931,6 +1153,7 @@ def test_collection_page_renders_all_sections():
             "main_takeaways": ["Thermal mass is central."],
             "main_tensions": [],
             "open_questions": [],
+            "helpful_new_sources": ["Comparative thermal-mass retrofit case studies."],
             "why_this_collection_matters": "It anchors the collection.",
         },
     )
@@ -948,6 +1171,8 @@ def test_collection_page_renders_all_sections():
     assert "## Top Facets" in page
     assert "Climate" in page
     assert "mediterranean" in page
+    assert "Helpful new sources" in page
+    assert "Comparative thermal-mass retrofit case studies." in page
     assert page.index("## Overview") < page.index("## Reflections")
     assert page.index("## Reflections") < page.index("## Recent Additions")
 
@@ -1007,6 +1232,24 @@ def test_compile_writes_collection_pages(tmp_path, monkeypatch):
         }],
     }
     (derived / "bridge_concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+    (derived / "lint").mkdir(parents=True, exist_ok=True)
+    (derived / "lint" / "collection_reflections.jsonl").write_text(
+        json.dumps({
+            "collection_key": "research/papers",
+            "domain": "research",
+            "collection": "papers",
+            "main_takeaways": ["The collection is centered on test concepts."],
+            "main_tensions": ["Theory vs application"],
+            "important_material_ids": [mid],
+            "important_cluster_ids": ["c_coll"],
+            "open_questions": ["What should be compared next?"],
+            "helpful_new_sources": ["Comparable project documentation."],
+            "why_this_collection_matters": "It anchors the test collection.",
+            "input_fingerprint": "fp-collection",
+            "wiki_path": "wiki/research/papers/_index.md",
+        }) + "\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
@@ -1022,8 +1265,10 @@ def test_compile_writes_collection_pages(tmp_path, monkeypatch):
 
     coll_page = (tmp_path / "wiki" / "research" / "papers" / "_index.md").read_text()
     assert "## Overview" in coll_page
+    assert "## Reflections" in coll_page
     assert "## Materials" in coll_page
     assert "Collection Test Material" in coll_page
+    assert "Comparable project documentation." in coll_page
     assert "## Recent Additions" in coll_page
     assert "2026-04-05" in coll_page
 

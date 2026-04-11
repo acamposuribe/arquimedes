@@ -261,6 +261,7 @@ def _collection_reflection_scaffold(
         "important_material_ids": [],
         "important_cluster_ids": [],
         "open_questions": [],
+        "helpful_new_sources": [],
         "why_this_collection_matters": "",
         "input_fingerprint": fingerprint,
         "wiki_path": str(deps._collection_page_path(domain, collection)),
@@ -300,7 +301,7 @@ def _compile_collection_reflection_response(
             raise EnrichmentError(f"Collection reflection output field '{field}' must be a string or null")
         return value.strip()
 
-    for field in ("main_takeaways", "main_tensions", "important_material_ids", "important_cluster_ids", "open_questions"):
+    for field in ("main_takeaways", "main_tensions", "important_material_ids", "important_cluster_ids", "open_questions", "helpful_new_sources"):
         if field.startswith("important_"):
             _resolve_id_field(field)
         else:
@@ -317,6 +318,7 @@ def _compile_collection_reflection_response(
         "important_material_ids": _resolve_id_field("important_material_ids"),
         "important_cluster_ids": _resolve_id_field("important_cluster_ids"),
         "open_questions": _resolve_list_field("open_questions"),
+        "helpful_new_sources": _resolve_list_field("helpful_new_sources"),
         "why_this_collection_matters": _resolve_text_field("why_this_collection_matters"),
         "input_fingerprint": fingerprint,
         "wiki_path": str(scaffold.get("wiki_path", "")).strip(),
@@ -376,7 +378,7 @@ def _collection_reflection_prompt(
         "For each reflection, be specific and cumulative. Prefer concrete main takeaways over generic summaries. "
         "Write the reflection as a synthesis, not as a list of facts. The reflection should usually cover: "
         "the collection's central through-line, the strongest supporting materials, the most important local clusters, "
-        "the main tensions or ambiguities, the open questions worth tracking, and a concise statement of why this collection matters to the larger corpus.\n"
+        "the main tensions or ambiguities, the open questions worth tracking, the kinds of new sources that would most help close those gaps, and a concise statement of why this collection matters to the larger corpus.\n"
         "If this is the first run, still write a strong first synthesis instead of waiting for prior history.\n"
         "Important: Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.\n"
         "\n"
@@ -398,10 +400,10 @@ def _collection_reflection_prompt(
         "The local_clusters entries are short synthesized cues from the concept reflections, not raw membership ids.\n"
         "Treat the new_materials as the main evidence for this run and the old_materials as compact background continuity.\n"
         "Treat the methodological conclusions and main content learnings as the primary material-level evidence; the chunks are only a small supporting slice.\n"
-        "Return only the reflection fields requested by the schema: main_takeaways, main_tensions, important_material_ids, important_cluster_ids, open_questions, why_this_collection_matters, and _finished.\n"
+        "Return only the reflection fields requested by the schema: main_takeaways, main_tensions, important_material_ids, important_cluster_ids, open_questions, helpful_new_sources, why_this_collection_matters, and _finished.\n"
         "If one reflection field should remain exactly as the current reflection already states it, you may return null for that field and the pipeline will preserve the stored value for that key.\n"
         "Do not return collection metadata, fingerprints, or wiki paths.\n"
-        "Write a strong reflection that includes the main takeaways, main tensions, important materials, important local clusters, open questions, and why this collection matters.\n"
+        "Write a strong reflection that includes the main takeaways, main tensions, important materials, important local clusters, open questions, helpful new sources, and why this collection matters.\n"
         "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
         "Do not leave the work file as a mere summary of the page. Use the evidence to surface the collection's role, stakes, and unresolved questions.\n"
         "Return final JSON only.\n"

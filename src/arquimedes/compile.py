@@ -18,6 +18,7 @@ from arquimedes import cluster as cluster_mod
 from arquimedes import compile_pages
 from arquimedes import enrich_stamps
 from arquimedes.config import get_project_root, load_config
+from arquimedes.lint_global_bridge import load_global_bridge_clusters
 
 logger = logging.getLogger(__name__)
 
@@ -82,11 +83,11 @@ def _bridge_feedback_for_material(mid: str, bridge_clusters: list[dict]) -> list
     """Return compact bridge-concept refs for a material."""
     refs = []
     for c in bridge_clusters:
-        mids = c.get("material_ids", []) or []
+        mids = c.get("supporting_material_ids") or c.get("material_ids", []) or []
         if mid not in mids:
             continue
         refs.append({
-            "cluster_id": c.get("cluster_id", ""),
+            "cluster_id": c.get("cluster_id") or c.get("bridge_id", ""),
             "canonical_name": c.get("canonical_name", ""),
             "slug": c.get("slug", ""),
             "wiki_path": c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c.get('slug', '')}.md",
@@ -322,8 +323,11 @@ def _write_compile_stamp(
 
 def _cluster_file_stamp(project_root: Path) -> str:
     local_paths = sorted((project_root / "derived" / "collections").glob("*/local_concept_clusters.jsonl"))
-    if local_paths:
-        return enrich_stamps.canonical_hash(*[path.read_text(encoding="utf-8") for path in local_paths])
+    global_bridge_path = project_root / "derived" / "global_bridge_clusters.jsonl"
+    if local_paths or global_bridge_path.exists():
+        parts = [path.read_text(encoding="utf-8") for path in local_paths]
+        parts.append(global_bridge_path.read_text(encoding="utf-8") if global_bridge_path.exists() else "")
+        return enrich_stamps.canonical_hash(*parts)
     bridge_path = project_root / "derived" / "bridge_concept_clusters.jsonl"
     return enrich_stamps.canonical_hash(bridge_path.read_text(encoding="utf-8") if bridge_path.exists() else "")
 
@@ -553,11 +557,19 @@ def compile_wiki(
     # 3. Load clusters
     local_clusters = cluster_mod.load_local_clusters(root)
     bridge_clusters = cluster_mod.load_bridge_clusters(root)
+    global_bridge_clusters = load_global_bridge_clusters(root)
     page_clusters = local_clusters or bridge_clusters
     concept_page_clusters = local_clusters or [
         c for c in bridge_clusters
         if len(dict.fromkeys(c.get("material_ids", []))) > 1
     ]
+    if local_clusters:
+        bridge_page_clusters = global_bridge_clusters
+    else:
+        bridge_page_clusters = global_bridge_clusters or [
+            c for c in bridge_clusters
+            if len(dict.fromkeys(c.get("material_ids", []))) > 1
+        ]
     material_titles: dict[str, str] = {}
     if db_path.exists():
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -583,10 +595,6 @@ def compile_wiki(
         for mid, meta in all_metas.items()
     }
 
-    bridge_page_clusters = [
-        c for c in page_clusters
-        if len(dict.fromkeys(c.get("material_ids", []))) > 1
-    ]
     lint_dir = root / "derived" / "lint"
     concept_reflections = {
         row.get("cluster_id", ""): row
@@ -656,6 +664,14 @@ def compile_wiki(
             if mid in material_clusters:
                 material_clusters[mid].append(c)
 
+    bridge_memberships_by_local_cluster: dict[str, list[dict]] = {}
+    for bridge in bridge_page_clusters:
+        for member in bridge.get("member_local_clusters", []) or []:
+            cluster_id = str(member.get("cluster_id", "")).strip()
+            if not cluster_id:
+                continue
+            bridge_memberships_by_local_cluster.setdefault(cluster_id, []).append(bridge)
+
     # 7. Render material pages (only changed)
     mat_pages_written = 0
     mat_pages_skipped = 0
@@ -708,7 +724,9 @@ def compile_wiki(
     # 8. Render concept pages (all, when concept clusters changed)
     concept_pages_written = 0
     if clusters_changed or force or recompile_pages:
+        rendered_cluster_ids: set[str] = set()
         for c in concept_page_clusters:
+            cluster_id = str(c.get("cluster_id") or c.get("bridge_id", "")).strip()
             mid_set = set(c.get("material_ids", []))
             related_concepts = []
             for other in concept_page_clusters:
@@ -727,6 +745,46 @@ def compile_wiki(
                 material_paths,
                 concept_reflections.get(c.get("cluster_id", "")),
                 cluster_reviews_by_cluster.get(str(c.get("cluster_id", "")).strip(), []),
+                bridge_memberships_by_local_cluster.get(cluster_id, []),
+            )
+            page_path = wiki_root / Path(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md").relative_to("wiki")
+            _write_page(page_path, content)
+            concept_pages_written += 1
+            if cluster_id:
+                rendered_cluster_ids.add(cluster_id)
+        for c in bridge_page_clusters:
+            bridge_id = str(c.get("cluster_id") or c.get("bridge_id", "")).strip()
+            if bridge_id and bridge_id in rendered_cluster_ids:
+                continue
+            member_ids = {
+                str(member.get("cluster_id", "")).strip()
+                for member in c.get("member_local_clusters", [])
+                if str(member.get("cluster_id", "")).strip()
+            }
+            related_concepts = []
+            for other in bridge_page_clusters:
+                other_id = str(other.get("cluster_id") or other.get("bridge_id", "")).strip()
+                if other_id == bridge_id:
+                    continue
+                other_member_ids = {
+                    str(member.get("cluster_id", "")).strip()
+                    for member in other.get("member_local_clusters", [])
+                    if str(member.get("cluster_id", "")).strip()
+                }
+                if member_ids and member_ids & other_member_ids:
+                    related_concepts.append({
+                        "canonical_name": other["canonical_name"],
+                        "slug": other["slug"],
+                        "wiki_path": other.get("wiki_path") or f"wiki/shared/bridge-concepts/{other['slug']}.md",
+                    })
+            content = compile_pages.render_concept_page(
+                c,
+                material_titles,
+                related_concepts,
+                material_paths,
+                None,
+                cluster_reviews_by_cluster.get(bridge_id, []),
+                None,
             )
             page_path = wiki_root / Path(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md").relative_to("wiki")
             _write_page(page_path, content)
@@ -762,13 +820,17 @@ def compile_wiki(
         manifest_records,
         local_concept_entries,
         collection_reflections,
+        bridge_page_clusters,
     )
 
     # 10. Feed bridge concepts back into extracted metadata for future enrichment/reflection.
     bridge_feedback_written = _update_extracted_meta_bridge_feedback(extracted_root, bridge_page_clusters)
 
     # 11. Orphan removal
-    current_concept_paths = {str(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md") for c in concept_page_clusters}
+    current_concept_paths = {
+        str(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md")
+        for c in [*concept_page_clusters, *bridge_page_clusters]
+    }
     orphans = _remove_orphans(wiki_root, set(all_metas.keys()), current_concept_paths=current_concept_paths)
 
     # 12. Write compile stamp
@@ -812,6 +874,7 @@ def _render_index_pages(
     manifest_records: list[dict] | None = None,
     local_concept_entries: list[dict] | None = None,
     collection_reflections: dict[str, dict] | None = None,
+    bridge_clusters: list[dict] | None = None,
 ) -> int:
     """Render master, domain, collection, and concept index pages. Returns count."""
     written = 0
@@ -969,7 +1032,8 @@ def _render_index_pages(
     written += 1
 
     # Bridge concept glossary
-    bridge_glossary = compile_pages.render_glossary(concept_clusters)
+    glossary_clusters = bridge_clusters if bridge_clusters is not None else concept_clusters
+    bridge_glossary = compile_pages.render_glossary(glossary_clusters)
     _write_page(
         wiki_root / "shared" / "glossary" / "_index.md",
         bridge_glossary,
@@ -989,7 +1053,7 @@ def _render_index_pages(
         "Arquimedes Wiki",
         domain_pages + [
             {"name": "Local Concepts", "path": "shared/concepts/_index.md", "summary": f"{len(concept_entries)} local concepts"},
-            {"name": "Main Concepts", "path": "shared/glossary/_index.md", "summary": f"{len(concept_clusters)} main concepts"},
+            {"name": "Main Concepts", "path": "shared/glossary/_index.md", "summary": f"{len(glossary_clusters)} main concepts"},
             *([maintenance_entry] if maintenance_entry else []),
         ],
     )

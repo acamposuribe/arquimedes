@@ -149,6 +149,8 @@ This becomes the cross-collection concept layer.
 
 A global bridge cluster should connect two or more local collection clusters that express the same broader conceptual territory across collection boundaries.
 
+The atomic members of a global bridge are collection-local clusters only. Raw material-level concepts do not participate directly in Step 2 bridging.
+
 Suggested artifact:
 
 - `derived/global_bridge_clusters.jsonl`
@@ -163,8 +165,16 @@ Suggested record fields:
 - `member_local_clusters[]`
 - `domain_collection_keys[]`
 - `supporting_material_ids[]`
+- `bridge_takeaways[]`
+- `bridge_tensions[]`
+- `bridge_open_questions[]`
+- `helpful_new_sources[]`
+- `why_this_bridge_matters`
+- `supporting_collection_reflections[]`
 - `confidence`
 - `wiki_path`
+
+The bridge layer should be the place where cross-collection synthesis becomes visible. Collection reflections may still nominate important local materials and local clusters, but shared takeaways, tensions, and bridge-level open questions should be materialized on the global bridge rows/pages rather than being left implicit in collection-local prose.
 
 Suggested page path:
 
@@ -355,46 +365,194 @@ After Step 2, the semantic publication path becomes:
 
 `cluster -> bridge-global -> compile -> memory rebuild`
 
+During the rollout, the first execution boundary may live inside lint rather than as a standalone command.
+
+The intended Step 2 execution slice runs as:
+
+`cluster -> lint(global-bridge) -> compile -> memory rebuild`
+
+That stage should write `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json` by running an incremental LLM clustering pass over collection-local clusters plus compact hosting-collection context, with existing global bridges provided as memory. It should only run when at least two collections are present in the repository; with fewer than two collections, the stage should skip. A dedicated `bridge-global` command can still be added later once compile, memory, and search consume this layer directly.
+
+Global bridge reflection should be part of this same Step 2 clustering pass. The bridge-clustering output should already include bridge takeaways, tensions, open questions, helpful new sources, and why the bridge matters, so a separate bridge concept-reflection pass is not needed.
+
 ### Command shape
 
-Recommended commands:
+Current implemented entrypoint:
 
-- `arq bridge-global`
-- `arq bridge-global --force`
+- `arq lint --stage global-bridge`
+- `arq lint --full`
 
-Long-term:
+No standalone `arq bridge-global` command is currently required.
 
-- `arq cluster` should orchestrate stale local clustering followed by stale global bridging
+The Step 2 bridge layer is owned by lint because it depends on collection-local semantic outputs, collection reflection state, and existing global bridge memory rather than on the collection-local clustering command itself.
+
+Long-term, `arq cluster` may still orchestrate stale local clustering followed by stale global bridging indirectly, but that does not require a separate public bridge command.
 
 ### Bridge inputs
 
-The global bridge graph should consume compact local semantics, not every raw material-level candidate.
+The global bridge graph should consume collection-local clusters, not raw material-level candidates.
 
-Recommended inputs:
+Required inputs for the Step 2 LLM pass:
 
-- local cluster canonical names
-- local cluster descriptors
-- local cluster material counts
-- collection reflections
-- local cluster reflections if added later
+- pending collection-local clusters: canonical names, descriptors, aliases, hosting collection, and local-cluster reflection fields
+- compact hosting-collection context: collection title, main takeaways, main tensions, and why the collection matters
+- existing global bridge memory: current bridge canonicals, descriptors, aliases, member local clusters, and a compact subset of bridge synthesis fields needed for continuity rather than the full stored bridge row
 
-### Promotion rule
+Incrementality should work exactly like current clustering: only changed or newly eligible collection-local clusters enter the packet, and the LLM either links them to existing global bridges or creates new global bridges.
 
-Not every local cluster needs to enter the global bridge pool.
+### Exact Step 2 input packet
 
-Promotion should be limited to local clusters that meet one or more of:
+The Step 2 bridge-clustering pass should read two staged JSON inputs, mirroring the current collection-clustering pattern:
 
-- high confidence
-- multiple materials
-- repeated recurrence
-- explicit importance in collection reflection
-- strong cross-collection bridgeability
+1. `global_bridge.packet.json`
 
-This keeps the global bridge layer sparse and meaningful.
+Contains only pending collection-local clusters plus compact hosting-collection context.
+
+Suggested shape:
+
+```json
+{
+   "kind": "global_bridge_packet",
+   "pending_local_clusters": [
+      {
+         "cluster_id": "research__Archives__local_0001",
+         "domain": "research",
+         "collection": "Archives",
+         "collection_key": "research/Archives",
+         "canonical_name": "Archive as Political Institution",
+         "descriptor": "...",
+         "aliases": ["archontic authority", "archive as force field"],
+         "wiki_path": "wiki/research/Archives/concepts/archive-as-political-institution.md",
+         "reflection": {
+            "main_takeaways": ["..."],
+            "main_tensions": ["..."],
+            "open_questions": ["..."],
+            "helpful_new_sources": ["..."],
+            "why_this_concept_matters": "..."
+         }
+      }
+   ],
+   "collection_context": [
+      {
+         "collection_key": "research/Archives",
+         "title": "Archives",
+         "main_takeaways": ["..."],
+         "main_tensions": ["..."],
+         "why_this_collection_matters": "..."
+      }
+   ]
+}
+```
+
+2. `global_bridge.memory.json`
+
+Contains the current stored global bridge graph in compact form.
+
+Suggested shape:
+
+```json
+{
+   "kind": "global_bridge_memory",
+   "bridges": [
+      {
+         "bridge_id": "global_bridge__archive-and-power",
+         "canonical_name": "Archive and Power",
+         "descriptor": "...",
+         "aliases": ["..."],
+         "member_local_clusters": [
+            {
+               "cluster_id": "research__Archives__local_0001",
+               "collection_key": "research/Archives",
+               "canonical_name": "Archive as Political Institution"
+            }
+         ],
+         "bridge_takeaways": ["..."],
+         "bridge_open_questions": ["..."],
+         "why_this_bridge_matters": "..."
+      }
+   ]
+}
+```
+
+The packet should never include raw material-level concepts. Step 2 works entirely at collection-cluster granularity.
+
+### Exact Step 2 delta schema
+
+The LLM response should preserve the same incremental clustering structure as the current cluster pass: attach pending members to existing bridges or create new bridges.
+
+Suggested response schema:
+
+```json
+{
+   "links_to_existing": [
+      {
+         "bridge_id": "required existing bridge id",
+         "member_local_clusters": [
+            {"cluster_id": "required pending local cluster id"}
+         ]
+      }
+   ],
+   "new_clusters": [
+      {
+         "canonical_name": "required string",
+         "descriptor": "short bridge description",
+         "aliases": ["max 4 strings"],
+         "member_local_clusters": [
+            {"cluster_id": "required pending local cluster id"}
+         ],
+         "bridge_takeaways": ["strings"],
+         "bridge_tensions": ["strings"],
+         "bridge_open_questions": ["strings"],
+         "helpful_new_sources": ["strings"],
+         "why_this_bridge_matters": "string"
+      }
+   ],
+   "_finished": true
+}
+```
+
+Rules:
+
+- `links_to_existing` may reference only existing `bridge_id` values from bridge memory
+- both `links_to_existing` and `new_clusters` may reference only pending local cluster ids from the packet
+- a new bridge with members from one collection must include at least 3 local clusters
+- a new bridge spanning multiple collections must include at least 2 local clusters
+- cross-collection bridges are preferred, but broad within-collection syntheses are allowed when they produce a genuinely higher-order learning
+
+### Exact Step 2 prompt intent
+
+The prompt should stay close to the current clustering prompt, but the target concept should be different.
+
+Instead of asking for cross-material umbrella clusters, Step 2 should ask for broad global bridge concepts that surface:
+
+- the main perspectives that organize multiple collection clusters
+- the main positions or debates that recur across the knowledge system
+- the main learnings or syntheses that should become first-class global bridge pages
+
+The prompt should explicitly say:
+
+- you are grouping collection-local clusters into broader global bridge concepts
+- prefer bridges that connect multiple collections when the conceptual relation is real
+- it is acceptable to create a within-collection global bridge only when it synthesizes at least three local clusters into a meaningfully broader learning
+- do not rely on name similarity alone; use descriptors, local-cluster reflections, and collection context to judge semantic fit
+- bridge canonicals should be broad, analytically meaningful, and useful as shared conceptual pages across the knowledge system
+- the bridge output must already include bridge takeaways, tensions, open questions, suggested new sources, and why the bridge matters
+
+If graph maintenance is retained in Step 2, it should not consume collection-local audit threads directly. It should sit above the local graph and consume only collection reflections plus global bridge rows/pages, acting as a minimal global backlog rather than a second pass over local cluster quality.
+
+### Membership thresholds
+
+Global bridges do not need to be cross-collection in every case, but cross-collection bridges are preferred.
+
+Creation thresholds:
+
+- if all member clusters come from the same collection, the bridge must include at least three collection-local clusters
+- if the bridge spans multiple collections, the bridge must include at least two collection-local clusters
 
 ### Step 2 invariants
 
-- a global bridge cluster must include members from at least two collection scopes
+- a global bridge cluster stores collection-local cluster members only
+- cross-collection bridges are preferred, but a strong within-collection synthesis may still become a global bridge if it generalizes at least three local clusters
 - bridge pages should cite local clusters, not only raw materials
 - bridge audit should judge cross-collection coherence, not collection-internal quality
 
@@ -408,6 +566,8 @@ Step 1 should add:
 
 These pages are the semantic homes for materials in that collection.
 
+When Step 2 global bridges exist, local cluster pages should backlink to the shared bridge pages they participate in, so readers can move from a local home into the cross-collection bridge layer without losing scope.
+
 ### Collection pages
 
 Collection pages should shift from “materials plus overlapping bridge concepts” to “materials plus local clusters”.
@@ -418,7 +578,7 @@ They should render:
 - local clusters
 - top facets
 - recent additions
-- collection reflection
+- collection reflection, including `main_takeaways`, `main_tensions`, `open_questions`, `helpful_new_sources`, and `why_this_collection_matters`
 
 ### Global bridge pages
 
@@ -427,6 +587,10 @@ Step 2 should keep:
 - `wiki/shared/bridge-concepts/<slug>.md`
 
 But these pages should clearly act as cross-collection bridges rather than the default home for all canonical meaning.
+
+In the current implementation slice, bridge pages are compiled from `member_local_clusters[]` and render contributing local cluster pages as first-class members, rather than flattening the bridge back into raw material-level source concepts.
+
+These pages should render their bridge-owned synthesis directly from the global-bridge artifact, including `bridge_takeaways`, `bridge_tensions`, `bridge_open_questions`, `helpful_new_sources`, and `why_this_bridge_matters`, rather than depending on the separate concept-reflection pipeline.
 
 ## Memory Model Changes
 
@@ -451,6 +615,8 @@ The important requirement is structural:
 
 - global bridge rows must point back to local cluster members
 
+The current rollout keeps the existing `concept_clusters` family as the global bridge table surface and adds a dedicated membership table that maps each global bridge row back to its contributing local clusters.
+
 ### Wiki registry
 
 `wiki_pages` should register:
@@ -471,6 +637,10 @@ But the memory should support:
 - traverse from a material to its local clusters
 - traverse from a local concept to its global bridges
 - traverse from a global bridge back into contributing collections
+
+The current implementation exposes the bridge traversal through SQLite-backed membership rows and search helpers, while keeping default lexical search global.
+
+Relatedness explanations should distinguish clearly between local-home overlap and shared-bridge overlap rather than collapsing both into one generic concept-overlap label.
 
 That preserves one connected knowledge system without flattening everything into one concept namespace.
 

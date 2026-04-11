@@ -235,6 +235,13 @@ def _render_reflection_section(title: str, reflection: dict | None) -> list[str]
             if str(item).strip():
                 lines.append(f"- {item}")
         lines.append("")
+    helpful_new_sources = reflection.get("helpful_new_sources") or []
+    if helpful_new_sources:
+        lines.append("**Helpful new sources**")
+        for item in helpful_new_sources[:8]:
+            if str(item).strip():
+                lines.append(f"- {item}")
+        lines.append("")
     return lines
 
 
@@ -483,6 +490,7 @@ def render_concept_page(
     material_paths: dict[str, str] | None = None,
     reflection: dict | None = None,
     review_rows: list[dict] | None = None,
+    bridge_memberships: list[dict] | None = None,
 ) -> str:
     """Render a concept wiki page as markdown.
 
@@ -497,6 +505,7 @@ def render_concept_page(
     page_path = cluster.get("wiki_path") or _concept_wiki_path(slug)
     is_bridge_page = "/bridge-concepts/" in page_path
     source_concepts = cluster.get("source_concepts", [])
+    member_local_clusters = cluster.get("member_local_clusters", [])
     aliases = [a for a in cluster.get("aliases", []) if a != canonical_name]
     lines: list[str] = []
 
@@ -515,13 +524,130 @@ def render_concept_page(
         lines.append(f"{descriptor}\n")
 
     # --- Overview ---
-    n_materials = len(dict.fromkeys(sc["material_id"] for sc in source_concepts))
+    if member_local_clusters:
+        n_materials = len({mid for member in member_local_clusters for mid in member.get("material_ids", [])})
+    else:
+        n_materials = len(dict.fromkeys(sc["material_id"] for sc in source_concepts))
     lines.append(f"This concept appears in {n_materials} material{'s' if n_materials != 1 else ''}.\n")
 
     lines.extend(_render_reflection_section("Reflections", reflection))
 
+    if is_bridge_page:
+        bridge_takeaways = [str(item).strip() for item in cluster.get("bridge_takeaways", []) if str(item).strip()]
+        bridge_tensions = [str(item).strip() for item in cluster.get("bridge_tensions", []) if str(item).strip()]
+        bridge_questions = [str(item).strip() for item in cluster.get("bridge_open_questions", []) if str(item).strip()]
+        bridge_sources = [str(item).strip() for item in cluster.get("helpful_new_sources", []) if str(item).strip()]
+        why_this_bridge_matters = str(cluster.get("why_this_bridge_matters", "")).strip()
+        supporting_collection_reflections = [
+            row
+            for row in cluster.get("supporting_collection_reflections", [])
+            if isinstance(row, dict)
+        ]
+        if bridge_takeaways or bridge_tensions or bridge_questions or bridge_sources or why_this_bridge_matters or supporting_collection_reflections:
+            lines.append("## Cross-Collection Synthesis\n")
+            if why_this_bridge_matters:
+                lines.append(why_this_bridge_matters)
+                lines.append("")
+            if bridge_takeaways:
+                lines.append("### Shared Takeaways\n")
+                for item in bridge_takeaways:
+                    lines.append(f"- {item}")
+                lines.append("")
+            if bridge_tensions:
+                lines.append("### Shared Tensions\n")
+                for item in bridge_tensions:
+                    lines.append(f"- {item}")
+                lines.append("")
+            if bridge_questions:
+                lines.append("### Open Questions\n")
+                for item in bridge_questions:
+                    lines.append(f"- {item}")
+                lines.append("")
+            if bridge_sources:
+                lines.append("### Helpful New Sources\n")
+                for item in bridge_sources[:8]:
+                    lines.append(f"- {item}")
+                lines.append("")
+            collection_signals = []
+            for row in supporting_collection_reflections:
+                collection_key = str(row.get("collection_key", "")).strip()
+                why = str(row.get("why_this_collection_matters", "")).strip()
+                if collection_key and why:
+                    collection_signals.append(f"{collection_key} — {why}")
+            if collection_signals:
+                lines.append("### Collection Signals\n")
+                for item in collection_signals:
+                    lines.append(f"- {item}")
+                lines.append("")
+
+    if bridge_memberships and not is_bridge_page:
+        lines.append("## Global Bridges\n")
+        for bridge in bridge_memberships:
+            bridge_name = str(bridge.get("canonical_name", "")).strip()
+            bridge_path = str(bridge.get("wiki_path", "")).strip()
+            descriptor = str(bridge.get("descriptor", "")).strip()
+            supporting_material_ids = [
+                str(mid).strip()
+                for mid in bridge.get("supporting_material_ids", [])
+                if str(mid).strip()
+            ]
+            link = bridge_name
+            if bridge_path:
+                link = f"[{bridge_name}]({_relative_link(page_path, bridge_path)})"
+            summary_bits = []
+            if supporting_material_ids:
+                summary_bits.append(f"{len(supporting_material_ids)} material{'s' if len(supporting_material_ids) != 1 else ''}")
+            if bridge.get("confidence") not in (None, ""):
+                try:
+                    summary_bits.append(f"confidence {float(bridge.get('confidence', 0.0) or 0.0):.2f}")
+                except (TypeError, ValueError):
+                    pass
+            summary = f" ({'; '.join(summary_bits)})" if summary_bits else ""
+            if descriptor:
+                lines.append(f"- {link}{summary} — {descriptor}")
+            else:
+                lines.append(f"- {link}{summary}")
+        lines.append("")
+
+    if member_local_clusters:
+        lines.append("## Contributing Local Clusters\n")
+        for member in member_local_clusters:
+            cluster_name = str(member.get("canonical_name", "")).strip() or str(member.get("cluster_id", "")).strip()
+            cluster_path = str(member.get("wiki_path", "")).strip()
+            domain = str(member.get("domain", "")).strip()
+            collection = str(member.get("collection", "")).strip()
+            material_ids = [str(mid).strip() for mid in member.get("material_ids", []) if str(mid).strip()]
+            heading = cluster_name
+            if cluster_path:
+                heading = f"[{cluster_name}]({_relative_link(page_path, cluster_path)})"
+            scope_bits = []
+            if domain and collection:
+                scope_bits.append(f"{domain}/{collection}")
+            if material_ids:
+                scope_bits.append(f"{len(material_ids)} material{'s' if len(material_ids) != 1 else ''}")
+            scope_suffix = f" ({' / '.join(scope_bits)})" if scope_bits else ""
+            lines.append(f"### {heading}{scope_suffix}\n")
+
+            descriptor = str(member.get("descriptor", "")).strip()
+            if descriptor:
+                lines.append(descriptor)
+                lines.append("")
+
+            promotion_reasons = [str(reason).strip().replace("_", " ") for reason in member.get("promotion_reasons", []) if str(reason).strip()]
+            if promotion_reasons:
+                lines.append(f"- Promotion: {', '.join(promotion_reasons)}")
+            if material_ids:
+                lines.append("- Materials:")
+                for mid in material_ids:
+                    title = material_titles.get(mid, mid)
+                    if material_paths and mid in material_paths:
+                        lines.append(f"  - [{title}]({_relative_link(page_path, material_paths[mid])})")
+                    else:
+                        lines.append(f"  - {title}")
+            lines.append("")
+
     # --- By material ---
-    if source_concepts:
+    if source_concepts and not member_local_clusters:
         lines.append("## By Material\n")
         for sc in source_concepts:
             mid = sc["material_id"]

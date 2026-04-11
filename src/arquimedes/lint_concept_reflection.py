@@ -19,12 +19,25 @@ def _deps():
 
 def _concept_reflection_due(root: Path) -> tuple[bool, str]:
     deps = _deps()
-    return deps._bridge_cluster_stage_due(
-        root,
-        "concept_reflection_at",
-        root / deps.LINT_DIR / "concept_reflections.jsonl",
-        "concept reflection",
-    )
+    artifact_path = root / deps.LINT_DIR / "concept_reflections.jsonl"
+    stage_label = "concept reflection"
+    current_clustered_at = deps._current_clustered_at(root)
+    if not current_clustered_at:
+        return False, "concept clustering has not run yet"
+    if not artifact_path.exists():
+        return True, f"{stage_label} artifact missing"
+
+    stage_at = str(deps._lint_stage_stamp(root).get("concept_reflection_at", "") or "")
+    if not stage_at:
+        return True, f"{stage_label} stamp missing"
+
+    latest_driver_dt = deps._parse_iso_datetime(current_clustered_at)
+    stage_at_dt = deps._parse_iso_datetime(stage_at)
+    if latest_driver_dt is None or stage_at_dt is None:
+        return True, f"{stage_label} stamp invalid"
+    if stage_at_dt >= latest_driver_dt:
+        return False, f"{stage_label} already ran after latest concept-graph change"
+    return True, f"latest concept-graph change is newer than {stage_label}"
 
 
 def _concept_reflection_stage_dir(root: Path) -> Path:
@@ -123,17 +136,28 @@ def _build_concept_reflection_evidence_payload(
     source_concepts = cluster.get("source_concepts", [])
     unique_material_ids = []
     seen: set[str] = set()
-    for sc in sorted(
-        source_concepts,
-        key=lambda x: (
-            x.get("material_id", ""),
-            -float(x.get("confidence", 0.0) or 0.0),
-        ),
-    ):
-        mid = sc.get("material_id", "")
-        if mid and mid not in seen:
-            seen.add(mid)
-            unique_material_ids.append(mid)
+    candidate_material_ids = [
+        str(material_id).strip()
+        for material_id in deps._safe_list(cluster.get("supporting_material_ids", []))
+        if str(material_id).strip()
+    ]
+    if candidate_material_ids:
+        for mid in candidate_material_ids:
+            if mid not in seen:
+                seen.add(mid)
+                unique_material_ids.append(mid)
+    else:
+        for sc in sorted(
+            source_concepts,
+            key=lambda x: (
+                x.get("material_id", ""),
+                -float(x.get("confidence", 0.0) or 0.0),
+            ),
+        ):
+            mid = sc.get("material_id", "")
+            if mid and mid not in seen:
+                seen.add(mid)
+                unique_material_ids.append(mid)
 
     query_terms = [
         cluster.get("canonical_name", ""),
@@ -150,8 +174,6 @@ def _build_concept_reflection_evidence_payload(
         relevance = str(sc.get("relevance", "")).strip().lower()
         material_weights[mid] += confidence
         material_weights[mid] += {"high": 0.5, "medium": 0.25, "low": 0.1}.get(relevance, 0.0)
-        if sc.get("concept_type") == "bridge":
-            material_weights[mid] += 0.2
         material_weights[mid] += min(len(deps._safe_list(sc.get("evidence_spans", []))), 4) * 0.02
     ordered_material_ids = sorted(unique_material_ids, key=lambda mid: (material_weights.get(mid, 0.0), mid), reverse=True)
     chunk_limits: dict[str, int] = {}
@@ -247,9 +269,12 @@ def _concept_reflection_scaffold(
     deps = _deps()
     source_concepts = cluster.get("source_concepts", [])
     supporting_material_ids = sorted({
-        sc.get("material_id", "")
-        for sc in source_concepts
-        if sc.get("material_id", "")
+        str(material_id).strip()
+        for material_id in (
+            deps._safe_list(cluster.get("supporting_material_ids", []))
+            or [sc.get("material_id", "") for sc in source_concepts]
+        )
+        if str(material_id).strip()
     })
     supporting_evidence = sorted({
         span
@@ -263,6 +288,7 @@ def _concept_reflection_scaffold(
         "main_takeaways": [],
         "main_tensions": [],
         "open_questions": [],
+        "helpful_new_sources": [],
         "why_this_concept_matters": "",
         "supporting_material_ids": supporting_material_ids,
         "supporting_evidence": supporting_evidence,
@@ -300,7 +326,7 @@ def _compile_concept_reflection_response(
             raise EnrichmentError(f"Concept reflection output field '{field}' must be a string or null")
         return value.strip()
 
-    for field in ("main_takeaways", "main_tensions", "open_questions"):
+    for field in ("main_takeaways", "main_tensions", "open_questions", "helpful_new_sources"):
         _resolve_list_field(field)
     _resolve_text_field("why_this_concept_matters")
     return {
@@ -311,6 +337,7 @@ def _compile_concept_reflection_response(
         "main_takeaways": _resolve_list_field("main_takeaways"),
         "main_tensions": _resolve_list_field("main_tensions"),
         "open_questions": _resolve_list_field("open_questions"),
+        "helpful_new_sources": _resolve_list_field("helpful_new_sources"),
         "why_this_concept_matters": _resolve_text_field("why_this_concept_matters"),
         "input_fingerprint": fingerprint,
         "wiki_path": str(scaffold.get("wiki_path", "")).strip(),
@@ -319,7 +346,16 @@ def _compile_concept_reflection_response(
 
 def _concept_reflection_link_fingerprint(cluster: dict) -> str:
     deps = _deps()
-    linked = []
+    linked: dict[str, Any] = {
+        "source_concepts": [],
+        "supporting_material_ids": sorted(
+            {
+                str(material_id).strip()
+                for material_id in deps._safe_list(cluster.get("supporting_material_ids", []))
+                if str(material_id).strip()
+            }
+        ),
+    }
     seen: set[tuple[str, str]] = set()
     for sc in cluster.get("source_concepts", []):
         if not isinstance(sc, dict):
@@ -332,8 +368,8 @@ def _concept_reflection_link_fingerprint(cluster: dict) -> str:
         if key in seen:
             continue
         seen.add(key)
-        linked.append({"material_id": mid, "concept_name": cname})
-    linked.sort(key=lambda item: (item["material_id"], item["concept_name"]))
+        linked["source_concepts"].append({"material_id": mid, "concept_name": cname})
+    linked["source_concepts"].sort(key=lambda item: (item["material_id"], item["concept_name"]))
     return deps.canonical_hash(linked)
 
 
@@ -346,7 +382,7 @@ def _concept_reflection_prompt(
         "You are an architecture research librarian writing reflective synthesis for a concept page.\n"
         "\n"
         "Your job is not to restate the page. Your job is to explain the concept's role in the corpus: "
-        "what the bridge concept is really saying, why it matters, what it connects, what tensions it holds, "
+        "what the concept is really saying, why it matters, what tensions it holds, "
         "and what remains unresolved.\n"
         "\n"
         "Use the wiki page as the current public state of the concept. Use the staged SQL-evidence file for "
@@ -360,7 +396,7 @@ def _concept_reflection_prompt(
         "For each reflection, be specific and cumulative. Prefer concrete main takeaways over generic summaries. "
         "Write the reflection as a synthesis, not as a list of facts. The reflection should usually cover: "
         "the central claim of the concept, the strongest supporting evidence, the main tensions or ambiguities, "
-        "the open questions worth tracking, and a concise statement of why this concept matters to the larger corpus.\n"
+        "the open questions worth tracking, the kinds of new sources that would most help close those gaps, and a concise statement of why this concept matters to the larger corpus.\n"
         "If this is the first run, still write a strong first synthesis instead of waiting for prior history.\n"
         "Important: Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.\n"
         "\n"
@@ -377,10 +413,10 @@ def _concept_reflection_prompt(
         "The SQL evidence file contains the staged evidence for this concept cluster.\n"
         "The chunks inside that file are ordered by usefulness; source=search is the strongest match to the concept query, while source=fallback is only secondary support.\n"
         "The annotations field, when present, is a single newline-delimited string of annotation notes. The concepts field, when present, is a compact list of concept names only.\n"
-        "Return only the reflection fields requested by the schema: main_takeaways, main_tensions, open_questions, why_this_concept_matters, and _finished.\n"
+        "Return only the reflection fields requested by the schema: main_takeaways, main_tensions, open_questions, helpful_new_sources, why_this_concept_matters, and _finished.\n"
         "If one reflection field should remain exactly as the current reflection already states it, you may return null for that field and the pipeline will preserve the stored value for that key.\n"
         "Do not return cluster metadata, supporting ids, or wiki paths.\n"
-        "Write a strong reflection that includes the main takeaways, main tensions, open questions, and why this concept matters.\n"
+        "Write a strong reflection that includes the main takeaways, main tensions, open questions, helpful new sources, and why this concept matters.\n"
         "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
         "Do not leave the work file as a mere summary of the page. Use the evidence to surface the concept's role, stakes, and unresolved questions.\n"
         "Return final JSON only.\n"
@@ -399,7 +435,20 @@ def _run_concept_reflections_impl(
 ) -> list[dict]:
     existing = deps._existing_by_key(root / deps.LINT_DIR / "concept_reflections.jsonl", "cluster_id")
     output: list[dict] = []
-    eligible = [c for c in clusters if len(dict.fromkeys(sc.get("material_id", "") for sc in c.get("source_concepts", []) if sc.get("material_id"))) >= 2]
+    eligible = [
+        c
+        for c in clusters
+        if len(
+            {
+                str(material_id).strip()
+                for material_id in (
+                    deps._safe_list(c.get("supporting_material_ids", []))
+                    or [sc.get("material_id", "") for sc in c.get("source_concepts", [])]
+                )
+                if str(material_id).strip()
+            }
+        ) >= 2
+    ]
     workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
 
     def _one(cluster: dict) -> dict | None:

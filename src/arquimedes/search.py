@@ -732,6 +732,36 @@ def _local_cluster_rows_for_collection(con: sqlite3.Connection, domain: str, col
         return []
 
 
+def _global_bridge_rows_for_local_cluster(con: sqlite3.Connection, cluster_id: str) -> list[sqlite3.Row]:
+    try:
+        return con.execute(
+            """SELECT cc.cluster_id, cc.canonical_name, cc.slug, cc.aliases,
+                      cc.material_count, cc.wiki_path, '' AS domain, '' AS collection
+               FROM global_bridge_members gbm
+               JOIN concept_clusters cc ON gbm.bridge_cluster_id = cc.cluster_id
+               WHERE gbm.local_cluster_id = ?
+               ORDER BY cc.canonical_name, cc.cluster_id""",
+            [cluster_id],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
+def _local_cluster_rows_for_global_bridge(con: sqlite3.Connection, bridge_id: str) -> list[sqlite3.Row]:
+    try:
+        return con.execute(
+            """SELECT lcc.cluster_id, lcc.canonical_name, lcc.slug, lcc.aliases,
+                      lcc.material_count, lcc.wiki_path, lcc.domain, lcc.collection
+               FROM global_bridge_members gbm
+               JOIN local_concept_clusters lcc ON gbm.local_cluster_id = lcc.cluster_id
+               WHERE gbm.bridge_cluster_id = ?
+               ORDER BY lcc.domain, lcc.collection, lcc.canonical_name, lcc.cluster_id""",
+            [bridge_id],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        return []
+
+
 def _rows_to_cluster_hits(rows: list[sqlite3.Row]) -> list[CanonicalClusterHit]:
     hits: list[CanonicalClusterHit] = []
     for row in rows:
@@ -848,10 +878,28 @@ class Connection:
             "type": self.type,
             "value": self.value,
             "weight": self.weight,
+            "label": _connection_label(self),
         }
         if self.facet:
             d["facet"] = self.facet
         return d
+
+
+def _connection_label(conn: Connection) -> str:
+    if conn.type == "shared_local_cluster":
+        return f"shared local home: {conn.value}"
+    if conn.type == "shared_global_cluster":
+        return f"shared bridge: {conn.value}"
+    if conn.type == "shared_concept":
+        return f"shared concept: {conn.value}"
+    if conn.type == "shared_keyword":
+        return f"shared keyword: {conn.value}"
+    if conn.type == "shared_author":
+        return f"shared author: {conn.value}"
+    if conn.type == "shared_facet":
+        facet_label = f" [{conn.facet}]" if conn.facet else ""
+        return f"shared facet{facet_label}: {conn.value}"
+    return f"{conn.type}: {conn.value}"
 
 
 @dataclass
@@ -1052,9 +1100,8 @@ def format_related_human(material_id: str, related: list[RelatedMaterial]) -> st
     for i, r in enumerate(related, 1):
         lines.append(f"  {i:>2}. {r.title[:60]} ({r.material_id})  score={r.score:.2f}")
         for conn in r.connections[:5]:
-            facet_label = f" [{conn.facet}]" if conn.facet else ""
             prefix = "★ " if conn.type in {"shared_local_cluster", "shared_global_cluster"} else "  "
-            lines.append(f"      {prefix}{conn.type}{facet_label}: {conn.value}")
+            lines.append(f"      {prefix}{_connection_label(conn)}")
     return "\n".join(lines)
 
 
@@ -1093,6 +1140,44 @@ def get_collection_clusters(
     con.row_factory = sqlite3.Row
     try:
         return _rows_to_cluster_hits(_local_cluster_rows_for_collection(con, domain, collection))
+    finally:
+        con.close()
+
+
+def get_cluster_global_bridges(
+    cluster_id: str,
+    config: dict | None = None,
+) -> list[CanonicalClusterHit]:
+    if config is None:
+        config = load_config()
+    index_path = get_index_path(config)
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+    con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        return _rows_to_cluster_hits(_global_bridge_rows_for_local_cluster(con, cluster_id))
+    finally:
+        con.close()
+
+
+def get_bridge_member_clusters(
+    bridge_id: str,
+    config: dict | None = None,
+) -> list[CanonicalClusterHit]:
+    if config is None:
+        config = load_config()
+    index_path = get_index_path(config)
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+    con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        return _rows_to_cluster_hits(_local_cluster_rows_for_global_bridge(con, bridge_id))
     finally:
         con.close()
 

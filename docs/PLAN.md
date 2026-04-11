@@ -1,6 +1,6 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phases 1-6 complete; Collection Graph Step 1 next
+> **Status:** Phases 1-6 complete; Collection Graph implemented; legacy bridge compatibility cleanup remains
 > **Last updated:** 2026-04-11
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
@@ -127,8 +127,8 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 
 - [x] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment (document stage by stamp/version drift; other stages by their own input drift rules), stale index, stale memory bridge, duplicates, missing compiled pages
 - [x] **(cluster audit)** LLM review of `derived/bridge_concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
-- [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters`
-- [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, and open questions grounded in linked materials
+- [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, `helpful_new_sources`, and `why_this_concept_matters`
+- [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, `open_questions`, `helpful_new_sources`, and `why_this_collection_matters` grounded in linked materials
 - [x] Persist full collection reflection prose in SQLite as part of the queryable memory layer, including `why_this_collection_matters`
 - [x] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas
 - [x] Feed reflective outputs back into searchable memory so agents can query takeaways, tensions, and open questions, not only graph topology
@@ -148,6 +148,21 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 - [x] Add collection -> local clusters and material -> local clusters traversal
 - [x] Keep default lexical search global while preserving deterministic cross-collection relatedness during the transition
 - [x] Add a one-time Step 1 migration script for legacy bridge-era repos so current data can bootstrap local clusters and collection continuity without re-enrichment or re-reflection
+
+## Collection Graph Step 2: Global Bridge Graph
+
+- [x] Materialize `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json`
+- [x] Define bridge members in terms of contributing local clusters rather than raw material-level concepts
+- [x] Run the first Step 2 bridge layer as `arq lint --stage global-bridge` and include it in `arq lint --full`
+- [x] Keep Step 2 global bridging owned by lint rather than adding a separate `arq bridge-global` command
+- [x] Make global-bridge stale detection depend on promoted local-cluster inputs plus collection reflections
+- [x] Skip the global-bridge stage when fewer than two collections are in scope
+- [x] Project global bridges into SQLite traversal and search
+- [x] Compile bridge pages from local-cluster members
+- [x] Add local-cluster backlinks into shared bridge memberships and distinguish bridge overlap in relatedness explanations
+- [x] Materialize cross-collection synthesis on global bridge rows/pages using collection-reflection signals
+- [x] Keep concept reflections focused on local concept homes and move bridge-level synthesis into the global-bridge pass
+- [ ] Retire the legacy raw-material global bridge publication path
 
 ## Phase 7: Agent Tools
 
@@ -194,6 +209,7 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 | `src/arquimedes/index.py` | SQLite FTS5 index build + query + staleness check |
 | `src/arquimedes/search.py` | Search interface (card → chunk → deep) |
 | `src/arquimedes/compile.py` | Wiki generation |
+| `src/arquimedes/lint_global_bridge.py` | Step 2 global bridge artifact generation from local clusters |
 | `src/arquimedes/mcp_server.py` | MCP tool wrapper |
 | `src/arquimedes/serve.py` | Web UI (FastAPI) |
 | `src/arquimedes/watch.py` | File watcher daemon (fsevents/poll + debounce) |

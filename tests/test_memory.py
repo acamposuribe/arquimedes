@@ -87,6 +87,13 @@ def _write_local_clusters(root: Path, domain: str, collection: str, clusters: li
     (derived / "local_concept_clusters.jsonl").write_text(lines)
 
 
+def _write_global_bridge_clusters(root: Path, clusters: list[dict]) -> None:
+    derived = root / "derived"
+    derived.mkdir(exist_ok=True)
+    lines = "\n".join(json.dumps(c) for c in clusters) + "\n"
+    (derived / "global_bridge_clusters.jsonl").write_text(lines)
+
+
 def _add_material(repo: Path, mid: str = "aabbcc112233", **meta_overrides) -> Path:
     mat_dir = repo / "extracted" / mid
     _write_meta(mat_dir, mid, **meta_overrides)
@@ -549,6 +556,141 @@ class TestConceptClustersExtraColumns:
         # concept_0001 has 2 source materials
         assert row is not None
         assert row[0] == 2
+
+
+class TestGlobalBridgeProjection:
+    def test_global_bridge_rows_project_into_memory(self, repo):
+        for mid in [_MID_A, _MID_B]:
+            mat_dir = repo / "extracted" / mid
+            _write_meta(mat_dir, mid, domain="research", collection="papers")
+            _write_minimal_extracted(mat_dir, mid)
+        _write_manifest(repo, [_MID_A, _MID_B], domain="research", collection="papers")
+        rebuild_index()
+        _write_local_clusters(repo, "research", "papers", [{
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "canonical_name": "Archive Space Framework",
+            "slug": "archive-space-framework",
+            "aliases": ["archival space framework"],
+            "confidence": 0.9,
+            "wiki_path": "wiki/research/papers/concepts/archive-space-framework.md",
+            "source_concepts": [
+                {"material_id": _MID_A, "concept_name": "archival habitat", "confidence": 0.88},
+                {"material_id": _MID_B, "concept_name": "archive architecture", "confidence": 0.75},
+            ],
+        }])
+        _write_global_bridge_clusters(repo, [{
+            "bridge_id": "global_bridge__archive-space-framework",
+            "canonical_name": "Archive Space Framework",
+            "slug": "archive-space-framework",
+            "descriptor": "A bridge joining archive-space clusters.",
+            "aliases": ["cross-collection archive space"],
+            "member_local_clusters": [{
+                "cluster_id": "research__papers__local_0001",
+                "domain": "research",
+                "collection": "papers",
+                "canonical_name": "Archive Space Framework",
+                "wiki_path": "wiki/research/papers/concepts/archive-space-framework.md",
+                "material_ids": [_MID_A, _MID_B],
+                "confidence": 0.9,
+                "promotion_reasons": ["high_confidence"],
+            }],
+            "domain_collection_keys": ["research__papers", "practice__projects"],
+            "supporting_material_ids": [_MID_A, _MID_B],
+            "confidence": 0.88,
+            "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
+        }])
+
+        counts = memory_rebuild()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        bridge_row = con.execute(
+            "SELECT canonical_name, wiki_path, material_count FROM concept_clusters WHERE cluster_id=?",
+            ("global_bridge__archive-space-framework",),
+        ).fetchone()
+        member_rows = con.execute(
+            "SELECT local_cluster_id FROM global_bridge_members WHERE bridge_cluster_id=?",
+            ("global_bridge__archive-space-framework",),
+        ).fetchall()
+        material_rows = con.execute(
+            "SELECT material_id FROM cluster_materials WHERE cluster_id=? ORDER BY material_id",
+            ("global_bridge__archive-space-framework",),
+        ).fetchall()
+        con.close()
+
+        assert counts["clusters"] == 1
+        assert counts["global_bridge_members"] == 1
+        assert bridge_row == ("Archive Space Framework", "wiki/shared/bridge-concepts/archive-space-framework.md", 2)
+        assert member_rows == [("research__papers__local_0001",)]
+        assert material_rows == [(_MID_A,), (_MID_B,)]
+
+    def test_local_graph_does_not_fallback_to_legacy_bridge_clusters(self, repo):
+        for mid in [_MID_A, _MID_B]:
+            mat_dir = repo / "extracted" / mid
+            _write_meta(mat_dir, mid, domain="research", collection="papers")
+            _write_minimal_extracted(mat_dir, mid)
+        _write_manifest(repo, [_MID_A, _MID_B], domain="research", collection="papers")
+        rebuild_index()
+        _write_local_clusters(repo, "research", "papers", [{
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "canonical_name": "Archive Space Framework",
+            "slug": "archive-space-framework",
+            "aliases": [],
+            "confidence": 0.9,
+            "source_concepts": [{"material_id": _MID_A}, {"material_id": _MID_B}],
+        }])
+        _write_bridge_clusters(repo, [{
+            "cluster_id": "legacy_bridge_001",
+            "canonical_name": "Legacy Raw Bridge",
+            "slug": "legacy-raw-bridge",
+            "aliases": [],
+            "confidence": 0.8,
+            "material_ids": [_MID_A, _MID_B],
+            "source_concepts": [{"material_id": _MID_A}, {"material_id": _MID_B}],
+        }])
+
+        counts = memory_rebuild()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        cluster_ids = [row[0] for row in con.execute("SELECT cluster_id FROM concept_clusters ORDER BY cluster_id").fetchall()]
+        con.close()
+
+        assert counts["clusters"] == 0
+        assert cluster_ids == []
+
+    def test_collection_reflections_store_helpful_new_sources(self, repo):
+        _setup_two_materials_with_clusters(repo)
+        lint_dir = repo / "derived" / "lint"
+        lint_dir.mkdir(parents=True, exist_ok=True)
+        (lint_dir / "collection_reflections.jsonl").write_text(
+            json.dumps({
+                "collection_key": "research/_general",
+                "domain": "research",
+                "collection": "_general",
+                "main_takeaways": ["Archive remains central."],
+                "main_tensions": ["Theory vs use"],
+                "important_material_ids": [_MID_A, _MID_B],
+                "important_cluster_ids": ["concept_0001"],
+                "open_questions": ["What other archives are missing?"],
+                "helpful_new_sources": ["Comparative archive reuse case studies."],
+                "why_this_collection_matters": "It anchors the archive corpus.",
+                "input_fingerprint": "fp-collection",
+                "wiki_path": "wiki/research/_general/_index.md",
+            }) + "\n",
+            encoding="utf-8",
+        )
+
+        memory_rebuild()
+        con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+        row = con.execute(
+            "SELECT helpful_new_sources FROM collection_reflections WHERE domain=? AND collection=?",
+            ("research", "_general"),
+        ).fetchone()
+        con.close()
+
+        assert row is not None
+        assert json.loads(row[0]) == ["Comparative archive reuse case studies."]
 
 
 class TestMemoryEnsure:

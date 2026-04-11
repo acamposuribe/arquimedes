@@ -378,6 +378,7 @@ def _collection_reflection_prompt(
         "the collection's central through-line, the strongest supporting materials, the most important local clusters, "
         "the main tensions or ambiguities, the open questions worth tracking, and a concise statement of why this collection matters to the larger corpus.\n"
         "If this is the first run, still write a strong first synthesis instead of waiting for prior history.\n"
+        "Important: Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.\n"
         "\n"
         "Return exactly one final JSON object matching this schema: "
         f"{deps._COLLECTION_REFLECTION_DELTA_SCHEMA}\n"

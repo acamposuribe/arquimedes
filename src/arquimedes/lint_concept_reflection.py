@@ -362,6 +362,7 @@ def _concept_reflection_prompt(
         "the central claim of the concept, the strongest supporting evidence, the main tensions or ambiguities, "
         "the open questions worth tracking, and a concise statement of why this concept matters to the larger corpus.\n"
         "If this is the first run, still write a strong first synthesis instead of waiting for prior history.\n"
+        "Important: Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.\n"
         "\n"
         "Return exactly one final JSON object matching this schema: "
         f"{deps._CONCEPT_REFLECTION_DELTA_SCHEMA}\n"

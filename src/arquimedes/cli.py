@@ -70,7 +70,7 @@ def extract_raw(material_id: str | None, force: bool):
 def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_run: bool):
     """LLM enrichment: summaries, facets, descriptions (stage stamps track provenance)."""
     from arquimedes.enrich import enrich as do_enrich
-    from arquimedes.enrich_llm import EnrichmentError
+    from arquimedes.llm import EnrichmentError
 
     try:
         results, all_succeeded = do_enrich(
@@ -116,7 +116,7 @@ def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
     """Convenience: runs extract-raw + enrich."""
     from arquimedes.extract import extract_raw as do_extract_raw
     from arquimedes.enrich import enrich as do_enrich
-    from arquimedes.enrich_llm import EnrichmentError
+    from arquimedes.llm import EnrichmentError
 
     click.echo("Running deterministic extraction...")
     try:
@@ -333,7 +333,7 @@ def figures(material_id: str):
 def cluster_cmd(force: bool, domain: str | None, collection: str | None):
     """Cluster concepts into collection-local canonical concept homes."""
     from arquimedes.cluster import cluster_concepts
-    from arquimedes.enrich_llm import EnrichmentError
+    from arquimedes.llm import EnrichmentError
     from arquimedes.config import load_config
 
     llm_state: dict = {}
@@ -362,7 +362,7 @@ def cluster_cmd(force: bool, domain: str | None, collection: str | None):
 def compile(full: bool, force_cluster: bool, recompile_pages: bool):
     """Compile wiki pages from enriched materials and concept clusters."""
     from arquimedes.compile import compile_wiki
-    from arquimedes.enrich_llm import EnrichmentError
+    from arquimedes.llm import EnrichmentError
     from arquimedes.config import load_config
 
     try:

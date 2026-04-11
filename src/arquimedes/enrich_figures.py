@@ -12,8 +12,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
-from arquimedes.enrich_llm import get_model_id
+from arquimedes import enrich_prompts, enrich_stamps, llm
+from arquimedes.llm import get_model_id
 from arquimedes.models import EnrichedField
 
 
@@ -550,7 +550,7 @@ def enrich_figures_stage(
                 batch_idx = future_to_idx[future]
                 try:
                     result_idx, enriched_batch, batch_has_vision = future.result()
-                except enrich_llm.EnrichmentError as exc:
+                except llm.EnrichmentError as exc:
                     return {
                         "status": "failed",
                         "detail": f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}",
@@ -565,7 +565,7 @@ def enrich_figures_stage(
         for batch_idx, batch in enumerate(batches):
             try:
                 result_idx, enriched_batch, batch_has_vision = _run_batch(batch_idx, batch)
-            except enrich_llm.EnrichmentError as exc:
+            except llm.EnrichmentError as exc:
                 return {
                     "status": "failed",
                     "detail": f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}",

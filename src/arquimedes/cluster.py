@@ -19,7 +19,7 @@ from pathlib import Path
 
 from arquimedes import enrich_stamps
 from arquimedes.config import get_project_root, load_config
-from arquimedes.enrich_llm import (
+from arquimedes.llm import (
     EnrichmentError,
     LlmFn,
     get_model_id,

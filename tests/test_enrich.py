@@ -108,8 +108,8 @@ _PATCH_DOC = "arquimedes.enrich.enrich_document_stage"
 _PATCH_METADATA = "arquimedes.enrich.enrich_metadata_stage"
 _PATCH_CHUNK = "arquimedes.enrich.enrich_chunks_stage"
 _PATCH_FIGURE = "arquimedes.enrich.enrich_figures_stage"
-# make_cli_llm_fn is imported inside the function body, so patch the source module
-_PATCH_CLIENT = "arquimedes.enrich_llm.make_cli_llm_fn"
+# make_cli_llm_fn is imported inside the function body, so patch the canonical module
+_PATCH_CLIENT = "arquimedes.llm.make_cli_llm_fn"
 _PATCH_PROJECT_ROOT = "arquimedes.enrich.get_project_root"
 _PATCH_LOAD_CONFIG = "arquimedes.enrich.load_config"
 

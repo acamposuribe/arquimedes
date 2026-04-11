@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 from arquimedes import enrich_stamps
-from arquimedes.enrich_llm import get_model_id
+from arquimedes.llm import get_model_id
 from arquimedes.config import get_project_root, load_config
 from arquimedes.enrich_document import enrich_document_stage
 from arquimedes.enrich_chunks import enrich_chunks_stage
@@ -327,7 +327,7 @@ def enrich(
     def _get_llm_fn(stage: str):
         if llm_fn is not None:
             return llm_fn
-        from arquimedes.enrich_llm import make_cli_llm_fn
+        from arquimedes.llm import make_cli_llm_fn
         return make_cli_llm_fn(config, stage, state=llm_state)
 
     # Determine which materials to process

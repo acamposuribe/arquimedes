@@ -819,7 +819,7 @@ class TestEnsureIndexAndMemory:
     def test_no_lllm_call_required(self, repo, monkeypatch):
         """Collaborator path must work without any LLM call."""
         from arquimedes.index import ensure_index_and_memory
-        import arquimedes.enrich_llm as llm_mod
+        import arquimedes.llm as llm_mod
         monkeypatch.setattr(llm_mod, "make_cli_llm_fn", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("LLM called")))
         _add_material(repo)
         _write_clusters(repo, _SAMPLE_CLUSTERS)

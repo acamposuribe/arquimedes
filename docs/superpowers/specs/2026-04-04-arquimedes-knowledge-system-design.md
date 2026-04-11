@@ -68,6 +68,8 @@ arquimedes/
     extract_image.py                 # standalone image file extraction: metadata, description
     classify.py                      # deterministic classifiers: TF-IDF keywords, document type
     enrich.py                        # LLM enrichment: summaries, keywords, facets
+    llm.py                           # shared LLM callable abstraction + agent CLI adapter
+    enrich_llm.py                    # backward-compatible shim for legacy enrichment imports
     index.py                         # SQLite FTS5 build + query
     search.py                        # search interface (card → chunk → deep)
     compile.py                       # wiki generation from extracted data

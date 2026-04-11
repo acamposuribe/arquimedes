@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
-from arquimedes.enrich_llm import get_model_id
+from arquimedes import enrich_prompts, enrich_stamps, llm
+from arquimedes.llm import get_model_id
 from arquimedes.models import (
     ArchitectureFacets,
     ConceptCandidate,
@@ -206,7 +206,7 @@ def enrich_document_stage(
             meta_path, document_text_path
         )
         raw_text = llm_fn(system, messages)
-        parsed = enrich_llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_PATCH_SCHEMA)
+        parsed = llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_PATCH_SCHEMA)
         if not isinstance(parsed, dict):
             return {"status": "failed", "detail": "LLM did not return a JSON object"}
         if parsed.get("_finished") is not True:
@@ -216,7 +216,7 @@ def enrich_document_stage(
         missing_output_fields = [field for field in _REQUIRED_DOCUMENT_OUTPUT_FIELDS if field not in parsed]
         if missing_output_fields:
             return {"status": "failed", "detail": f"LLM output missing required fields: {', '.join(missing_output_fields)}"}
-    except enrich_llm.EnrichmentError as exc:
+    except llm.EnrichmentError as exc:
         return {"status": "failed", "detail": str(exc)}
     except Exception as exc:
         return {"status": "failed", "detail": f"LLM error: {exc}"}

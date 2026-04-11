@@ -187,7 +187,8 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 | `src/arquimedes/extract_figures.py` | Figure extraction: embedded + rasterized regions |
 | `src/arquimedes/classify.py` | Deterministic classifiers (TF-IDF keywords, domain, document type) |
 | `src/arquimedes/enrich.py` | LLM enrichment orchestrator with provenance tracking |
-| `src/arquimedes/enrich_llm.py` | LLM callable abstraction (`LlmFn`) + agent CLI adapter (no API keys) |
+| `src/arquimedes/llm.py` | Shared LLM callable abstraction (`LlmFn`) + agent CLI adapter (no API keys) |
+| `src/arquimedes/enrich_llm.py` | Backward-compatible shim re-exporting shared LLM helpers |
 | `src/arquimedes/enrich_stamps.py` | Fingerprinting, staleness tracking, stamp I/O |
 | `src/arquimedes/enrich_prompts.py` | Prompt builders for document, chunk, figure stages |
 | `src/arquimedes/index.py` | SQLite FTS5 index build + query + staleness check |

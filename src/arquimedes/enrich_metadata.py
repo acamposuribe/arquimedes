@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 
 from arquimedes import enrich_prompts, enrich_stamps
-from arquimedes.enrich_llm import EnrichmentError, get_model_id, parse_json_or_repair
+from arquimedes.llm import EnrichmentError, get_model_id, parse_json_or_repair
 
 _METADATA_FIX_SCHEMA = {
     "type": "object",

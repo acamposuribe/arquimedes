@@ -15,8 +15,8 @@ from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
 from pathlib import Path
 
-from arquimedes import enrich_llm, enrich_prompts, enrich_stamps
-from arquimedes.enrich_llm import get_model_id
+from arquimedes import enrich_prompts, enrich_stamps, llm
+from arquimedes.llm import get_model_id
 from arquimedes.enrich_prompts import estimate_tokens
 
 
@@ -422,7 +422,7 @@ def enrich_chunks_stage(
                     batch_idx = wave_futures[future]
                     try:
                         successful_results.append(future.result())
-                    except enrich_llm.EnrichmentError as exc:
+                    except llm.EnrichmentError as exc:
                         if first_failure is None:
                             first_failure = (
                                 batch_idx,
@@ -454,7 +454,7 @@ def enrich_chunks_stage(
         for batch_idx, batch in enumerate(batches):
             try:
                 result_idx, batch_enrichments, actual_model = _run_batch(batch_idx, batch)
-            except enrich_llm.EnrichmentError as exc:
+            except llm.EnrichmentError as exc:
                 return {"status": "failed", "detail": f"Batch {batch_idx + 1}/{n_batches} LLM error: {exc}"}
             except Exception as exc:
                 return {"status": "failed", "detail": f"Batch {batch_idx + 1}/{n_batches} error: {exc}"}

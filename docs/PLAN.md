@@ -1,12 +1,14 @@
 # Arquimedes — Implementation Plan
 
 > **Status:** Phases 1-6 complete; Phase 7 next
-> **Last updated:** 2026-04-08
+> **Last updated:** 2026-04-09
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
 > **Phase 4 spec:** [Search index design](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md)
 > **Phase 5 spec:** [Wiki compiler, collection pages, and memory bridge](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 > **Phase 6 spec:** [Lint, reflection, and memory growth](superpowers/completed/specs/2026-04-05-phase6-lint-design.md)
+> **Proposed next architecture:** [Collection graph architecture](superpowers/specs/2026-04-09-collection-graph-design.md)
+> **Proposed implementation plan:** [Collection graph implementation plan](superpowers/plans/2026-04-09-collection-graph-implementation.md)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 > **Pipeline:** [Operational pipeline](PIPELINE.md)
 > **Supporting spec:** [Connection model](superpowers/completed/specs/2026-04-05-connection-model.md)
@@ -123,14 +125,11 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 Deterministic lint, reflective passes, memory projection, and lint scheduling are implemented in code and verified by tests. The remaining work is Phase 7+ tooling and any future daemon wiring around these maintained layers.
 
 - [x] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment (document stage by stamp/version drift; other stages by their own input drift rules), stale index, stale memory bridge, duplicates, missing compiled pages
-- [x] Bridge clustering now also asks for a short descriptor on newly proposed bridge clusters and preserves it in `derived/bridge_concept_clusters.jsonl` so bridge concept pages can show a concise two-line summary under the title
-- [x] Cluster audit now persists the raw LLM response under `derived/lint/cluster_audit_last_response.*` before validation so failed audit runs can be inspected and recovered without losing the model output, then deletes those debug artifacts automatically after a successful post-builder run
-- [x] Cluster audit now normalizes new-bridge review rows more defensively: `new_reviews` may target a new bridge via the exact temporary `bridge_ref`, the parser also accepts `bridge_ref` as a review-row alias, and review rows for new-bridge candidates that deterministic validation rejects are dropped instead of aborting the whole audit run
-- [x] Bridge concept pages now render a `Recent Changes` section at the end from `derived/lint/cluster_reviews.jsonl`, showing the latest persisted audit rows for that bridge cluster
-- [x] Reflective lint stages now share one `derived/lint/lint_stamp.json`; `audited_at`, `concept_reflection_at`, `collection_reflection_at`, and `graph_reflection_at` each answer the outer question “did this stage already run after the latest bridge clustering?”. After that outer gate, each stage still applies its own internal conditions: cluster audit targets only changed/open bridge clusters plus changed uncovered-local packets, concept reflection skips unchanged eligible clusters by row fingerprint, collection reflection skips unchanged eligible collections by row fingerprint, and graph maintenance applies its own unchanged/schedule checks. Only cluster audit and graph maintenance keep extra persisted internal state files beyond the shared outer lint stamp; quick deterministic lint remains always available
-- [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters`; the LLM now returns a compact final JSON object and Python builds the durable reflection row programmatically instead of asking the model to edit a staged work file, with `null` allowed per reflection field to preserve the stored value for that key
-- [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, and open questions grounded in linked materials; the LLM now returns a compact final JSON object and Python builds the durable reflection row programmatically instead of asking the model to edit a staged work file, with `null` allowed per reflection field to preserve the stored value for that key
-- [x] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas; the LLM now returns a compact final JSON object and Python builds the durable graph findings rows programmatically instead of asking the model to edit a staged work file, with `findings: null` preserving the stored findings list when it still fits
+- [x] **(cluster audit)** LLM review of `derived/bridge_concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
+- [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, and `why_this_concept_matters`
+- [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, and open questions grounded in linked materials
+- [x] Persist full collection reflection prose in SQLite as part of the queryable memory layer, including `why_this_collection_matters`
+- [x] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas
 - [x] Feed reflective outputs back into searchable memory so agents can query takeaways, tensions, and open questions, not only graph topology
 - [x] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --stage <reflective-stage>` (targeted reflective runs), `arq lint --report`, `arq lint --fix`
 - [x] Provenance on every LLM suggestion

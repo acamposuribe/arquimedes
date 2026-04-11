@@ -149,6 +149,7 @@ CREATE TABLE IF NOT EXISTS collection_reflections (
     important_material_ids  TEXT NOT NULL DEFAULT '[]',
     important_cluster_ids   TEXT NOT NULL DEFAULT '[]',
     open_questions          TEXT NOT NULL DEFAULT '[]',
+    why_this_collection_matters TEXT NOT NULL DEFAULT '',
     input_fingerprint       TEXT NOT NULL DEFAULT '',
     wiki_path               TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (domain, collection)
@@ -174,6 +175,7 @@ _BRIDGE_COLUMNS: list[tuple[str, str]] = [
     ("cluster_materials", "ALTER TABLE cluster_materials ADD COLUMN confidence REAL NOT NULL DEFAULT 0.0"),
     ("cluster_materials", "ALTER TABLE cluster_materials ADD COLUMN material_wiki_path TEXT NOT NULL DEFAULT ''"),
     ("cluster_relations", "ALTER TABLE cluster_relations ADD COLUMN shared_material_ids TEXT NOT NULL DEFAULT '[]'"),
+    ("collection_reflections", "ALTER TABLE collection_reflections ADD COLUMN why_this_collection_matters TEXT NOT NULL DEFAULT ''"),
 ]
 
 
@@ -453,8 +455,8 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
             """INSERT OR REPLACE INTO collection_reflections
                (domain, collection, main_takeaways, main_tensions,
                 important_material_ids, important_cluster_ids, open_questions,
-                input_fingerprint, wiki_path)
-               VALUES (?,?,?,?,?,?,?,?,?)""",
+                why_this_collection_matters, input_fingerprint, wiki_path)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 domain,
                 collection,
@@ -463,6 +465,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], root: Path) -> 
                 json.dumps(reflection.get("important_material_ids") or [], ensure_ascii=False),
                 json.dumps(reflection.get("important_cluster_ids") or [], ensure_ascii=False),
                 json.dumps(reflection.get("open_questions") or [], ensure_ascii=False),
+                reflection.get("why_this_collection_matters", ""),
                 reflection.get("input_fingerprint", ""),
                 reflection.get("wiki_path", ""),
             ),

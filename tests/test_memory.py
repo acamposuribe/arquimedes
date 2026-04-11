@@ -406,6 +406,7 @@ class TestReflectionTables:
                 "important_material_ids": [_MID_A, _MID_B],
                 "important_cluster_ids": ["concept_0001"],
                 "open_questions": ["What else is in the archive?"],
+                "why_this_collection_matters": "It binds the archive materials into one semantic home.",
                 "input_fingerprint": "ghi",
                 "wiki_path": "wiki/research/_general/_index.md",
             }) + "\n",
@@ -435,6 +436,10 @@ class TestReflectionTables:
             "collection_reflections": con.execute("SELECT COUNT(*) FROM collection_reflections").fetchone()[0],
             "graph_findings": con.execute("SELECT COUNT(*) FROM graph_findings").fetchone()[0],
         }
+        why_row = con.execute(
+            "SELECT why_this_collection_matters FROM collection_reflections WHERE domain=? AND collection=?",
+            ("research", "_general"),
+        ).fetchone()
         con.close()
 
         assert counts == {
@@ -443,6 +448,7 @@ class TestReflectionTables:
             "collection_reflections": 1,
             "graph_findings": 1,
         }
+        assert why_row == ("It binds the archive materials into one semantic home.",)
 
 
 class TestConceptClustersExtraColumns:

@@ -1633,6 +1633,110 @@ def test_collection_reflection_evidence_uses_material_conclusions_and_keeps_chun
     assert first_old["methodological_conclusions"] == ["Use dispersed holdings as evidence."]
 
 
+def test_reflection_index_tool_open_collection_includes_collection_prose(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    second_manifest = {
+        "material_id": "mat_002",
+        "file_hash": "hash-002",
+        "relative_path": "Research/Two.pdf",
+        "file_type": "pdf",
+        "domain": "research",
+        "collection": "papers",
+        "ingested_at": "2026-01-02T00:00:00+00:00",
+    }
+    _write_jsonl(
+        root / "manifests" / "materials.jsonl",
+        [
+            json.loads((root / "manifests" / "materials.jsonl").read_text().splitlines()[0]),
+            second_manifest,
+        ],
+    )
+    _write_json(
+        root / "extracted" / "mat_002" / "meta.json",
+        {
+            "material_id": "mat_002",
+            "file_hash": "hash-002",
+            "source_path": "Research/Two.pdf",
+            "title": "Two",
+            "authors": ["Author Two"],
+            "year": "2026",
+            "page_count": 1,
+            "file_type": "pdf",
+            "domain": "research",
+            "collection": "papers",
+            "raw_keywords": ["space"],
+            "raw_document_type": "paper",
+            "summary": {"value": "Second summary", "provenance": {}},
+            "keywords": {"value": ["space"], "provenance": {}},
+            "document_type": {"value": "paper", "provenance": {}},
+            "facets": {},
+            "_enrichment_stamp": {"prompt_version": "enrich-v1.0", "enrichment_schema_version": "1"},
+        },
+    )
+    _write_jsonl(
+        root / "extracted" / "mat_002" / "pages.jsonl",
+        [
+            {
+                "page_number": 1,
+                "text": "Another page.",
+                "headings": ["Intro"],
+                "section_boundaries": [],
+                "figure_refs": [],
+                "table_refs": [],
+                "thumbnail_path": "",
+                "has_annotations": False,
+                "annotation_ids": [],
+            }
+        ],
+    )
+    _write_jsonl(
+        root / "extracted" / "mat_002" / "chunks.jsonl",
+        [
+            {
+                "chunk_id": "chk_00001",
+                "text": "Another chunk.",
+                "source_pages": [1],
+                "emphasized": False,
+                "summary": {"value": "Chunk summary", "provenance": {}},
+                "keywords": {"value": ["space"], "provenance": {}},
+                "content_class": "argument",
+            }
+        ],
+    )
+
+    rebuild_index(config)
+    (root / "derived").mkdir(exist_ok=True)
+    (root / "derived" / "bridge_concept_clusters.jsonl").write_text("", encoding="utf-8")
+    (root / "derived" / "lint").mkdir(parents=True, exist_ok=True)
+    _write_jsonl(
+        root / "derived" / "lint" / "collection_reflections.jsonl",
+        [
+            {
+                "collection_key": "research/papers",
+                "domain": "research",
+                "collection": "papers",
+                "main_takeaways": ["The collection centers archival space."],
+                "main_tensions": ["Theory vs use"],
+                "important_material_ids": ["mat_001", "mat_002"],
+                "important_cluster_ids": [],
+                "open_questions": ["What else is in the archive?"],
+                "why_this_collection_matters": "It gives the papers collection a coherent semantic role.",
+                "input_fingerprint": "fp-collection",
+                "wiki_path": "wiki/research/papers/_index.md",
+            }
+        ],
+    )
+    memory_rebuild(config)
+
+    with ReflectionIndexTool(root) as tool:
+        record = tool.open_record("collection", "research/papers")
+
+    assert record is not None
+    assert record["reflection"]["why_this_collection_matters"] == "It gives the papers collection a coherent semantic role."
+
+
 def test_graph_reflection_writes_page_and_skips_unchanged(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)

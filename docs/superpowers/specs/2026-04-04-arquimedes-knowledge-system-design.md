@@ -19,6 +19,8 @@ For how Arquimedes should evolve from a searchable archive into a connected memo
 
 For the post-compile bridge that makes the wiki graph queryable for agents, see the consolidated Phase 5 wiki compiler spec in `docs/superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md`. That spec now includes the memory bridge projection into SQLite.
 
+For the proposed next evolution where collections become first-order semantic homes and a separate global bridge graph reconnects them, see `docs/superpowers/specs/2026-04-09-collection-graph-design.md`.
+
 The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer. It is responsible for ingesting new sources, enriching them, compiling and updating wiki pages, running health checks, and keeping indexes current. Semantic publication belongs to that server-maintainer path: clustering and wiki compilation are not collaborator responsibilities. Collaborator machines rebuild only deterministic local query layers from already-committed outputs. This maintainer role is assembled progressively:
 - **Wiki compilation** defines what the maintainer writes and updates
 - **Wiki linting** defines what the maintainer checks and improves
@@ -496,6 +498,7 @@ Phase 6 is complete. The detailed design lives in [the archived phase-6 spec](..
 - reflective passes emit structured artifacts under `derived/lint/`
 - cluster audit input staging may still use read-only copies under `derived/tmp/`, but the LLM no longer edits cluster-audit output files in place
 - graph maintenance is rendered into `wiki/shared/maintenance/graph-health.md` from SQL-backed findings
+- SQL projection of collection reflections must preserve `why_this_collection_matters` alongside the list fields so collaborators and agents can query the collection-level synthesis, not only render it in markdown
 - operator logs for `arq enrich`, `arq cluster`, and `arq lint` live under `logs/` and must always include an explicit terminal success/failure record
 
 ### Integration with the server agent:

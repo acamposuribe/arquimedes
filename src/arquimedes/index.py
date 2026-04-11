@@ -261,6 +261,7 @@ CREATE TABLE IF NOT EXISTS collection_reflections (
     important_material_ids  TEXT NOT NULL DEFAULT '[]',
     important_cluster_ids   TEXT NOT NULL DEFAULT '[]',
     open_questions          TEXT NOT NULL DEFAULT '[]',
+    why_this_collection_matters TEXT NOT NULL DEFAULT '',
     input_fingerprint       TEXT NOT NULL DEFAULT '',
     wiki_path               TEXT NOT NULL DEFAULT '',
     PRIMARY KEY (domain, collection)
@@ -831,6 +832,7 @@ def index_clusters(config: dict | None = None) -> int:
                 important_material_ids  TEXT NOT NULL DEFAULT '[]',
                 important_cluster_ids   TEXT NOT NULL DEFAULT '[]',
                 open_questions          TEXT NOT NULL DEFAULT '[]',
+                why_this_collection_matters TEXT NOT NULL DEFAULT '',
                 input_fingerprint       TEXT NOT NULL DEFAULT '',
                 wiki_path               TEXT NOT NULL DEFAULT '',
                 PRIMARY KEY (domain, collection)

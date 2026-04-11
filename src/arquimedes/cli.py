@@ -582,7 +582,17 @@ def sync(install: bool):
 @click.option("--port", type=int, default=None, help="Port to listen on")
 def serve(host: str | None, port: int | None):
     """Start the web UI."""
-    click.echo("arq serve: not yet implemented")
+    from arquimedes.config import load_config
+    from arquimedes.serve import create_app
+    import uvicorn
+
+    config = load_config()
+    serve_cfg = config.get("serve") or {}
+    uvicorn.run(
+        create_app(config),
+        host=host or serve_cfg.get("host") or "127.0.0.1",
+        port=port or int(serve_cfg.get("port") or 8420),
+    )
 
 
 @cli.command()

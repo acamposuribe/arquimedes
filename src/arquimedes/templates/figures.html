@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "partials/breadcrumbs.html" %}
+<section class="panel">
+  <h1>{{ page_title }}</h1>
+  {% if figures %}
+  <div class="figure-grid">
+    {% for item in figures %}
+    <figure class="figure-card">
+      <img alt="{{ item.figure_id }}" loading="lazy" src="{{ item.image_url }}">
+      <figcaption>
+        <strong>{{ item.figure_id }}</strong>
+        {% if item.source_page %}<span>p. {{ item.source_page }}</span>{% endif %}
+        {% if item.visual_type_text %}<p>{{ item.visual_type_text }}</p>{% endif %}
+        {% if item.caption_text %}<p>{{ item.caption_text }}</p>{% endif %}
+        {% if item.description_text %}<p>{{ item.description_text }}</p>{% endif %}
+      </figcaption>
+    </figure>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p>{{ empty_message }}</p>
+  {% endif %}
+</section>
+{% endblock %}

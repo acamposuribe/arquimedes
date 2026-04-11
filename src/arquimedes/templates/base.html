@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ page_title }} · Arquimedes</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="topline"></div>
+  <header class="site-header">
+    <div class="brand-block">
+      <a class="brand" href="/">Arquimedes</a>
+      <p class="brand-note">A local encyclopedia for your corpus</p>
+    </div>
+    <nav class="site-nav">
+      <a href="/wiki">Main page</a>
+      <a href="/search">Search</a>
+      {% for item in nav_collections[:6] %}
+      <a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">{{ item.collection }}</a>
+      {% endfor %}
+    </nav>
+    <form action="/search" class="nav-search" method="get">
+      <input name="q" placeholder="Search materials, concepts, figures">
+    </form>
+  </header>
+  <div class="freshness-banner" id="freshness-banner">
+    <span>Checking workspace freshness…</span>
+    <button data-update-url="/update" type="button">Update</button>
+  </div>
+  <main class="page">
+    {% block content %}{% endblock %}
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>

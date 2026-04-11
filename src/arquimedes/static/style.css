@@ -1,0 +1,308 @@
+:root {
+  --bg: #f8f9fa;
+  --panel: #ffffff;
+  --ink: #202122;
+  --muted: #54595d;
+  --line: #a2a9b1;
+  --accent: #0645ad;
+  --accent-visited: #0b0080;
+  --accent-soft: #eaecf0;
+  --shadow: none;
+  font-family: "Linux Libertine", "Georgia", "Times New Roman", serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:visited {
+  color: var(--accent-visited);
+}
+
+code {
+  padding: 0.1rem 0.3rem;
+  background: rgba(31, 26, 23, 0.06);
+  border-radius: 0.3rem;
+  font-family: "SF Mono", Monaco, monospace;
+}
+
+img {
+  max-width: 100%;
+  display: block;
+}
+
+.site-header,
+.page,
+.freshness-banner {
+  width: min(86rem, calc(100vw - 2rem));
+  margin: 0 auto;
+}
+
+.topline {
+  height: 0.2rem;
+  background: linear-gradient(90deg, #36c, #a2a9b1);
+}
+
+.site-header {
+  display: grid;
+  grid-template-columns: 15rem 1fr 18rem;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.9rem 0;
+  border-bottom: 1px solid #c8ccd1;
+  background: #fff;
+}
+
+.brand-block {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.brand {
+  color: #000;
+  font-size: 1.85rem;
+  line-height: 1;
+}
+
+.brand-note {
+  margin: 0;
+  color: var(--muted);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.78rem;
+}
+
+.site-nav,
+.breadcrumbs,
+.collection-grid,
+.cluster-list {
+  display: flex;
+  gap: 0.8rem;
+  flex-wrap: wrap;
+}
+
+.nav-search input,
+.search-form input,
+.search-form select,
+.search-form button,
+.freshness-banner button {
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  padding: 0.45rem 0.6rem;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+}
+
+.search-form {
+  display: flex;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+
+.freshness-banner {
+  display: flex;
+  gap: 0.8rem;
+  align-items: center;
+  justify-content: space-between;
+  margin: 1rem auto;
+  padding: 0.6rem 0.8rem;
+  background: #fffbe6;
+  border: 1px solid #c8ccd1;
+}
+
+.freshness-banner[data-state="warning"] {
+  border-color: #d98b3d;
+}
+
+.freshness-banner[data-state="error"] {
+  border-color: #b84836;
+}
+
+.page {
+  padding-bottom: 3rem;
+}
+
+.panel h1,
+.wiki-body h1 {
+  font-size: 1.8rem;
+  font-weight: 400;
+  line-height: 1.2;
+  margin: 0 0 0.65rem;
+  border-bottom: 1px solid #a2a9b1;
+  padding-bottom: 0.2rem;
+}
+
+.eyebrow,
+.meta-line,
+.freshness-banner,
+.breadcrumbs,
+.material-card-top span {
+  color: var(--muted);
+}
+
+.panel,
+.material-card,
+.wiki-body,
+.wiki-aside > .panel,
+.figure-card {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  box-shadow: var(--shadow);
+}
+
+.panel,
+.material-card,
+.wiki-body,
+.wiki-aside > .panel {
+  padding: 1rem 1.2rem;
+}
+
+.stack {
+  display: grid;
+  gap: 1rem;
+}
+
+.stack.compact {
+  gap: 0.45rem;
+}
+
+.material-card-top {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.material-card p {
+  margin: 0.45rem 0;
+}
+
+.wiki-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 18rem;
+  gap: 1rem;
+}
+
+.wiki-body {
+  min-width: 0;
+  line-height: 1.6;
+}
+
+.wiki-body blockquote {
+  margin-left: 0;
+  padding-left: 1rem;
+  border-left: 3px solid #c8ccd1;
+}
+
+.wiki-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.95rem;
+}
+
+.wiki-body th,
+.wiki-body td {
+  padding: 0.55rem;
+  border: 1px solid #c8ccd1;
+  text-align: left;
+}
+
+.wiki-body img {
+  margin: 0.7rem auto;
+  border: 1px solid #c8ccd1;
+  background: #fff;
+  padding: 0.2rem;
+}
+
+.wiki-main .wiki-body {
+  padding-top: 0.8rem;
+}
+
+.page-lead {
+  margin-bottom: 1rem;
+}
+
+.page-lead p {
+  margin: 0;
+}
+
+.home-grid {
+  display: grid;
+  grid-template-columns: 18rem minmax(0, 1fr);
+  gap: 1.2rem;
+}
+
+.wiki-list {
+  margin: 0;
+  padding-left: 1.25rem;
+}
+
+.notice-box {
+  margin-bottom: 1rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid #c8ccd1;
+  background: #f8f9fa;
+}
+
+.cluster-list a,
+.collection-grid a {
+  padding: 0;
+  background: none;
+}
+
+.figure-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(16rem, 1fr));
+  gap: 1rem;
+}
+
+.figure-card {
+  overflow: hidden;
+}
+
+.figure-card figcaption {
+  padding: 0.8rem;
+  font-size: 0.95rem;
+}
+
+.breadcrumbs {
+  margin: 0 0 0.8rem;
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.86rem;
+}
+
+.site-nav,
+.nav-search,
+.freshness-banner,
+.meta-line,
+.material-card-top span,
+.wiki-aside,
+.search-form,
+.cluster-list {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+@media (max-width: 860px) {
+  .site-header,
+  .wiki-layout,
+  .home-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .freshness-banner {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+}

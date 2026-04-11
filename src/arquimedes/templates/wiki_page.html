@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+{% include "partials/breadcrumbs.html" %}
+<section class="wiki-layout">
+  <article class="wiki-body">
+    {{ content_html }}
+  </article>
+  <aside class="wiki-aside">
+    {% if collection_url %}
+    <section class="panel">
+      <h2>Collection</h2>
+      <a href="{{ collection_url }}">{{ collection_label }}</a>
+    </section>
+    {% endif %}
+    {% if source_url or extracted_text_url or figures_url %}
+    <section class="panel">
+      <h2>Actions</h2>
+      <div class="stack">
+        {% if source_url %}<a href="{{ source_url }}">Open source file</a>{% endif %}
+        {% if extracted_text_url %}<a href="{{ extracted_text_url }}">Read extracted text</a>{% endif %}
+        {% if figures_url %}<a href="{{ figures_url }}">View figures{% if figure_count %} ({{ figure_count }}){% endif %}</a>{% endif %}
+        {% if no_figures %}<span class="meta-line">No extracted figures</span>{% endif %}
+      </div>
+    </section>
+    {% endif %}
+    {% if related_materials %}
+    <section class="panel">
+      <h2>Related materials</h2>
+      <div class="stack compact">
+        {% for item in related_materials %}
+        <a href="{{ material_url(item.material_id) }}">{{ item.title or item.material_id }}</a>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+  </aside>
+</section>
+{% endblock %}

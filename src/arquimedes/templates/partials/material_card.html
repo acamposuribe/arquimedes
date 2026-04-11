@@ -1,0 +1,8 @@
+<article class="material-card">
+  <div class="material-card-top">
+    <a href="{{ material_url(item.material_id) if item.material_id is defined else '#' }}">{{ item.title or item.material_id }}</a>
+    {% if item.year %}<span>{{ item.year }}</span>{% endif %}
+  </div>
+  <p>{{ item.summary[:280] ~ ('…' if item.summary|length > 280 else '') }}</p>
+  <p class="meta-line"><a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">{{ item.collection }}</a> · {{ item.document_type }}</p>
+</article>

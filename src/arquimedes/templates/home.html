@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="wiki-main">
+  <article class="wiki-body">
+    <div class="page-lead">
+      <h1>Arquimedes</h1>
+      <p>Browse compiled collection pages, material pages, extracted figures, and the current local search index from one place.</p>
+    </div>
+    {% if index_missing %}
+    <section class="notice-box">
+      <strong>Index not ready.</strong> Run <code>arq index rebuild</code> first to unlock search and collection navigation.
+    </section>
+    {% endif %}
+    <div class="home-grid">
+      <section>
+        <h2>Collections</h2>
+        {% if collections %}
+        <ul class="wiki-list">
+          {% for item in collections %}
+          <li><a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">{{ item.collection }}</a> <span class="meta-line">({{ item.domain }})</span></li>
+          {% endfor %}
+        </ul>
+        {% else %}
+        <p>No indexed collections yet.</p>
+        {% endif %}
+      </section>
+      <section>
+        <h2>Recent materials</h2>
+        {% if recent_materials %}
+        <div class="stack compact">
+          {% for item in recent_materials %}
+          {% include "partials/material_card.html" %}
+          {% endfor %}
+        </div>
+        {% else %}
+        <p>No indexed materials yet.</p>
+        {% endif %}
+      </section>
+    </div>
+  </article>
+</section>
+{% endblock %}

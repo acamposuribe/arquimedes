@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>Search</h1>
+  <form class="search-form" method="get">
+    <input name="q" value="{{ query }}" placeholder="thermal mass, archive, courtyard">
+    <input name="collection" value="{{ collection }}" placeholder="collection">
+    <select name="depth">
+      {% for n in [1, 2, 3] %}
+      <option value="{{ n }}" {% if depth == n %}selected{% endif %}>Depth {{ n }}</option>
+      {% endfor %}
+    </select>
+    <button type="submit">Search</button>
+  </form>
+  {% if index_missing %}
+  <p>Search index not found. Run <code>arq index rebuild</code> first.</p>
+  {% elif result %}
+  <p>{{ result.total }} result(s) for <strong>{{ result.query }}</strong>.</p>
+  {% if result.canonical_clusters %}
+  <div class="cluster-list">
+    {% for cluster in result.canonical_clusters %}
+    <a class="cluster-pill" href="{{ wiki_url(cluster.wiki_path) if cluster.wiki_path else '#' }}">{{ cluster.canonical_name }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+  <div class="stack">
+    {% for item in result.results %}
+    {% include "partials/material_card.html" %}
+    {% endfor %}
+  </div>
+  {% elif query %}
+  <p>No results.</p>
+  {% else %}
+  <p>Use search to find materials, concepts, chunks, figures, and annotations from the current local index.</p>
+  {% endif %}
+</section>
+{% endblock %}

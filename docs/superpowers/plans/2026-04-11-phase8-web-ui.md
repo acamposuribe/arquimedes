@@ -1,6 +1,6 @@
 # Phase 8: Web UI — Implementation Plan
 
-> **Status:** Proposed
+> **Status:** In Progress
 > **Date:** 2026-04-11
 > **Spec:** [Phase 8 web UI design](../specs/2026-04-11-phase8-web-ui-design.md)
 
@@ -25,19 +25,21 @@ Already in place:
 - `index.py` provides `ensure_index_and_memory()`
 - compiled markdown pages exist under `wiki/` (material pages, concept pages, collection `_index.md`)
 - extracted artifacts under `extracted/<id>/` include `meta.json`, `text.md`, `chunks.jsonl`, `figures/*.json`, `figures/*.{png,jpg}`
+- `mistune` dependency and package-data rules are now added in `pyproject.toml`
+- `src/arquimedes/read.py`, `src/arquimedes/freshness.py`, and `src/arquimedes/serve.py` now exist
+- `arq serve` is now wired in `cli.py`
+- initial templates/static assets now exist under `src/arquimedes/templates/` and `src/arquimedes/static/`
+- initial Phase 8 tests now exist: `tests/test_read.py`, `tests/test_freshness.py`, `tests/test_serve.py`
 
 Still missing:
 
-- `src/arquimedes/serve.py`
-- `src/arquimedes/read.py`
-- `src/arquimedes/freshness.py`
-- template/static assets
-- a markdown-to-HTML rendering dependency
-- real `arq serve` wiring
+- broader route coverage and refinement beyond the initial Phase 8 slice
+- more complete search UI/facet UX polish
+- more end-to-end coverage against real compiled wiki/index data
+- follow-up cleanup after manual browser review
 
 Important current stubs:
 
-- `arq serve` (cli.py:583)
 - `arq read` (cli.py:317)
 - `arq figures` (cli.py:324)
 
@@ -347,20 +349,36 @@ Critical path: `read.py` → `serve.py` → routes → `cli.py`
 
 W8.1 and W8.2 are parallelizable. W8.4–W8.6 are independent route implementations that can be done in any order after W8.3.
 
+## Progress
+
+- [x] W8.1 `read.py` + tests
+- [x] W8.2 `freshness.py` + tests
+- [x] W8.3 `serve.py` app shell + markdown rendering + link rewrite
+- [x] W8.4 search page
+- [x] W8.5 material view + figures
+- [x] W8.6 home page + wiki browser
+- [x] W8.7 CLI wiring + static assets + initial polish
+- [x] W8.8 initial route + rendering tests
+- [x] real-repo smoke test on `/`, `/search`, `/materials/{id}`, and `/wiki`
+- [x] follow-up UI/navigation pass: collection links, clearer no-figures state, wiki-like visual treatment
+- [x] regression fix for figure rendering on `/wiki/...` material pages
+- [ ] broaden tests against more real-world wiki/index cases
+- [ ] manual browser pass and refinement cleanup
+
 ---
 
 ## Definition Of Done
 
-- [ ] `arq serve` starts a working FastAPI app
-- [ ] collaborators can browse the wiki tree in a browser
-- [ ] collaborators can search with facets and depth controls
-- [ ] material pages render correctly from compiled markdown
-- [ ] figure galleries work with images served over HTTP
-- [ ] original source files are reachable through safe local HTTP routes
-- [ ] wiki markdown links are rewritten to valid app routes at render time
-- [ ] update/freshness UX is visible, async, and non-destructive
-- [ ] the update path runs `ensure_index_and_memory()`
-- [ ] missing index/data states degrade gracefully (helpful messages, not crashes)
-- [ ] path traversal is rejected on all file-serving routes
-- [ ] all tests pass
-- [ ] Phase 8 does not require Phase 7 MCP work to be useful
+- [x] `arq serve` starts a working FastAPI app
+- [x] collaborators can browse the wiki tree in a browser
+- [x] collaborators can search with facets and depth controls
+- [x] material pages render correctly from compiled markdown
+- [x] figure galleries work with images served over HTTP
+- [x] original source files are reachable through safe local HTTP routes
+- [x] wiki markdown links are rewritten to valid app routes at render time
+- [x] update/freshness UX is visible, async, and non-destructive
+- [x] the update path runs `ensure_index_and_memory()`
+- [x] missing index/data states degrade gracefully (helpful messages, not crashes)
+- [x] path traversal is rejected on all file-serving routes
+- [x] all tests pass
+- [x] Phase 8 does not require Phase 7 MCP work to be useful

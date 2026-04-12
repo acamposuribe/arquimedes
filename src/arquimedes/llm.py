@@ -503,6 +503,7 @@ def _run_agent_subprocess(
         env["CLAUDE_CODE_DISABLE_HOOKS"] = "1"
         env["MAX_THINKING_TOKENS"] = "0"
         env["ENABLE_CLAUDEAI_MCP_SERVERS"] = "false"
+        env["CLAUDE_CODE_SIMPLE"] = "1"
 
     safe_stdin = _strip_nuls(stdin_text)
 

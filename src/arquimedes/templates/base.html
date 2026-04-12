@@ -20,11 +20,23 @@
         <a href="/wiki">Main page</a>
         <a href="/search">Search</a>
       </section>
+      {% if nav_global_concepts %}
+      <section class="rail-section">
+        <h2>Global Concepts</h2>
+        {% for item in nav_global_concepts %}
+        <a href="{{ wiki_url(item.path) }}">{{ item.name }}</a>
+        {% endfor %}
+      </section>
+      {% endif %}
       {% if nav_collections %}
       <section class="rail-section">
         <h2>Collections</h2>
         {% for item in nav_collections %}
-        <a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">{{ item.collection }}</a>
+        <div class="rail-group">
+          <div class="rail-group-title">{{ item.collection }}</div>
+          <a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">Main page</a>
+          <a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/concepts/_index.md') }}">Main concepts</a>
+        </div>
         {% endfor %}
       </section>
       {% endif %}
@@ -36,6 +48,20 @@
       </div>
       {% block content %}{% endblock %}
     </main>
+  </div>
+  <div class="lightbox" hidden id="lightbox">
+    <button aria-label="Previous image" class="lightbox-nav lightbox-prev" id="lightbox-prev" type="button">‹</button>
+    <button aria-label="Next image" class="lightbox-nav lightbox-next" id="lightbox-next" type="button">›</button>
+    <button aria-label="Close image" class="lightbox-close" type="button">×</button>
+    <figure class="lightbox-figure">
+      <img alt="" id="lightbox-image">
+      <figcaption class="lightbox-caption" hidden id="lightbox-caption">
+        <strong id="lightbox-title"></strong>
+        <p hidden id="lightbox-meta"></p>
+        <p hidden id="lightbox-caption-text"></p>
+        <p hidden id="lightbox-description"></p>
+      </figcaption>
+    </figure>
   </div>
   <script src="/static/app.js"></script>
 </body>

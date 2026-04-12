@@ -1395,6 +1395,8 @@ def load_bridge_clusters(project_root: Path | None = None) -> list[dict]:
         project_root = get_project_root()
     path = project_root / "derived" / "bridge_concept_clusters.jsonl"
     if not path.exists():
+        path = project_root / "derived" / "global_bridge_clusters.jsonl"
+    if not path.exists():
         return []
     clusters = []
     for line in path.read_text(encoding="utf-8").splitlines():

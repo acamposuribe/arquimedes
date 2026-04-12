@@ -38,11 +38,15 @@ def test_health_endpoint(tmp_path, monkeypatch):
 
 
 def test_home_handles_missing_index(tmp_path, monkeypatch):
-    _repo(tmp_path, monkeypatch)
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "shared" / "glossary").mkdir(parents=True)
+    (root / "wiki" / "shared" / "glossary" / "_index.md").write_text("- [Alpha (main)](wiki/shared/bridge-concepts/alpha.md)\n", encoding="utf-8")
     client = TestClient(serve_mod.create_app())
     response = client.get("/")
     assert response.status_code == 200
     assert "arq index rebuild" in response.text
+    assert "/wiki/shared/bridge-concepts/alpha" in response.text
+    assert "Alpha" in response.text
 
 
 def test_material_route_rewrites_links(tmp_path, monkeypatch):
@@ -57,21 +61,30 @@ def test_material_route_rewrites_links(tmp_path, monkeypatch):
     (root / "Library" / "Research" / "mat_001.pdf").write_text("pdf", encoding="utf-8")
     (root / "extracted" / "mat_001" / "text.md").write_text("Extracted", encoding="utf-8")
     (root / "extracted" / "mat_001" / "figures" / "fig_0001.png").write_bytes(b"png")
-    _write_json(root / "extracted" / "mat_001" / "figures" / "fig_0001.json", {"figure_id": "fig_0001", "image_path": "figures/fig_0001.png"})
+    (root / "extracted" / "mat_001" / "thumbnails").mkdir()
+    (root / "extracted" / "mat_001" / "thumbnails" / "page_0001.png").write_bytes(b"png")
+    (root / "extracted" / "mat_001" / "pages.jsonl").write_text(json.dumps({"page_number": 1, "thumbnail_path": "thumbnails/page_0001.png"}) + "\n", encoding="utf-8")
+    _write_json(root / "extracted" / "mat_001" / "figures" / "fig_0001.json", {"figure_id": "fig_0001", "image_path": "figures/fig_0001.png", "caption": "Gallery caption"})
     (root / "wiki" / "research" / "papers" / "mat_001.md").write_text(
         "[Concept](../../../wiki/shared/concepts/archive.md)\n\n"
-        "[Source](file:///tmp/source.pdf)\n\n"
-        "[Text](../../../extracted/mat_001/text.md)\n\n"
-        "![Fig](figures/fig_0001.png)\n",
+        "[Open original file](file:///tmp/source.pdf)\n\n"
+        "[Full extracted text](../../../extracted/mat_001/text.md)\n\n"
+        "## Figures\n\n"
+        "**fig_0001**\n"
+        "![Fig](figures/fig_0001.png)\n\n"
+        "> Gallery caption\n",
         encoding="utf-8",
     )
     client = TestClient(serve_mod.create_app())
     response = client.get("/materials/mat_001")
     assert response.status_code == 200
     assert '/wiki/shared/concepts/archive' in response.text
-    assert '/source/mat_001' in response.text
-    assert '/extracted/mat_001/text' in response.text
+    assert response.text.count('/source/mat_001') == 1
+    assert response.text.count('/extracted/mat_001/text') == 1
     assert '/figures/mat_001/fig_0001.png' in response.text
+    assert 'data-zoom-src="/thumbnails/mat_001/page_0001.png"' in response.text
+    assert 'data-zoom-group="figures"' in response.text
+    assert '<blockquote>\n<p>Gallery caption</p>\n</blockquote>' not in response.text
 
 
 def test_wiki_directory_listing_route(tmp_path, monkeypatch):
@@ -96,10 +109,14 @@ def test_wiki_material_page_rewrites_figure_links(tmp_path, monkeypatch):
     })
     (root / "wiki" / "research" / "papers" / "mat_001.md").write_text("![Fig](figures/fig_0001.png)\n", encoding="utf-8")
     (root / "extracted" / "mat_001" / "figures" / "fig_0001.png").write_bytes(b"png")
+    (root / "extracted" / "mat_001" / "thumbnails").mkdir()
+    (root / "extracted" / "mat_001" / "thumbnails" / "page_0001.png").write_bytes(b"png")
+    (root / "extracted" / "mat_001" / "pages.jsonl").write_text(json.dumps({"page_number": 1, "thumbnail_path": "thumbnails/page_0001.png"}) + "\n", encoding="utf-8")
     client = TestClient(serve_mod.create_app())
     response = client.get("/wiki/research/papers/mat_001")
     assert response.status_code == 200
     assert '/figures/mat_001/fig_0001.png' in response.text
+    assert 'data-zoom-src="/thumbnails/mat_001/page_0001.png"' in response.text
 
 
 def test_figure_and_source_routes(tmp_path, monkeypatch):
@@ -113,9 +130,26 @@ def test_figure_and_source_routes(tmp_path, monkeypatch):
     })
     (root / "Library" / "Research" / "mat_001.pdf").write_text("pdf", encoding="utf-8")
     (root / "extracted" / "mat_001" / "figures" / "fig_0001.png").write_bytes(b"png")
+    (root / "extracted" / "mat_001" / "thumbnails").mkdir()
+    (root / "extracted" / "mat_001" / "thumbnails" / "page_0001.png").write_bytes(b"png")
     client = TestClient(serve_mod.create_app())
     assert client.get("/source/mat_001").status_code == 200
     assert client.get("/figures/mat_001/fig_0001.png").status_code == 200
+    assert client.get("/thumbnails/mat_001/page_0001.png").status_code == 200
+
+
+def test_figures_page_exposes_zoom_targets(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {"material_id": "mat_001", "title": "Material One"})
+    _write_json(root / "extracted" / "mat_001" / "figures" / "fig_0001.json", {"figure_id": "fig_0001", "image_path": "figures/fig_0001.png", "caption": "Caption", "description": "Description", "source_page": 4, "visual_type": "plan"})
+    (root / "extracted" / "mat_001" / "figures" / "fig_0001.png").write_bytes(b"png")
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_001/figures")
+    assert response.status_code == 200
+    assert 'data-zoom-group="figures"' in response.text
+    assert 'data-zoom-src="/figures/mat_001/fig_0001.png"' in response.text
+    assert 'data-zoom-caption="Caption"' in response.text
+    assert 'data-zoom-meta="p. 4 · plan"' in response.text
 
 
 def test_search_route_renders_results(tmp_path, monkeypatch):
@@ -137,6 +171,8 @@ def test_search_route_renders_results(tmp_path, monkeypatch):
     response = client.get("/search?q=material")
     assert response.status_code == 200
     assert "Material One" in response.text
+    assert "/wiki/research/papers" in response.text
+    assert "/wiki/research/papers/concepts" in response.text
 
 
 def test_update_and_freshness_endpoints(tmp_path, monkeypatch):

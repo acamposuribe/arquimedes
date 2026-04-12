@@ -371,9 +371,9 @@ The intended Step 2 execution slice runs as:
 
 `cluster -> lint(global-bridge) -> compile -> memory rebuild`
 
-That stage should write `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json` by running an incremental LLM clustering pass over collection-local clusters plus compact hosting-collection context, with existing global bridges provided as memory. It should only run when at least two collections are present in the repository; with fewer than two collections, the stage should skip. A dedicated `bridge-global` command can still be added later once compile, memory, and search consume this layer directly.
+That stage should write `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json` by running an incremental LLM clustering pass over collection-local clusters plus compact hosting-collection context, with existing global bridges provided as memory. That memory should include the connected local-cluster reflections and collection signals needed to support substantial cross-collection bridge synthesis. It should only run when at least two collections are present in the repository; with fewer than two collections, the stage should skip. A dedicated `bridge-global` command can still be added later once compile, memory, and search consume this layer directly.
 
-Global bridge reflection should be part of this same Step 2 clustering pass. The bridge-clustering output should already include bridge takeaways, tensions, open questions, helpful new sources, and why the bridge matters, so a separate bridge concept-reflection pass is not needed.
+Global bridge reflection should be part of this same Step 2 clustering pass. The bridge-clustering output should already include bridge takeaways, tensions, open questions, helpful new sources, and why the bridge matters, so a separate bridge concept-reflection pass is not needed. `why_this_bridge_matters` should be written as the main prose body of the bridge page rather than a short caption.
 
 ### Command shape
 
@@ -396,7 +396,7 @@ Required inputs for the Step 2 LLM pass:
 
 - pending collection-local clusters: canonical names, descriptors, aliases, hosting collection, and local-cluster reflection fields
 - compact hosting-collection context: collection title, main takeaways, main tensions, and why the collection matters
-- existing global bridge memory: current bridge canonicals, descriptors, aliases, member local clusters, and a compact subset of bridge synthesis fields needed for continuity rather than the full stored bridge row
+- existing global bridge memory: current bridge canonicals, descriptors, aliases, member local clusters with their connected local-cluster reflections, supporting collection signals, and a compact subset of bridge synthesis fields needed for continuity rather than the full stored bridge row
 
 Incrementality should work exactly like current clustering: only changed or newly eligible collection-local clusters enter the packet, and the LLM either links them to existing global bridges or creates new global bridges.
 

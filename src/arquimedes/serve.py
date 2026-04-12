@@ -120,10 +120,64 @@ def render_wiki_markdown(md_text: str, current_path: str, material_id: str | Non
     return Markup(html)
 
 
+def _strip_material_sections(md_text: str) -> str:
+    md_text = re.sub(r"(?ms)^## Figures\n.*?(?=^## |\Z)", "", md_text)
+    md_text = re.sub(r"(?m)^\[(Open original file|Full extracted text)\]\(.*\)\s*$\n?", "", md_text)
+    return md_text.strip()
+
+
 def _plain(value) -> str:
     if isinstance(value, dict):
         return str(value.get("value") or "")
     return str(value or "")
+
+
+def _figure_view_models(material_id: str, figures: list[dict]) -> list[dict]:
+    items = []
+    for figure in figures:
+        name = PurePosixPath(str(figure.get("image_path") or "")).name
+        if not name or Path(name).suffix.lower() not in _IMAGE_EXTENSIONS:
+            continue
+        items.append({
+            **figure,
+            "visual_type_text": _plain(figure.get("visual_type")),
+            "caption_text": _plain(figure.get("caption")),
+            "description_text": _plain(figure.get("description")),
+            "image_url": f"/figures/{material_id}/{name}",
+        })
+    return items
+
+
+def _thumbnail_view_models(material_id: str) -> list[dict]:
+    return [
+        {
+            **item,
+            "image_url": f"/thumbnails/{material_id}/{item['filename']}",
+            "label": f"Page {item['page_number']}",
+        }
+        for item in read_mod.load_material_thumbnails(material_id)
+    ]
+
+
+def _material_sidebar_context(material_id: str) -> dict:
+    meta = read_mod.load_material_meta(material_id)
+    figures = read_mod.load_material_figures(material_id)
+    return {
+        "material_id": material_id,
+        "title": str(meta.get("title") or material_id),
+        "collection_url": wiki_url(f"wiki/{meta.get('domain')}/{meta.get('collection')}/_index.md") if meta.get("domain") and meta.get("collection") else "",
+        "collection_label": f"{meta.get('domain')}/{meta.get('collection')}" if meta.get("domain") and meta.get("collection") else "",
+        "source_url": f"/source/{material_id}" if read_mod.material_source_path(material_id) else "",
+        "extracted_text_url": f"/extracted/{material_id}/text" if read_mod.material_extracted_text_path(material_id) else "",
+        "figures_url": f"/materials/{material_id}/figures" if figures else "",
+        "figure_count": len(_figure_view_models(material_id, figures)),
+        "page_thumbnails": _thumbnail_view_models(material_id),
+        "no_figures": not figures,
+    }
+
+
+def _material_page_context(material_id: str, body: str) -> dict:
+    return {**_material_sidebar_context(material_id), "content_body": _strip_material_sections(body), "material_figures": _figure_view_models(material_id, read_mod.load_material_figures(material_id))}
 
 
 def _wiki_context(path: Path, body: str, *, material_id: str | None = None, title: str | None = None, **extra) -> dict:
@@ -139,7 +193,7 @@ def _wiki_context(path: Path, body: str, *, material_id: str | None = None, titl
 
 def _base_context(*, page_title: str, **extra) -> dict:
     collections = read_mod.list_domains_and_collections()
-    return {"page_title": page_title, "nav_collections": collections, **extra}
+    return {"page_title": page_title, "nav_collections": collections, "nav_global_concepts": read_mod.list_glossary_concepts(), **extra}
 
 
 def create_app(config: dict | None = None) -> FastAPI:
@@ -205,33 +259,19 @@ def create_app(config: dict | None = None) -> FastAPI:
         try:
             path = read_mod.material_wiki_path(material_id)
             body = read_mod.load_material_wiki(material_id)
-            meta = read_mod.load_material_meta(material_id)
+            material = _material_page_context(material_id, body)
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        try:
-            related = search_mod.find_related(material_id, limit=5)
-        except FileNotFoundError:
-            related = []
-        figures = read_mod.load_material_figures(material_id)
         return _TEMPLATES.TemplateResponse(
             request,
             "wiki_page.html",
             {
                 "request": request,
-                **_base_context(page_title=str(meta.get("title") or material_id)),
+                **_base_context(page_title=material["title"]),
                 **_wiki_context(
                     path,
-                    body,
-                    material_id=material_id,
-                    title=str(meta.get("title") or material_id),
-                    collection_url=wiki_url(f"wiki/{meta.get('domain')}/{meta.get('collection')}/_index.md") if meta.get("domain") and meta.get("collection") else "",
-                    collection_label=f"{meta.get('domain')}/{meta.get('collection')}" if meta.get("domain") and meta.get("collection") else "",
-                    source_url=f"/source/{material_id}" if read_mod.material_source_path(material_id) else "",
-                    extracted_text_url=f"/extracted/{material_id}/text" if read_mod.material_extracted_text_path(material_id) else "",
-                    figures_url=f"/materials/{material_id}/figures" if figures else "",
-                    figure_count=len(figures),
-                    no_figures=not figures,
-                    related_materials=related,
+                    material["content_body"],
+                    **material,
                 ),
             },
         )
@@ -250,16 +290,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                 "request": request,
                 **_base_context(page_title=f"Figures · {meta.get('title') or material_id}"),
                 "material_id": material_id,
-                "figures": [
-                    {
-                        **figure,
-                        "visual_type_text": _plain(figure.get("visual_type")),
-                        "caption_text": _plain(figure.get("caption")),
-                        "description_text": _plain(figure.get("description")),
-                        "image_url": f"/figures/{material_id}/{PurePosixPath(str(figure.get('image_path') or '')).name}",
-                    }
-                    for figure in figures
-                ],
+                "figures": _figure_view_models(material_id, figures),
                 "empty_message": "No extracted figures were found for this material." if not figures else "",
                 "breadcrumbs": [{"label": "Home", "url": "/"}, {"label": _label(material_id), "url": f"/materials/{material_id}"}, {"label": "Figures", "url": f"/materials/{material_id}/figures"}],
             },
@@ -272,6 +303,15 @@ def create_app(config: dict | None = None) -> FastAPI:
         path = read_mod.material_figure_image_path(material_id, filename)
         if not path:
             raise HTTPException(status_code=404, detail="Figure not found")
+        return FileResponse(path)
+
+    @app.get("/thumbnails/{material_id}/{filename}")
+    def thumbnail_image(material_id: str, filename: str):
+        if "/" in filename or "\\" in filename or Path(filename).suffix.lower() not in _IMAGE_EXTENSIONS:
+            raise HTTPException(status_code=404, detail="Thumbnail not found")
+        path = read_mod.material_thumbnail_path(material_id, filename)
+        if not path:
+            raise HTTPException(status_code=404, detail="Thumbnail not found")
         return FileResponse(path)
 
     @app.get("/wiki", response_class=HTMLResponse)
@@ -308,7 +348,15 @@ def create_app(config: dict | None = None) -> FastAPI:
         return _TEMPLATES.TemplateResponse(
             request,
             "wiki_page.html",
-            {"request": request, **_base_context(page_title=_label(page_path.stem if page_path.name != '_index.md' else page_path.parent.name)), **_wiki_context(page_path, body, material_id=read_mod.material_id_for_wiki_path(page_path))},
+            {
+                "request": request,
+                **_base_context(page_title=_label(page_path.stem if page_path.name != '_index.md' else page_path.parent.name)),
+                **_wiki_context(
+                    page_path,
+                    material["content_body"] if (material_id := read_mod.material_id_for_wiki_path(page_path)) and (material := _material_page_context(material_id, body)) else body,
+                    **(material if material_id else {}),
+                ),
+            },
         )
 
     @app.get("/source/{material_id}")

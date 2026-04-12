@@ -56,6 +56,10 @@ Phase 6 stays disciplined:
 - allowed stage values: `cluster-audit`, `concept-reflection`, `collection-reflection`, `graph-maintenance`
 - stage flags are repeatable when a targeted run needs more than one reflective stage
 
+Terminal progress:
+- reflective lint emits lightweight stderr progress lines for each selected stage so operators can see `started`, `finished`, and `skipped: <reason>` events while long-running LLM work is in flight
+- the stage labels follow the CLI names in human form, for example `cluster audit started` and `concept reflection finished`
+
 The reflective stages are incremental and do not run blindly on every pass.
 
 ## Deterministic Pass
@@ -118,6 +122,7 @@ Output contract:
 - review updates only carry audit-log fields (`finding_type`, `severity`, `status`, `note`, `recommendation`); when the row is for a newly proposed bridge it must target the exact temporary `bridge_ref`, and the parser also accepts `bridge_ref` as an alias for `cluster_ref` in that case
 - the pipeline validates that object, applies accepted bridge/review changes programmatically, and then writes canonical outputs
 - if a proposed new bridge is deterministically rejected during validation, any paired `new_reviews` row for that temporary bridge is dropped as well instead of aborting the whole audit run
+- if a proposed `bridge_updates` edit is deterministically rejected because it would collapse an existing cluster below two distinct materials, that update is dropped, the current cluster is preserved, and the audit continues with a deterministic open review row for that cluster instead of aborting the whole run
 - cluster reviews are persistent audit-log continuity records: each bridge cluster should retain exactly one canonical audit-log line, statuses are `open|validated`, and satisfied concerns should be rewritten as `validated` instead of being removed
 
 Output artifacts:

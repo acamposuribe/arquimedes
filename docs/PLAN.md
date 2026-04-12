@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
 > **Status:** Phases 1-6 complete; Collection Graph implemented; legacy bridge compatibility cleanup remains
-> **Last updated:** 2026-04-11
+> **Last updated:** 2026-04-12
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
 > **Phase 4 spec:** [Search index design](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md)
@@ -128,13 +128,14 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 Deterministic lint, reflective passes, memory projection, and lint scheduling are implemented in code and verified by tests. The remaining work is Phase 7+ tooling and any future daemon wiring around these maintained layers.
 
 - [x] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment (document stage by stamp/version drift; other stages by their own input drift rules), stale index, stale memory bridge, duplicates, missing compiled pages
-- [x] **(cluster audit)** LLM review of `derived/bridge_concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters
+- [x] **(cluster audit)** LLM review of `derived/bridge_concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters; deterministically invalid edits are skipped without aborting the rest of the audit run
 - [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, `helpful_new_sources`, and `why_this_concept_matters`
 - [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, `open_questions`, `helpful_new_sources`, and `why_this_collection_matters` grounded in linked materials
 - [x] Persist full collection reflection prose in SQLite as part of the queryable memory layer, including `why_this_collection_matters`
 - [x] LLM-driven graph checks: missing cross-references, contradictions across materials, under-connected materials/clusters, unanswered research questions from weakly connected areas
 - [x] Feed reflective outputs back into searchable memory so agents can query takeaways, tensions, and open questions, not only graph topology
 - [x] `arq lint` (full), `arq lint --quick` (deterministic only), `arq lint --report`, `arq lint --fix`
+- [x] Reflective lint emits per-stage terminal progress lines (`started`, `finished`, `skipped`) so long-running LLM stages are visible while `arq lint` is running
 - [x] Provenance on every LLM suggestion
 - [x] Define the health-check and maintenance behaviors the future server maintainer will run automatically
 
@@ -157,12 +158,14 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 - [x] Define bridge members in terms of contributing local clusters rather than raw material-level concepts
 - [x] Run the first Step 2 bridge layer as `arq lint --stage global-bridge` and include it in `arq lint --full`
 - [x] Keep Step 2 global bridging owned by lint rather than adding a separate `arq bridge-global` command
-- [x] Make global-bridge stale detection depend on promoted local-cluster inputs plus collection reflections
+- [x] Make global-bridge stale detection depend only on new or changed promoted local clusters that are not yet covered by the bridge layer
+- [x] Keep the saved global-bridge input fingerprint scoped to that pending local-cluster delta rather than collection-reflection churn or bridge-memory drift
 - [x] Skip the global-bridge stage when fewer than two collections are in scope
 - [x] Project global bridges into SQLite traversal and search
 - [x] Compile bridge pages from local-cluster members
 - [x] Add local-cluster backlinks into shared bridge memberships and distinguish bridge overlap in relatedness explanations
 - [x] Materialize cross-collection synthesis on global bridge rows/pages using collection-reflection signals
+- [x] Feed global-bridge memory with connected local-cluster reflections and collection signals so `why_this_bridge_matters` can be written as a page-grade mini-essay
 - [x] Keep concept reflections focused on local concept homes and move bridge-level synthesis into the global-bridge pass
 - [ ] Retire the legacy raw-material global bridge publication path
 

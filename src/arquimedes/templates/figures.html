@@ -7,14 +7,7 @@
   <div class="figure-grid">
     {% for item in figures %}
     <figure class="figure-card">
-      <img alt="{{ item.figure_id }}" loading="lazy" src="{{ item.image_url }}">
-      <figcaption>
-        <strong>{{ item.figure_id }}</strong>
-        {% if item.source_page %}<span>p. {{ item.source_page }}</span>{% endif %}
-        {% if item.visual_type_text %}<p>{{ item.visual_type_text }}</p>{% endif %}
-        {% if item.caption_text %}<p>{{ item.caption_text }}</p>{% endif %}
-        {% if item.description_text %}<p>{{ item.description_text }}</p>{% endif %}
-      </figcaption>
+      <button class="figure-zoom" data-zoom-alt="{{ item.figure_id }}" data-zoom-caption="{{ item.caption_text }}" data-zoom-description="{{ item.description_text }}" data-zoom-group="figures" data-zoom-meta="{% if item.source_page %}p. {{ item.source_page }}{% endif %}{% if item.visual_type_text %}{% if item.source_page %} · {% endif %}{{ item.visual_type_text }}{% endif %}" data-zoom-src="{{ item.image_url }}" data-zoom-title="{{ item.figure_id }}" title="{{ item.figure_id }}" type="button"><img alt="{{ item.figure_id }}" loading="lazy" src="{{ item.image_url }}"></button>
     </figure>
     {% endfor %}
   </div>

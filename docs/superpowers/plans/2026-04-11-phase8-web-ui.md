@@ -362,6 +362,14 @@ W8.1 and W8.2 are parallelizable. W8.4–W8.6 are independent route implementati
 - [x] real-repo smoke test on `/`, `/search`, `/materials/{id}`, and `/wiki`
 - [x] follow-up UI/navigation pass: collection links, clearer no-figures state, wiki-like visual treatment
 - [x] regression fix for figure rendering on `/wiki/...` material pages
+- [x] material sidebar uses extracted page thumbnails with click-to-zoom lightbox
+- [x] shared lightbox supports figure zoom and arrow navigation across images
+- [x] figures route uses compact gallery cards; figure text appears only inside lightbox
+- [x] material pages replace inline compiled figure blocks with a gallery + lightbox
+- [x] left rail includes global concepts and per-collection main/concepts links
+- [x] left rail now expands with listed global concepts and the shell uses full window width
+- [x] bridge concept pages flatten contributing local clusters into clean rendered lists
+- [x] bridge concept links now rebuild correctly from the current global bridge cluster artifact
 - [ ] broaden tests against more real-world wiki/index cases
 - [ ] manual browser pass and refinement cleanup
 

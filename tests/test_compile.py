@@ -316,7 +316,10 @@ def test_material_page_sections():
     related = [{"material_id": "mat_bbb", "title": "Archival Landscapes",
                 "reasons": ["shared concept: archive as architectural space"]}]
 
-    page = render_material_page(meta, clusters, chunks, annotations, figures, related)
+    page = render_material_page(
+        meta, clusters, chunks, annotations, figures, related,
+        material_paths={"mat_bbb": "wiki/research/papers/mat_bbb.md"},
+    )
 
     assert "# Necropolitics" in page
     assert "## Metadata" in page
@@ -340,6 +343,8 @@ def test_material_page_sections():
     assert "interesting" in page
     assert "## Related Materials" in page
     assert "Archival Landscapes" in page
+    assert "[Archival Landscapes]" in page
+    assert "(mat_bbb.md)" in page
     assert "## Source" in page
 
 
@@ -982,6 +987,7 @@ def test_compile_prefers_global_bridge_pages_when_present(tmp_path, monkeypatch)
         "bridge_takeaways": ["Archive thinking recurs across collections."],
         "bridge_tensions": ["Theory and practice frame archival space differently."],
         "bridge_open_questions": ["Which other collections should join this bridge?"],
+        "why_this_bridge_matters": "The bridge shows how archive becomes a shared architectural frame rather than a collection-specific metaphor.",
         "supporting_collection_reflections": [
             {
                 "collection_key": "research/papers",
@@ -1021,13 +1027,17 @@ def test_compile_prefers_global_bridge_pages_when_present(tmp_path, monkeypatch)
     bridge_page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "archive-space-framework.md").read_text(encoding="utf-8")
     local_page = (tmp_path / "wiki" / "research" / "papers" / "concepts" / "archive-space-framework.md").read_text(encoding="utf-8")
     assert "## Cross-Collection Synthesis" in bridge_page
+    assert "### Why This Bridge Matters" in bridge_page
     assert "Archive thinking recurs across collections." in bridge_page
     assert "Theory and practice frame archival space differently." in bridge_page
     assert "The papers collection treats archive as an analytical frame." in bridge_page
     assert "## Contributing Local Clusters" in bridge_page
     assert "A local concept home." in bridge_page
+    assert "### Archive Space Framework (research/papers / 2 materials)" in bridge_page
+    assert "- Local cluster: [Archive Space Framework](../../research/papers/concepts/archive-space-framework.md)" in bridge_page
     assert "Promotion: high confidence, cross collection bridgeability" in bridge_page
-    assert "Document mat_001" in bridge_page
+    assert "- [Document mat_001](../../research/papers/mat_001.md)" in bridge_page
+    assert "- Materials:" not in bridge_page
     assert "## Global Bridges" in local_page
     assert "wiki/shared/bridge-concepts/archive-space-framework.md" not in local_page
     assert "A bridge joining local archive-space clusters." in local_page
@@ -1644,6 +1654,18 @@ def test_compile_recompile_pages_rerenders_without_reclustering(tmp_path, monkey
     assert summary["concept_pages"] == 1
     page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "recompile-concept.md").read_text()
     assert "Reflection text from artifacts." in page
+
+
+def test_load_bridge_clusters_falls_back_to_global_bridge_file(tmp_path):
+    derived = tmp_path / "derived"
+    derived.mkdir()
+    (derived / "global_bridge_clusters.jsonl").write_text(
+        json.dumps({"slug": "fallback-bridge", "canonical_name": "Fallback Bridge"}) + "\n",
+        encoding="utf-8",
+    )
+    rows = load_bridge_clusters(tmp_path)
+    assert rows[0]["canonical_name"] == "Fallback Bridge"
+    assert rows[0]["wiki_path"] == "wiki/shared/bridge-concepts/fallback-bridge.md"
 
 
 def test_collection_page_key_concepts_ranked():

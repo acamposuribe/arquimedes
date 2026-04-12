@@ -232,6 +232,20 @@ def _audit_optional_text(value) -> str:
     return str(value).strip()
 
 
+def _cluster_audit_is_nonfatal_bridge_update_error(exc: Exception) -> bool:
+    return "must leave the bridge connected to at least two distinct materials" in str(exc)
+
+
+def _cluster_audit_skipped_bridge_update_review_fields() -> dict[str, str]:
+    return {
+        "finding_type": "validation_error",
+        "severity": "medium",
+        "status": "open",
+        "note": "A proposed bridge update was ignored because it would have left the cluster connected to fewer than two distinct materials.",
+        "recommendation": "Keep the current cluster unchanged and only retry the refinement with a cross-material update that preserves at least two distinct materials.",
+    }
+
+
 def _cluster_audit_validate_bridge_candidate(
     candidate: dict,
     concept_index: dict[tuple[str, str], dict],
@@ -817,7 +831,7 @@ def _run_cluster_audit_impl(
 
     context_requested = bool(parsed.get("context_requested"))
     context_request_count = int(parsed.get("context_request_count", 0) or 0)
-    updated_cluster_ids: set[str] = set()
+    seen_update_cluster_ids: set[str] = set()
     for idx, candidate in enumerate(bridge_updates, start=1):
         if not isinstance(candidate, dict):
             raise EnrichmentError(f"bridge_updates[{idx}] must be an object")
@@ -828,9 +842,9 @@ def _run_cluster_audit_impl(
             raise EnrichmentError(f"bridge_updates[{idx}] references unknown cluster_id '{cluster_id}'")
         if cluster_id not in target_cluster_ids:
             raise EnrichmentError(f"bridge_updates[{idx}] references cluster_id '{cluster_id}' outside audit_targets")
-        if cluster_id in updated_cluster_ids:
+        if cluster_id in seen_update_cluster_ids:
             raise EnrichmentError(f"bridge_updates[{idx}] duplicates cluster_id '{cluster_id}'")
-        updated_cluster_ids.add(cluster_id)
+        seen_update_cluster_ids.add(cluster_id)
 
     for idx, review in enumerate(review_updates, start=1):
         if not isinstance(review, dict):
@@ -844,17 +858,51 @@ def _run_cluster_audit_impl(
     concept_index = deps._cluster_audit_mutable_concept_index(local_rows)
     assigned_pairs = deps._cover_pairs_from_clusters(clusters)
 
+    applied_update_cluster_ids: set[str] = set()
+    skipped_update_cluster_ids: set[str] = set()
     updated_bridge_rows = []
     for idx, candidate in enumerate(bridge_updates, start=1):
         cluster_id = str(candidate.get("cluster_id", "")).strip()
-        validated = deps._cluster_audit_apply_bridge_update(
-            candidate,
-            existing_cluster_by_id[cluster_id],
-            concept_index,
-            assigned_pairs,
-            label=f"bridge_updates[{idx}]",
-        )
+        try:
+            validated = deps._cluster_audit_apply_bridge_update(
+                candidate,
+                existing_cluster_by_id[cluster_id],
+                concept_index,
+                assigned_pairs,
+                label=f"bridge_updates[{idx}]",
+            )
+        except EnrichmentError as exc:
+            if _cluster_audit_is_nonfatal_bridge_update_error(exc):
+                skipped_update_cluster_ids.add(cluster_id)
+                continue
+            raise
         updated_bridge_rows.append(validated)
+        applied_update_cluster_ids.add(cluster_id)
+
+    filtered_review_updates = [
+        review
+        for review in review_updates
+        if _cluster_audit_review_ref(review) not in skipped_update_cluster_ids
+    ]
+    filtered_new_reviews = [
+        review
+        for review in new_reviews
+        if _cluster_audit_review_ref(review) not in skipped_update_cluster_ids
+    ]
+    synthetic_review_updates = []
+    synthetic_new_reviews = []
+    for cluster_id in sorted(skipped_update_cluster_ids):
+        review_fields = _cluster_audit_skipped_bridge_update_review_fields()
+        if cluster_id in canonical_existing_reviews:
+            synthetic_review_updates.append({
+                "cluster_id": cluster_id,
+                **review_fields,
+            })
+        else:
+            synthetic_new_reviews.append({
+                "cluster_ref": cluster_id,
+                **review_fields,
+            })
 
     new_bridge_candidates = []
     new_bridge_refs: list[tuple[str, dict]] = []
@@ -885,7 +933,7 @@ def _run_cluster_audit_impl(
     }
 
     normalized_new_reviews = []
-    for idx, review in enumerate(new_reviews, start=1):
+    for idx, review in enumerate([*filtered_new_reviews, *synthetic_new_reviews], start=1):
         if not isinstance(review, dict):
             raise EnrichmentError(f"new_reviews[{idx}] must be an object")
         cluster_ref = deps._cluster_audit_review_ref(review)
@@ -902,11 +950,16 @@ def _run_cluster_audit_impl(
     bridge_refs = {**existing_cluster_by_id, **bridge_ref_map}
 
     bridge_work = sorted([
-        *[cluster for cluster in clusters if str(cluster.get("cluster_id", "")).strip() not in updated_cluster_ids],
+        *[cluster for cluster in clusters if str(cluster.get("cluster_id", "")).strip() not in applied_update_cluster_ids],
         *updated_bridge_rows,
         *assigned_new_bridges,
     ], key=lambda c: c.get("cluster_id", ""))
-    reviews_work, reviewed_cluster_ids = deps._cluster_audit_apply_review_delta(existing_rows, review_updates, normalized_new_reviews, bridge_refs)
+    reviews_work, reviewed_cluster_ids = deps._cluster_audit_apply_review_delta(
+        existing_rows,
+        [*filtered_review_updates, *synthetic_review_updates],
+        normalized_new_reviews,
+        bridge_refs,
+    )
     required_review_ids = set(target_cluster_ids) | {
         str(cluster.get("cluster_id", "")).strip()
         for cluster in assigned_new_bridges
@@ -1111,7 +1164,7 @@ def _run_local_cluster_audit_impl(
 
             context_requested = bool(parsed.get("context_requested"))
             context_request_count = int(parsed.get("context_request_count", 0) or 0)
-            updated_cluster_ids: set[str] = set()
+            seen_update_cluster_ids: set[str] = set()
             for idx, candidate in enumerate(bridge_updates, start=1):
                 if not isinstance(candidate, dict):
                     raise EnrichmentError(f"bridge_updates[{idx}] must be an object")
@@ -1122,9 +1175,9 @@ def _run_local_cluster_audit_impl(
                     raise EnrichmentError(f"bridge_updates[{idx}] references unknown cluster_id '{cluster_id}'")
                 if cluster_id not in target_cluster_ids:
                     raise EnrichmentError(f"bridge_updates[{idx}] references cluster_id '{cluster_id}' outside audit_targets")
-                if cluster_id in updated_cluster_ids:
+                if cluster_id in seen_update_cluster_ids:
                     raise EnrichmentError(f"bridge_updates[{idx}] duplicates cluster_id '{cluster_id}'")
-                updated_cluster_ids.add(cluster_id)
+                seen_update_cluster_ids.add(cluster_id)
 
             for idx, review in enumerate(review_updates, start=1):
                 if not isinstance(review, dict):
@@ -1137,18 +1190,51 @@ def _run_local_cluster_audit_impl(
 
             concept_index = deps._cluster_audit_mutable_concept_index(local_rows)
             assigned_pairs = deps._cover_pairs_from_clusters(scope_clusters)
+            applied_update_cluster_ids: set[str] = set()
+            skipped_update_cluster_ids: set[str] = set()
             updated_scope_rows = []
             for idx, candidate in enumerate(bridge_updates, start=1):
                 cluster_id = str(candidate.get("cluster_id", "")).strip()
-                updated_scope_rows.append(
-                    deps._cluster_audit_apply_bridge_update(
+                try:
+                    validated = deps._cluster_audit_apply_bridge_update(
                         candidate,
                         existing_cluster_by_id[cluster_id],
                         concept_index,
                         assigned_pairs,
                         label=f"bridge_updates[{idx}]",
                     )
-                )
+                except EnrichmentError as exc:
+                    if _cluster_audit_is_nonfatal_bridge_update_error(exc):
+                        skipped_update_cluster_ids.add(cluster_id)
+                        continue
+                    raise
+                updated_scope_rows.append(validated)
+                applied_update_cluster_ids.add(cluster_id)
+
+            filtered_review_updates = [
+                review
+                for review in review_updates
+                if _cluster_audit_review_ref(review) not in skipped_update_cluster_ids
+            ]
+            filtered_new_reviews = [
+                review
+                for review in new_reviews
+                if _cluster_audit_review_ref(review) not in skipped_update_cluster_ids
+            ]
+            synthetic_review_updates = []
+            synthetic_new_reviews = []
+            for cluster_id in sorted(skipped_update_cluster_ids):
+                review_fields = _cluster_audit_skipped_bridge_update_review_fields()
+                if cluster_id in canonical_existing_reviews:
+                    synthetic_review_updates.append({
+                        "cluster_id": cluster_id,
+                        **review_fields,
+                    })
+                else:
+                    synthetic_new_reviews.append({
+                        "cluster_ref": cluster_id,
+                        **review_fields,
+                    })
 
             new_cluster_candidates = []
             new_cluster_refs: list[tuple[str, dict]] = []
@@ -1171,7 +1257,14 @@ def _run_local_cluster_audit_impl(
                 new_cluster_refs.append((bridge_ref, validated))
                 new_cluster_candidates.append(validated)
 
-            assigned_new_clusters = deps.normalize_local_clusters(domain, collection, new_cluster_candidates) if new_cluster_candidates else []
+            assigned_new_clusters = []
+            if new_cluster_candidates:
+                normalized_scope = deps.normalize_local_clusters(
+                    domain,
+                    collection,
+                    [*scope_clusters, *new_cluster_candidates],
+                )
+                assigned_new_clusters = normalized_scope[len(scope_clusters):]
             bridge_ref_map = {
                 bridge_ref: assigned_new_clusters[idx]
                 for idx, (bridge_ref, _candidate) in enumerate(new_cluster_refs)
@@ -1179,7 +1272,7 @@ def _run_local_cluster_audit_impl(
             }
 
             normalized_new_reviews = []
-            for idx, review in enumerate(new_reviews, start=1):
+            for idx, review in enumerate([*filtered_new_reviews, *synthetic_new_reviews], start=1):
                 if not isinstance(review, dict):
                     raise EnrichmentError(f"new_reviews[{idx}] must be an object")
                 cluster_ref = deps._cluster_audit_review_ref(review)
@@ -1196,11 +1289,16 @@ def _run_local_cluster_audit_impl(
             bridge_refs = {**existing_cluster_by_id, **bridge_ref_map}
 
             scope_work = sorted([
-                *[cluster for cluster in scope_clusters if str(cluster.get("cluster_id", "")).strip() not in updated_cluster_ids],
+                *[cluster for cluster in scope_clusters if str(cluster.get("cluster_id", "")).strip() not in applied_update_cluster_ids],
                 *updated_scope_rows,
                 *assigned_new_clusters,
             ], key=lambda c: c.get("cluster_id", ""))
-            reviews_work, reviewed_cluster_ids = deps._cluster_audit_apply_review_delta(scope_existing_rows, review_updates, normalized_new_reviews, bridge_refs)
+            reviews_work, reviewed_cluster_ids = deps._cluster_audit_apply_review_delta(
+                scope_existing_rows,
+                [*filtered_review_updates, *synthetic_review_updates],
+                normalized_new_reviews,
+                bridge_refs,
+            )
             required_review_ids = set(target_cluster_ids) | {
                 str(cluster.get("cluster_id", "")).strip()
                 for cluster in assigned_new_clusters

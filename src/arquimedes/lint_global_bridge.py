@@ -111,6 +111,17 @@ def _collection_context_rows(collection_refs: list[dict]) -> list[dict]:
     return sorted(rows, key=lambda row: row["collection_key"])
 
 
+def _reflection_snapshot(reflection: dict) -> dict:
+    deps = _deps()
+    return {
+        "main_takeaways": deps._dedupe_strings(deps._safe_list(reflection.get("main_takeaways", []))),
+        "main_tensions": deps._dedupe_strings(deps._safe_list(reflection.get("main_tensions", []))),
+        "open_questions": deps._dedupe_strings(deps._safe_list(reflection.get("open_questions", []))),
+        "helpful_new_sources": deps._dedupe_strings(deps._safe_list(reflection.get("helpful_new_sources", []))),
+        "why_this_concept_matters": str(reflection.get("why_this_concept_matters", "")).strip(),
+    }
+
+
 def _local_cluster_snapshot(cluster: dict, reflection_map: dict[str, dict]) -> dict | None:
     deps = _deps()
     cluster_id = str(cluster.get("cluster_id", "")).strip()
@@ -135,17 +146,15 @@ def _local_cluster_snapshot(cluster: dict, reflection_map: dict[str, dict]) -> d
             if str(material_id).strip()
         ],
         "confidence": float(cluster.get("confidence", 0.0) or 0.0),
-        "reflection": {
-            "main_takeaways": deps._dedupe_strings(deps._safe_list(reflection.get("main_takeaways", [])))[:4],
-            "main_tensions": deps._dedupe_strings(deps._safe_list(reflection.get("main_tensions", [])))[:4],
-            "open_questions": deps._dedupe_strings(deps._safe_list(reflection.get("open_questions", [])))[:4],
-            "helpful_new_sources": deps._dedupe_strings(deps._safe_list(reflection.get("helpful_new_sources", [])))[:4],
-            "why_this_concept_matters": str(reflection.get("why_this_concept_matters", "")).strip(),
-        },
+        "reflection": _reflection_snapshot(reflection),
     }
 
 
-def _bridge_memory_snapshot(clusters: list[dict]) -> list[dict]:
+def _bridge_memory_snapshot(
+    clusters: list[dict],
+    local_cluster_index: dict[str, dict] | None = None,
+    collection_context_by_key: dict[str, dict] | None = None,
+) -> list[dict]:
     deps = _deps()
     rows = []
     for row in clusters:
@@ -154,30 +163,54 @@ def _bridge_memory_snapshot(clusters: list[dict]) -> list[dict]:
         bridge_id = _safe_cluster_id(row)
         if not bridge_id:
             continue
+        member_rows = []
+        collection_keys: set[str] = set()
+        for member in _dict_rows(row.get("member_local_clusters", [])):
+            cluster_id = str(member.get("cluster_id", "")).strip()
+            if not cluster_id:
+                continue
+            current = (local_cluster_index or {}).get(cluster_id, member)
+            collection_key = str(current.get("collection_key", "")).strip() or f"{str(current.get('domain', '')).strip()}/{str(current.get('collection', '')).strip()}"
+            if collection_key:
+                collection_keys.add(collection_key)
+            member_row = {
+                "cluster_id": cluster_id,
+                "collection_key": collection_key,
+                "canonical_name": str(current.get("canonical_name", "")).strip(),
+                "descriptor": str(current.get("descriptor", "")).strip(),
+            }
+            reflection = current.get("reflection")
+            if isinstance(reflection, dict):
+                member_row["reflection"] = _reflection_snapshot(reflection)
+            member_rows.append(member_row)
         rows.append(
             {
                 "bridge_id": bridge_id,
                 "canonical_name": str(row.get("canonical_name", "")).strip(),
                 "descriptor": str(row.get("descriptor", "")).strip(),
                 "aliases": deps._dedupe_strings(deps._safe_list(row.get("aliases", [])))[:8],
-                "member_local_clusters": [
-                    {
-                        "cluster_id": str(member.get("cluster_id", "")).strip(),
-                        "collection_key": str(member.get("collection_key", "")).strip() or f"{str(member.get('domain', '')).strip()}/{str(member.get('collection', '')).strip()}",
-                        "canonical_name": str(member.get("canonical_name", "")).strip(),
-                    }
-                    for member in _dict_rows(row.get("member_local_clusters", []))
-                    if isinstance(member, dict) and str(member.get("cluster_id", "")).strip()
-                ],
+                "member_local_clusters": member_rows,
                 "bridge_takeaways": deps._dedupe_strings(deps._safe_list(row.get("bridge_takeaways", [])))[:6],
                 "bridge_open_questions": deps._dedupe_strings(deps._safe_list(row.get("bridge_open_questions", [])))[:6],
                 "why_this_bridge_matters": str(row.get("why_this_bridge_matters", "")).strip(),
+                "supporting_collection_reflections": [
+                    collection_context_by_key[key]
+                    for key in sorted(collection_keys)
+                    if collection_context_by_key and key in collection_context_by_key
+                ],
             }
         )
     return sorted(rows, key=lambda row: (row["canonical_name"].casefold(), row["bridge_id"]))
 
 
-def _global_bridge_inputs(root: Path, local_clusters: list[dict], collection_refs: list[dict]) -> dict:
+def _global_bridge_inputs(
+    root: Path,
+    local_clusters: list[dict],
+    collection_refs: list[dict],
+    *,
+    previous_cluster_fingerprints: dict[str, str] | None = None,
+    previous_collection_fingerprints: dict[str, str] | None = None,
+) -> dict:
     deps = _deps()
     reflection_map = _local_cluster_reflection_map(root)
     local_rows = [
@@ -187,6 +220,7 @@ def _global_bridge_inputs(root: Path, local_clusters: list[dict], collection_ref
         if snapshot is not None
     ]
     local_rows = sorted(local_rows, key=lambda row: (row["collection_key"], row["canonical_name"].casefold(), row["cluster_id"]))
+    local_cluster_index = {row["cluster_id"]: row for row in local_rows}
     collection_context = _collection_context_rows(collection_refs)
     collection_context_by_key = {row["collection_key"]: row for row in collection_context}
     collection_scope_count = len({row["collection_key"] for row in local_rows})
@@ -198,8 +232,9 @@ def _global_bridge_inputs(root: Path, local_clusters: list[dict], collection_ref
         if isinstance(member, dict) and str(member.get("cluster_id", "")).strip()
     }
     stamp = deps._read_stamp(_global_bridge_stamp_path(root))
-    previous_cluster_fps = stamp.get("local_cluster_fingerprints", {}) if isinstance(stamp, dict) else {}
-    previous_collection_fps = stamp.get("collection_context_fingerprints", {}) if isinstance(stamp, dict) else {}
+    previous_cluster_fps = previous_cluster_fingerprints
+    if previous_cluster_fps is None:
+        previous_cluster_fps = stamp.get("local_cluster_fingerprints", {}) if isinstance(stamp, dict) else {}
     current_cluster_fps = {
         row["cluster_id"]: deps.canonical_hash(row)
         for row in local_rows
@@ -208,19 +243,12 @@ def _global_bridge_inputs(root: Path, local_clusters: list[dict], collection_ref
         row["collection_key"]: deps.canonical_hash(row)
         for row in collection_context
     }
-    changed_collection_keys = {
-        key
-        for key, fingerprint in current_collection_fps.items()
-        if previous_collection_fps.get(key) != fingerprint
-    }
     pending_local_clusters = []
     for row in local_rows:
         cluster_id = row["cluster_id"]
-        collection_key = row["collection_key"]
         if (
             not existing_bridges
             or previous_cluster_fps.get(cluster_id) != current_cluster_fps.get(cluster_id)
-            or collection_key in changed_collection_keys
             or cluster_id not in existing_member_ids
         ):
             pending_local_clusters.append(row)
@@ -236,13 +264,14 @@ def _global_bridge_inputs(root: Path, local_clusters: list[dict], collection_ref
     }
     memory = {
         "kind": "global_bridge_memory",
-        "bridges": _bridge_memory_snapshot(existing_bridges),
+        "bridges": _bridge_memory_snapshot(existing_bridges, local_cluster_index, collection_context_by_key),
     }
-    fingerprint = deps.canonical_hash({"packet": packet, "memory": memory})
+    fingerprint = deps.canonical_hash({"pending_local_clusters": pending_local_clusters})
     return {
         "collection_scope_count": collection_scope_count,
         "packet": packet,
         "memory": memory,
+        "all_local_clusters": local_rows,
         "existing_bridges": existing_bridges,
         "collection_context_by_key": collection_context_by_key,
         "input_fingerprint": fingerprint,
@@ -285,6 +314,9 @@ def _global_bridge_prompt(packet_path: Path, memory_path: Path) -> tuple[str, st
         "- Do not rely on name similarity alone. Use descriptors, local-cluster reflections, and collection context to judge semantic fit.\n"
         "- Global bridge canonicals should be broad, analytically meaningful, and useful as shared conceptual pages across the whole knowledge system.\n"
         "- Each bridge must also include bridge takeaways, bridge tensions, bridge open questions, helpful new sources, and why the bridge matters.\n"
+        "- Treat why_this_bridge_matters as the main prose body of the bridge page. Write it as a grounded mini-essay in 2 to 4 paragraphs, roughly 140 to 260 words, explaining the shared problem, what becomes legible only at the bridge level, and why the connector matters across collections.\n"
+        "- Use the full connected local-cluster reflections and collection signals in the packet and memory. Synthesize them into bridge-level insight instead of repeating them as slogans.\n"
+        "- Prefer 4 to 6 concrete bridge takeaways and 2 to 4 substantive tensions or questions when the evidence supports them.\n"
         "- links_to_existing may update an existing bridge's name, descriptor, aliases, and bridge-level synthesis if the pending members materially change it.\n"
         "- New bridges with members from one collection must include at least 4 local clusters. New bridges spanning multiple collections must include at least 3 local clusters.\n"
         "- Complete the full clustering pass before you answer. Return structured JSON only once, at the end.\n"
@@ -293,6 +325,7 @@ def _global_bridge_prompt(packet_path: Path, memory_path: Path) -> tuple[str, st
         f"Read the pending global bridge packet from {packet_path}.\n"
         f"Read the existing global bridge memory from {memory_path}.\n"
         "Treat both files as source material for the current bridge-clustering pass.\n"
+        "Use the connected local-cluster reflections and collection signals to write page-worthy bridge synthesis, not just short labels.\n"
         "Use links_to_existing to attach pending local clusters to existing bridges by bridge_id.\n"
         "Use new_clusters when pending local clusters should form a new global bridge instead.\n"
         "Only reference collection-local cluster ids that appear in the pending packet.\n"
@@ -391,7 +424,7 @@ def _normalize_global_bridge_response(parsed: Any, existing_bridges: list[dict],
 
 
 def _member_cluster_row(cluster: dict) -> dict:
-    return {
+    row = {
         "cluster_id": str(cluster.get("cluster_id", "")).strip(),
         "domain": str(cluster.get("domain", "")).strip(),
         "collection": str(cluster.get("collection", "")).strip(),
@@ -403,6 +436,10 @@ def _member_cluster_row(cluster: dict) -> dict:
         "wiki_path": str(cluster.get("wiki_path", "")).strip(),
         "confidence": float(cluster.get("confidence", 0.0) or 0.0),
     }
+    reflection = cluster.get("reflection")
+    if isinstance(reflection, dict):
+        row["reflection"] = _reflection_snapshot(reflection)
+    return row
 
 
 def _bridge_threshold_satisfied(member_rows: list[dict]) -> bool:
@@ -612,17 +649,15 @@ def _global_bridge_due(root: Path, local_clusters: list[dict], collection_refs: 
     bundle = _global_bridge_inputs(root, local_clusters, collection_refs)
     if bundle["collection_scope_count"] < 2:
         return False, "fewer than 2 collections"
-    if not bundle["packet"].get("pending_local_clusters", []):
-        return False, "global bridge unchanged"
     artifact_path = _global_bridge_artifact_path(root)
     stamp = deps._read_stamp(_global_bridge_stamp_path(root))
     if not artifact_path.exists():
         return True, "global bridge artifact missing"
     if not stamp:
         return True, "global bridge stamp missing"
-    if str(stamp.get("input_fingerprint", "") or "") == bundle["input_fingerprint"]:
+    if not bundle["packet"].get("pending_local_clusters", []):
         return False, "global bridge unchanged"
-    return True, "pending local clusters or collection context changed"
+    return True, "new local clusters pending"
 
 
 def _run_global_bridge_impl(
@@ -642,17 +677,11 @@ def _run_global_bridge_impl(
             "global_bridge_skipped": True,
             "global_bridge_skip_reason": "fewer than 2 collections",
         }
-    if not bundle["packet"].get("pending_local_clusters", []):
-        return {
-            "global_bridges": len(bundle["existing_bridges"]),
-            "global_bridge_skipped": True,
-            "global_bridge_skip_reason": "global bridge unchanged",
-        }
 
     artifact_path = deps._global_bridge_artifact_path(root)
     stamp_path = deps._global_bridge_stamp_path(root)
     stamp = deps._read_stamp(stamp_path)
-    if artifact_path.exists() and str(stamp.get("input_fingerprint", "") or "") == bundle["input_fingerprint"]:
+    if artifact_path.exists() and stamp and not bundle["packet"].get("pending_local_clusters", []):
         return {
             "global_bridges": len(deps._load_jsonl(artifact_path)),
             "global_bridge_skipped": True,
@@ -682,22 +711,29 @@ def _run_global_bridge_impl(
         bridges = _finalize_global_bridges(
             bundle["existing_bridges"],
             normalized,
-            bundle["packet"].get("pending_local_clusters", []),
+            bundle["all_local_clusters"],
             bundle["collection_context_by_key"],
         )
         run_at = datetime.now(timezone.utc).isoformat()
         deps._attach_run_provenance(bridges, route_signature, run_at)
         deps._write_jsonl(artifact_path, bridges)
+        post_run_bundle = _global_bridge_inputs(
+            root,
+            local_clusters,
+            collection_refs,
+            previous_cluster_fingerprints=bundle["local_cluster_fingerprints"],
+            previous_collection_fingerprints=bundle["collection_context_fingerprints"],
+        )
         deps._write_stamp(
             stamp_path,
             {
                 "bridged_at": run_at,
-                "input_fingerprint": bundle["input_fingerprint"],
+                "input_fingerprint": post_run_bundle["input_fingerprint"],
                 "local_cluster_fingerprints": bundle["local_cluster_fingerprints"],
                 "collection_context_fingerprints": bundle["collection_context_fingerprints"],
-                "pending_local_clusters": len(bundle["packet"].get("pending_local_clusters", [])),
+                "pending_local_clusters": len(post_run_bundle["packet"].get("pending_local_clusters", [])),
                 "global_bridge_count": len(bridges),
-                "collection_scope_count": bundle["collection_scope_count"],
+                "collection_scope_count": post_run_bundle["collection_scope_count"],
             },
         )
         deps._write_lint_stage_stamp(root, global_bridge_at=run_at)

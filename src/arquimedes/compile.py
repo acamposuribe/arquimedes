@@ -715,6 +715,7 @@ def compile_wiki(
 
         content = compile_pages.render_material_page(
             meta, mat_clusters, chunks, annotations, figures, related,
+            material_paths=material_paths,
             raw_file_link=raw_file_link,
             extracted_text_link=extracted_text_link,
         )

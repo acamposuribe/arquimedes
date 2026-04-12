@@ -4,6 +4,18 @@
 <section class="wiki-layout">
   <article class="wiki-body">
     {{ content_html }}
+    {% if material_figures %}
+    <section class="material-gallery">
+      <h2>Figures</h2>
+      <div class="figure-grid">
+        {% for item in material_figures %}
+        <figure class="figure-card">
+          <button class="figure-zoom" data-zoom-alt="{{ item.figure_id }}" data-zoom-caption="{{ item.caption_text }}" data-zoom-description="{{ item.description_text }}" data-zoom-group="figures" data-zoom-meta="{% if item.source_page %}p. {{ item.source_page }}{% endif %}{% if item.visual_type_text %}{% if item.source_page %} · {% endif %}{{ item.visual_type_text }}{% endif %}" data-zoom-src="{{ item.image_url }}" data-zoom-title="{{ item.figure_id }}" title="{{ item.figure_id }}" type="button"><img alt="{{ item.figure_id }}" loading="lazy" src="{{ item.image_url }}"></button>
+        </figure>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
   </article>
   <aside class="wiki-aside">
     {% if collection_url %}
@@ -23,12 +35,15 @@
       </div>
     </section>
     {% endif %}
-    {% if related_materials %}
-    <section class="panel">
-      <h2>Related materials</h2>
-      <div class="stack compact">
-        {% for item in related_materials %}
-        <a href="{{ material_url(item.material_id) }}">{{ item.title or item.material_id }}</a>
+    {% if page_thumbnails %}
+    <section class="panel thumb-panel">
+      <h2>Pages</h2>
+      <div class="thumb-strip">
+        {% for item in page_thumbnails %}
+        <button class="thumb-button" data-zoom-alt="{{ item.label }}" data-zoom-group="pages" data-zoom-src="{{ item.image_url }}" title="{{ item.label }}" type="button">
+          <img alt="{{ item.label }}" loading="lazy" src="{{ item.image_url }}">
+          <span>{{ item.label }}</span>
+        </button>
         {% endfor %}
       </div>
     </section>

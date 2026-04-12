@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from pathlib import Path, PurePosixPath
 
@@ -115,6 +116,39 @@ def material_figure_image_path(material_id: str, filename: str) -> Path | None:
     return path if path.exists() else None
 
 
+def load_material_thumbnails(material_id: str) -> list[dict]:
+    material_dir = _material_dir(material_id)
+    pages_path = material_dir / "pages.jsonl"
+    thumbs: list[dict] = []
+    if pages_path.exists():
+        for line in pages_path.read_text(encoding="utf-8").splitlines():
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(row, dict):
+                continue
+            thumb = str(row.get("thumbnail_path") or "").strip()
+            if thumb.startswith("thumbnails/"):
+                name = PurePosixPath(thumb).name
+                path = material_dir / "thumbnails" / name
+                if path.exists():
+                    thumbs.append({"page_number": int(row.get("page_number") or 0), "filename": name})
+    if thumbs:
+        return thumbs
+    thumbs_dir = material_dir / "thumbnails"
+    if not thumbs_dir.is_dir():
+        return []
+    return [{"page_number": i + 1, "filename": path.name} for i, path in enumerate(sorted(thumbs_dir.glob("page_*.png")))]
+
+
+def material_thumbnail_path(material_id: str, filename: str) -> Path | None:
+    if "/" in filename or "\\" in filename:
+        return None
+    path = _material_dir(material_id) / "thumbnails" / filename
+    return path if path.exists() else None
+
+
 def _wiki_dir(rel_path: str = "") -> tuple[str, Path]:
     path = _safe_rel_path(rel_path)
     root = get_project_root() / "wiki"
@@ -167,6 +201,14 @@ def list_domains_and_collections() -> list[dict]:
         "SELECT DISTINCT domain, collection FROM materials ORDER BY domain, collection"
     )
     return [{"domain": row["domain"], "collection": row["collection"]} for row in rows]
+
+
+def list_glossary_concepts() -> list[dict]:
+    try:
+        _, body = load_wiki_page("shared/glossary")
+    except FileNotFoundError:
+        return []
+    return [{"name": name.removesuffix(" (main)"), "path": path} for name, path in re.findall(r"\[([^\]]+)\]\((wiki/shared/bridge-concepts/[^)]+\.md)\)", body)]
 
 
 def recent_materials(limit: int = 10) -> list[dict]:

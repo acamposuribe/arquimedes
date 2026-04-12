@@ -183,6 +183,28 @@ _COLLECTION_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_
 _GRAPH_REFLECTION_DELTA_SCHEMA = '{"findings":[{"finding_id":"string(optional)","finding_type":"string","severity":"low|medium|high","summary":"string","details":"string","affected_material_ids":["material ids"],"affected_cluster_ids":["cluster ids"],"candidate_future_sources":["strings"],"candidate_bridge_links":["strings"]}]|null,"_finished":true}'
 
 
+def _progress(message: str) -> None:
+    """Emit lightweight progress logs for long-running lint operations."""
+    print(message, file=sys.stderr, flush=True)
+
+
+def _reflective_stage_label(stage: str) -> str:
+    return stage.replace("-", " ")
+
+
+def _reflective_stage_started(stage: str) -> None:
+    _progress(f"{_reflective_stage_label(stage)} started")
+
+
+def _reflective_stage_finished(stage: str) -> None:
+    _progress(f"{_reflective_stage_label(stage)} finished")
+
+
+def _reflective_stage_skipped(stage: str, reason: str) -> None:
+    detail = f": {reason}" if reason else ""
+    _progress(f"{_reflective_stage_label(stage)} skipped{detail}")
+
+
 # ---------------------------------------------------------------------------
 # Generic file helpers
 # ---------------------------------------------------------------------------
@@ -2363,6 +2385,7 @@ def run_reflective_lint(
         if "cluster-audit" in selected_stages:
             cluster_due, cluster_reason = _cluster_audit_due(root, bridge_clusters)
             if cluster_due:
+                _reflective_stage_started("cluster-audit")
                 cluster_reviews, bridge_changes = _run_cluster_audit(
                     root,
                     clusters,
@@ -2375,13 +2398,17 @@ def run_reflective_lint(
                 _refresh_sql_and_wiki()
                 clusters = _current_concepts(root)
                 bridge_clusters = load_bridge_clusters(root)
+                _reflective_stage_finished("cluster-audit")
                 skipped = False
-            elif not skip_reason:
-                skip_reason = cluster_reason
+            else:
+                _reflective_stage_skipped("cluster-audit", cluster_reason)
+                if not skip_reason:
+                    skip_reason = cluster_reason
 
         if "concept-reflection" in selected_stages:
             concept_due, concept_reason = _concept_reflection_due(root)
             if concept_due:
+                _reflective_stage_started("concept-reflection")
                 concept_refs = _run_concept_reflections(
                     root,
                     _concept_reflection_targets(root, clusters),
@@ -2394,26 +2421,34 @@ def run_reflective_lint(
                 _refresh_sql_and_wiki()
                 clusters = _current_concepts(root)
                 bridge_clusters = load_bridge_clusters(root)
+                _reflective_stage_finished("concept-reflection")
                 skipped = False
-            elif not skip_reason:
-                skip_reason = concept_reason
+            else:
+                _reflective_stage_skipped("concept-reflection", concept_reason)
+                if not skip_reason:
+                    skip_reason = concept_reason
 
         if "collection-reflection" in selected_stages:
             collection_due, collection_reason = _collection_reflection_due(root)
             if collection_due:
+                _reflective_stage_started("collection-reflection")
                 collection_refs = _run_collection_reflections(root, groups, clusters, llm_factory, tool, lint_route_signature)
                 collection_reflection_count = len(collection_refs)
                 _refresh_sql_and_wiki()
                 clusters = _current_concepts(root)
                 bridge_clusters = load_bridge_clusters(root)
+                _reflective_stage_finished("collection-reflection")
                 skipped = False
-            elif not skip_reason:
-                skip_reason = collection_reason
+            else:
+                _reflective_stage_skipped("collection-reflection", collection_reason)
+                if not skip_reason:
+                    skip_reason = collection_reason
 
         if "global-bridge" in selected_stages:
             local_clusters = load_local_clusters(root)
             global_bridge_due, global_bridge_reason = _global_bridge_due(root, local_clusters, collection_refs)
             if global_bridge_due:
+                _reflective_stage_started("global-bridge")
                 global_bridge_result = _run_global_bridges(
                     root,
                     local_clusters,
@@ -2429,11 +2464,13 @@ def run_reflective_lint(
                     _refresh_sql_and_wiki()
                     clusters = _current_concepts(root)
                     bridge_clusters = load_global_bridge_clusters(root)
+                _reflective_stage_finished("global-bridge")
                 skipped = False
             else:
                 global_bridge_count = 0
                 global_bridge_skipped = True
                 global_bridge_skip_reason = global_bridge_reason
+                _reflective_stage_skipped("global-bridge", global_bridge_reason)
                 if not skip_reason:
                     skip_reason = global_bridge_reason
 
@@ -2448,6 +2485,7 @@ def run_reflective_lint(
                 deterministic_report,
             )
             if graph_due:
+                _reflective_stage_started("graph-maintenance")
                 graph_result = _run_graph_reflection(
                     root,
                     deterministic_report,
@@ -2463,11 +2501,13 @@ def run_reflective_lint(
                 graph_skipped = bool(graph_result.get("graph_skipped", False))
                 graph_skip_reason = str(graph_result.get("graph_skip_reason", "") or "")
                 _refresh_sql_and_wiki()
+                _reflective_stage_finished("graph-maintenance")
                 skipped = False
             else:
                 graph_maintenance = 0
                 graph_skipped = True
                 graph_skip_reason = graph_reason
+                _reflective_stage_skipped("graph-maintenance", graph_reason)
                 if not skip_reason:
                     skip_reason = graph_reason
         else:

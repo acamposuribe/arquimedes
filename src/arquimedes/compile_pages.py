@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import PurePosixPath
+from urllib.parse import quote
 
 
 # ---------------------------------------------------------------------------
@@ -210,7 +211,7 @@ def _relative_link(from_path: str, to_path: str) -> str:
     """Compute a relative path between two wiki-relative paths."""
     from_dir = str(PurePosixPath(from_path).parent)
     rel = os.path.relpath(to_path, from_dir)
-    return rel
+    return quote(rel, safe="/.")
 
 
 def _render_reflection_section(title: str, reflection: dict | None) -> list[str]:
@@ -300,6 +301,7 @@ def render_material_page(
     figures: list[dict],
     related: list[dict],
     *,
+    material_paths: dict[str, str] | None = None,
     raw_file_link: str | None = None,
     extracted_text_link: str | None = None,
 ) -> str:
@@ -312,6 +314,7 @@ def render_material_page(
         annotations: list of annotation dicts from annotations.jsonl
         figures: list of figure dicts from figures/*.json
         related: pre-computed list of {material_id, title, reasons: list[str]}
+        material_paths: mapping of material_id → wiki-relative path
         raw_file_link: file:// URL or path to the original source PDF
         extracted_text_link: relative link to extracted/text.md for LLM deep-dive
     """
@@ -467,7 +470,11 @@ def render_material_page(
             rtitle = r.get("title") or r["material_id"]
             reasons = r.get("reasons") or []
             reason_str = f" — {'; '.join(reasons)}" if reasons else ""
-            lines.append(f"- {rtitle}{reason_str}")
+            rel_path = (material_paths or {}).get(r["material_id"], "")
+            if rel_path:
+                lines.append(f"- [{rtitle}]({_relative_link(page_path, rel_path)}){reason_str}")
+            else:
+                lines.append(f"- {rtitle}{reason_str}")
         lines.append("")
 
     # --- Source ---
@@ -554,6 +561,7 @@ def render_concept_page(
         if bridge_takeaways or bridge_tensions or bridge_questions or bridge_sources or why_this_bridge_matters or supporting_collection_reflections:
             lines.append("## Cross-Collection Synthesis\n")
             if why_this_bridge_matters:
+                lines.append("### Why This Bridge Matters\n")
                 lines.append(why_this_bridge_matters)
                 lines.append("")
             if bridge_takeaways:
@@ -625,16 +633,15 @@ def render_concept_page(
             domain = str(member.get("domain", "")).strip()
             collection = str(member.get("collection", "")).strip()
             material_ids = [str(mid).strip() for mid in member.get("material_ids", []) if str(mid).strip()]
-            heading = cluster_name
-            if cluster_path:
-                heading = f"[{cluster_name}]({_relative_link(page_path, cluster_path)})"
             scope_bits = []
             if domain and collection:
                 scope_bits.append(f"{domain}/{collection}")
             if material_ids:
                 scope_bits.append(f"{len(material_ids)} material{'s' if len(material_ids) != 1 else ''}")
             scope_suffix = f" ({' / '.join(scope_bits)})" if scope_bits else ""
-            lines.append(f"### {heading}{scope_suffix}\n")
+            lines.append(f"### {cluster_name}{scope_suffix}\n")
+            if cluster_path:
+                lines.append(f"- Local cluster: [{cluster_name}]({_relative_link(page_path, cluster_path)})")
 
             descriptor = str(member.get("descriptor", "")).strip()
             if descriptor:
@@ -645,13 +652,12 @@ def render_concept_page(
             if promotion_reasons:
                 lines.append(f"- Promotion: {', '.join(promotion_reasons)}")
             if material_ids:
-                lines.append("- Materials:")
                 for mid in material_ids:
                     title = material_titles.get(mid, mid)
                     if material_paths and mid in material_paths:
-                        lines.append(f"  - [{title}]({_relative_link(page_path, material_paths[mid])})")
+                        lines.append(f"- [{title}]({_relative_link(page_path, material_paths[mid])})")
                     else:
-                        lines.append(f"  - {title}")
+                        lines.append(f"- {title}")
             lines.append("")
 
     # --- By material ---

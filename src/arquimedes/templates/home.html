@@ -1,42 +1,47 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="wiki-main">
-  <article class="wiki-body">
-    <div class="page-lead">
-      <h1>Arquimedes</h1>
-      <p>Browse compiled collection pages, material pages, extracted figures, and the current local search index from one place.</p>
-    </div>
-    {% if index_missing %}
-    <section class="notice-box">
-      <strong>Index not ready.</strong> Run <code>arq index rebuild</code> first to unlock search and collection navigation.
-    </section>
-    {% endif %}
-    <div class="home-grid">
-      <section>
-        <h2>Collections</h2>
-        {% if collections %}
-        <ul class="wiki-list">
-          {% for item in collections %}
-          <li><a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">{{ item.collection }}</a> <span class="meta-line">({{ item.domain }})</span></li>
-          {% endfor %}
-        </ul>
-        {% else %}
-        <p>No indexed collections yet.</p>
-        {% endif %}
-      </section>
-      <section>
-        <h2>Recent materials</h2>
-        {% if recent_materials %}
-        <div class="stack compact">
-          {% for item in recent_materials %}
-          {% include "partials/material_card.html" %}
-          {% endfor %}
-        </div>
-        {% else %}
-        <p>No indexed materials yet.</p>
-        {% endif %}
-      </section>
-    </div>
-  </article>
+<section class="home-hero">
+  <h1>Arquimedes</h1>
+  <p class="home-hero-desc">Architecture knowledge base — browse the compiled wiki, search materials, and explore extracted figures.</p>
+  <form action="/search" class="home-search" method="get">
+    <input name="q" placeholder="Search materials, concepts, annotations…" autocomplete="off">
+    <button type="submit">Search</button>
+  </form>
 </section>
+
+{% if index_missing %}
+<div class="notice-box">
+  <strong>Index not ready.</strong> Run <code>arq index rebuild</code> to unlock search and collection navigation.
+</div>
+{% endif %}
+
+<div class="home-grid">
+  <section class="home-section">
+    <h2>Collections</h2>
+    {% if collections %}
+    <ul class="wiki-list">
+      {% for item in collections %}
+      <li>
+        <a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">{{ item.collection }}</a>
+      </li>
+      {% endfor %}
+    </ul>
+    {% else %}
+    <p class="meta-line">No indexed collections yet.</p>
+    {% endif %}
+  </section>
+
+  <section class="home-section">
+    <h2>Recent materials</h2>
+    {% if recent_materials %}
+    <div class="stack">
+      {% for item in recent_materials %}
+      {% include "partials/material_card.html" %}
+      {% endfor %}
+    </div>
+    {% else %}
+    <p class="meta-line">No indexed materials yet.</p>
+    {% endif %}
+  </section>
+</div>
 {% endblock %}

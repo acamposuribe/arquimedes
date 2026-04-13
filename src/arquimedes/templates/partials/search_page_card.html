@@ -1,0 +1,12 @@
+<article class="material-card search-page-card">
+  <div class="material-card-top">
+    <a href="{{ item.url }}">{{ item.title }}</a>
+    {% if item.meta_tail %}<span>{{ item.meta_tail }}</span>{% endif %}
+  </div>
+  {% if item.summary %}
+  <p>{{ item.summary[:300] ~ ('...' if item.summary|length > 300 else '') }}</p>
+  {% endif %}
+  {% if item.meta_line %}
+  <p class="meta-line">{{ item.meta_line }}</p>
+  {% endif %}
+</article>

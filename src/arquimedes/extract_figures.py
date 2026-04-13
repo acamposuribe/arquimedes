@@ -14,6 +14,9 @@ from arquimedes.models import Figure
 MIN_IMAGE_WIDTH = 100
 MIN_IMAGE_HEIGHT = 100
 MIN_IMAGE_AREA = 15000  # skip tiny decorative images
+
+# Formats browsers can display natively; anything else gets converted to PNG
+_BROWSER_SAFE_EXTS = {"png", "jpg", "jpeg", "webp", "gif", "bmp"}
 FULL_PAGE_BBOX_THRESHOLD = 0.9
 TEXT_HEAVY_PAGE_THRESHOLD = 400
 
@@ -107,7 +110,46 @@ def extract_embedded_images(pdf_path: Path, output_dir: Path) -> list[Figure]:
                 continue
             seen_hashes.add(content_hash)
 
-            ext = base_image.get("ext", "png")
+            ext = base_image.get("ext", "png").lower()
+            cs_name = base_image.get("cs-name", "")
+
+            # Separation colorspaces (e.g. CMYK Black channel) store raw ink-density
+            # values — 0 = no ink (white paper), 255 = full ink (black) — which render
+            # inverted when treated as screen-space greyscale.  Non-browser-safe formats
+            # (jpx, jp2, etc.) also need transcoding.  In both cases we render the page
+            # region via get_pixmap(), which applies every PDF transform (including Decode
+            # arrays) and returns correct screen-space RGB pixels.
+            needs_render = ext not in _BROWSER_SAFE_EXTS or "Separation" in cs_name
+            if needs_render:
+                rendered = False
+                # Preferred path: render the page clip where this image sits.
+                img_bbox = _find_image_bbox(page, xref)
+                if img_bbox:
+                    try:
+                        clip = fitz.Rect(img_bbox)
+                        # Scale so the output resolution matches the embedded image size.
+                        sx = width / max(clip.width, 1)
+                        sy = height / max(clip.height, 1)
+                        pix = page.get_pixmap(
+                            matrix=fitz.Matrix(sx, sy),
+                            clip=clip,
+                            colorspace=fitz.csRGB,
+                        )
+                        image_bytes = pix.tobytes("png")
+                        ext = "png"
+                        rendered = True
+                    except Exception:
+                        pass
+                # Fallback: Pixmap from doc context (handles jpx / CMYK multi-channel).
+                if not rendered:
+                    try:
+                        pix = fitz.Pixmap(doc, xref)
+                        if pix.n - pix.alpha > 3:
+                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                        image_bytes = pix.tobytes("png")
+                        ext = "png"
+                    except Exception:
+                        pass  # keep original bytes and extension as last resort
 
             fig_counter += 1
             fig_id = f"fig_{fig_counter:04d}"

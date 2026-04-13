@@ -1,8 +1,38 @@
 <article class="material-card">
+  {% set summary_text = item.summary or '' %}
+  {% set collection_label = item.collection or '_general' %}
+  {% set document_type_text = item.document_type or '' %}
   <div class="material-card-top">
-    <a href="{{ material_url(item.material_id) if item.material_id is defined else '#' }}">{{ item.title or item.material_id }}</a>
+    <a href="{{ material_url(item.material_id, query=query if query is defined else '', depth=3 if query is defined and query else none, scope=scope if scope is defined else '') if item.material_id is defined else '#' }}">{{ item.title or item.material_id }}</a>
     {% if item.year %}<span>{{ item.year }}</span>{% endif %}
   </div>
-  <p>{{ item.summary[:280] ~ ('…' if item.summary|length > 280 else '') }}</p>
-  <p class="meta-line"><a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">{{ item.collection }}</a> · {{ item.document_type }}</p>
+  <p>{{ truncate_words(summary_text, 44) }}</p>
+  {% if item.preview_images is defined and item.preview_images %}
+  <div class="material-card-previews">
+    {% for preview in item.preview_images[:4] %}
+    <img alt="{{ item.title or item.material_id }}" loading="lazy" src="{{ preview.image_url }}" title="{{ preview.figure_id or (item.title or item.material_id) }}">
+    {% endfor %}
+  </div>
+  {% endif %}
+  <p class="meta-line">
+    <a href="{{ wiki_url('wiki/' ~ (item.domain or 'research') ~ '/' ~ collection_label ~ '/_index.md') }}">{{ collection_label }}</a>
+    {% if document_type_text %} · {{ document_type_text }}{% endif %}
+  </p>
+  {% if item.concepts is defined and item.concepts %}
+  <p class="meta-line">Concepts: {% for concept in item.concepts[:3] %}{% if not loop.first %} · {% endif %}{{ concept.concept_name or concept }}{% endfor %}</p>
+  {% endif %}
+  {% if scope is defined and scope == 'all' and item.chunks is defined and item.chunks %}
+  <div class="search-hit-group">
+    <div class="search-hit-label">Matching passages</div>
+    <div class="search-hit-list">
+      {% for chunk in item.chunks[:2] %}
+      {% set pages = chunk.source_pages or [] %}
+      <div class="search-hit-item">
+        <span class="search-hit-pages">{% if pages %}{% if pages|length == 1 %}p. {{ pages[0] }}{% else %}pp. {{ pages|join(', ') }}{% endif %}{% endif %}</span>
+        <span>{{ chunk.summary or chunk.text or '' }}</span>
+      </div>
+      {% endfor %}
+    </div>
+  </div>
+  {% endif %}
 </article>

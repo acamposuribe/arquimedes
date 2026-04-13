@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 
 import arquimedes.read as read_mod
 import arquimedes.serve as serve_mod
+from arquimedes.search import ChunkHit, ConceptHit, MaterialEvidence
 
 
 def _write_json(path: Path, data) -> None:
@@ -85,6 +86,83 @@ def test_material_route_rewrites_links(tmp_path, monkeypatch):
     assert 'data-zoom-src="/thumbnails/mat_001/page_0001.png"' in response.text
     assert 'data-zoom-group="figures"' in response.text
     assert '<blockquote>\n<p>Gallery caption</p>\n</blockquote>' not in response.text
+    assert 'aria-label="Search within page"' in response.text
+
+
+def test_material_route_moves_related_materials_to_end(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material One",
+        "domain": "research",
+        "collection": "papers",
+    })
+    (root / "wiki" / "research" / "papers" / "mat_001.md").write_text(
+        "# Material One\n\n"
+        "## Related Materials\n\n"
+        "- [Other](other.md)\n\n"
+        "## Source\n\n"
+        "**Pages:** 10\n",
+        encoding="utf-8",
+    )
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_001")
+    assert response.status_code == 200
+    assert response.text.index(">Source</h2>") < response.text.index(">Related Materials</h2>")
+    assert 'class="related-materials-list"' in response.text
+
+
+def test_material_route_renders_figures_before_related_materials(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material One",
+        "domain": "research",
+        "collection": "papers",
+    })
+    _write_json(root / "extracted" / "mat_001" / "figures" / "fig_0001.json", {
+        "figure_id": "fig_0001",
+        "image_path": "figures/fig_0001.png",
+        "caption": "Caption",
+    })
+    (root / "extracted" / "mat_001" / "figures" / "fig_0001.png").write_bytes(b"png")
+    (root / "wiki" / "research" / "papers" / "mat_001.md").write_text(
+        "# Material One\n\n"
+        "## Figures\n\n"
+        "**fig_0001**\n"
+        "![Fig](figures/fig_0001.png)\n\n"
+        "## Related Materials\n\n"
+        "- [Other](other.md)\n\n"
+        "## Source\n\n"
+        "**Pages:** 10\n",
+        encoding="utf-8",
+    )
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_001")
+    assert response.status_code == 200
+    assert response.text.index(">Figures</h2>") < response.text.index(">Related Materials</h2>")
+
+
+def test_material_route_marks_metadata_table_for_friendly_ui(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material One",
+        "domain": "research",
+        "collection": "papers",
+    })
+    (root / "wiki" / "research" / "papers" / "mat_001.md").write_text(
+        "# Material One\n\n"
+        "## Metadata\n\n"
+        "| Field | Value |\n"
+        "| --- | --- |\n"
+        "| Authors | Someone |\n",
+        encoding="utf-8",
+    )
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_001")
+    assert response.status_code == 200
+    assert 'class="metadata-table"' in response.text
 
 
 def test_wiki_directory_listing_route(tmp_path, monkeypatch):
@@ -160,19 +238,78 @@ def test_search_route_renders_results(tmp_path, monkeypatch):
     con.commit()
     con.close()
 
+    captured = {}
+
     class Result:
         query = "material"
         total = 1
         canonical_clusters = []
-        results = [type("Card", (), {"material_id": "mat_001", "title": "Material One", "summary": "Summary", "domain": "research", "collection": "papers", "document_type": "paper", "year": "2024"})()]
+        results = [type("Card", (), {
+            "material_id": "mat_001",
+            "title": "Material One",
+            "summary": "Summary",
+            "domain": "research",
+            "collection": "papers",
+            "document_type": "paper",
+            "year": "2024",
+            "concepts": [type("Concept", (), {"concept_name": "Musee Imaginaire"})()],
+            "chunks": [type("Chunk", (), {"source_pages": [7], "summary": "The Musee Imaginaire frames architecture as a portable archive."})()],
+        })()]
+
+    def _fake_search(*args, **kwargs):
+        captured["depth"] = kwargs.get("depth")
+        captured["scope"] = kwargs.get("scope")
+        return Result()
+
+    monkeypatch.setattr(serve_mod.search_mod, "search", _fake_search)
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/search?q=material&scope=author")
+    assert response.status_code == 200
+    assert captured["depth"] == 3
+    assert captured["scope"] == "author"
+    assert "Material One" in response.text
+    assert "Matching passages" not in response.text
+    assert "Musee Imaginaire" in response.text
+    assert "/materials/mat_001?q=material&amp;depth=3&amp;scope=author" in response.text
+    assert "/wiki/research/papers" in response.text
+
+
+def test_search_route_renders_collection_and_concept_sections(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+
+    class Result:
+        query = "archive"
+        total = 1
+        collection_pages = [
+            type("Collection", (), {
+                "domain": "research",
+                "collection": "papers",
+                "title": "Research / Papers",
+                "wiki_path": "wiki/research/papers/_index.md",
+                "material_count": 4,
+                "summary": "This collection treats architecture as archival imagination.",
+            })()
+        ]
+        canonical_clusters = [
+            type("Cluster", (), {
+                "canonical_name": "Archival Habitat Cluster",
+                "wiki_path": "wiki/research/papers/concepts/archival-habitat-cluster.md",
+                "material_count": 2,
+                "summary": "Architecture can act as a living archive.",
+                "domain": "research",
+                "collection": "papers",
+            })()
+        ]
+        results = []
 
     monkeypatch.setattr(serve_mod.search_mod, "search", lambda *args, **kwargs: Result())
     client = TestClient(serve_mod.create_app())
-    response = client.get("/search?q=material")
+    response = client.get("/search?q=archive&scope=all")
     assert response.status_code == 200
-    assert "Material One" in response.text
-    assert "/wiki/research/papers" in response.text
-    assert "/wiki/research/papers/concepts" in response.text
+    assert "Collections" in response.text
+    assert "Concepts" in response.text
+    assert "Research / Papers" in response.text
+    assert "Archival Habitat Cluster" in response.text
 
 
 def test_update_and_freshness_endpoints(tmp_path, monkeypatch):
@@ -182,3 +319,213 @@ def test_update_and_freshness_endpoints(tmp_path, monkeypatch):
     client = TestClient(serve_mod.create_app())
     assert client.get("/api/freshness").json()["message"] == "Up to date"
     assert client.post("/update").json()["message"] == "Updated"
+
+
+def test_material_route_renders_search_hits(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material One",
+        "domain": "research",
+        "collection": "papers",
+        "source_path": "Research/mat_001.pdf",
+    })
+    (root / "Library" / "Research" / "mat_001.pdf").write_text("pdf", encoding="utf-8")
+    (root / "extracted" / "mat_001" / "text.md").write_text("Extracted", encoding="utf-8")
+    (root / "wiki" / "research" / "papers" / "mat_001.md").write_text("Material body", encoding="utf-8")
+    monkeypatch.setattr(
+        serve_mod.search_mod,
+        "search_material_evidence",
+        lambda *args, **kwargs: MaterialEvidence(
+            query="Musee Imaginaire",
+            material_id="mat_001",
+            depth=3,
+            chunks=[
+                ChunkHit(
+                    chunk_id="chk_001",
+                    summary="Portable archive framing.",
+                    source_pages=[7],
+                    emphasized=False,
+                    content_class="argument",
+                    rank=1,
+                    text="The Musee Imaginaire frames architecture as a portable archive of images.",
+                )
+            ],
+            concepts=[
+                ConceptHit(
+                    concept_name="Musee Imaginaire",
+                    relevance="high",
+                    source_pages=[7],
+                    evidence_spans=["Musee Imaginaire"],
+                    confidence=1.0,
+                    rank=1,
+                )
+            ],
+        ),
+    )
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_001?q=Musee%20Imaginaire&depth=3")
+    assert response.status_code == 200
+    assert "Search hits for" in response.text
+    assert "Portable archive framing." in response.text
+    assert "<mark>Musee</mark> <mark>Imaginaire</mark>" in response.text
+    assert "Concept matches" in response.text
+    assert 'aria-label="Clear page search"' in response.text
+    assert 'href="/materials/mat_001"' in response.text
+
+
+def test_collection_page_uses_collection_search_label(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "research" / "papers" / "_index.md").write_text("Collection body", encoding="utf-8")
+    captured = {}
+
+    class Result:
+        query = "archive"
+        total = 1
+        collection_pages = []
+        canonical_clusters = []
+        results = [type("Card", (), {
+            "material_id": "mat_001",
+            "title": "Material One",
+            "summary": "Summary",
+            "domain": "research",
+            "collection": "papers",
+            "document_type": "paper",
+            "year": "2024",
+            "concepts": [],
+            "chunks": [type("Chunk", (), {"source_pages": [3], "summary": "Archival framing."})()],
+        })()]
+
+    def _fake_search(*args, **kwargs):
+        captured["facet"] = kwargs.get("facets")
+        captured["collection"] = kwargs.get("collection")
+        return Result()
+
+    monkeypatch.setattr(serve_mod.search_mod, "search", _fake_search)
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/wiki/research/papers?q=archive")
+    assert response.status_code == 200
+    assert "Search This Collection" in response.text
+    assert "Search This Material" not in response.text
+    assert 'aria-label="Clear page search"' in response.text
+    assert 'href="/wiki/research/papers"' in response.text
+    assert captured["collection"] == "papers"
+    assert captured["facet"] == ["domain==research"]
+
+
+def test_collection_page_renders_material_cards_with_word_truncation_and_previews(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material One",
+        "domain": "research",
+        "collection": "papers",
+        "summary": {"value": " ".join(f"word{i:02d}" for i in range(1, 51))},
+        "document_type": {"value": "paper"},
+        "year": "2024",
+    })
+    _write_json(root / "extracted" / "mat_001" / "figures" / "fig_0001.json", {
+        "figure_id": "fig_0001",
+        "image_path": "figures/fig_0001.png",
+        "caption": "Preview image",
+    })
+    (root / "extracted" / "mat_001" / "figures" / "fig_0001.png").write_bytes(b"png")
+    (root / "wiki" / "research" / "papers" / "_index.md").write_text(
+        "# Research / Papers\n\n"
+        "## Overview\n\n"
+        "Intro text.\n\n"
+        "## Materials\n\n"
+        "- [Material One](mat_001.md) — old summary\n\n"
+        "## Key Concepts\n\n"
+        "- [Archive](concepts/archive.md)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "materials_for_collection",
+        lambda domain, collection: [{"material_id": "mat_001", "title": "Material One"}] if (domain, collection) == ("research", "papers") else [],
+    )
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/wiki/research/papers")
+    assert response.status_code == 200
+    assert 'class="material-card"' in response.text
+    assert "word44..." in response.text
+    assert "word45" not in response.text
+    assert '/figures/mat_001/fig_0001.png' in response.text
+    assert response.text.index(">Materials</h2>") < response.text.index(">Key Concepts</h2>")
+
+
+def test_concept_page_uses_concept_search_label_and_linked_material_scope(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "research" / "papers" / "concepts").mkdir(parents=True, exist_ok=True)
+    concept_path = root / "wiki" / "research" / "papers" / "concepts" / "archival-habitat.md"
+    concept_path.write_text("Concept body", encoding="utf-8")
+    captured = {}
+
+    class Result:
+        query = "archive"
+        total = 0
+        collection_pages = []
+        canonical_clusters = []
+        results = []
+
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "wiki_page_record",
+        lambda path: {"page_type": "concept", "page_id": "cluster_001", "path": "wiki/research/papers/concepts/archival-habitat.md"},
+    )
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "materials_for_concept",
+        lambda cluster_id: [{"material_id": "mat_001", "title": "Material One"}] if cluster_id == "cluster_001" else [],
+    )
+
+    def _fake_search(*args, **kwargs):
+        captured["material_ids"] = kwargs.get("material_ids")
+        return Result()
+
+    monkeypatch.setattr(serve_mod.search_mod, "search", _fake_search)
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/wiki/research/papers/concepts/archival-habitat?q=archive")
+    assert response.status_code == 200
+    assert "Search This Concept" in response.text
+    assert "Search This Material" not in response.text
+    assert captured["material_ids"] == ["mat_001"]
+
+
+def test_concept_page_falls_back_to_markdown_linked_materials(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material One",
+        "domain": "research",
+        "collection": "papers",
+    })
+    (root / "wiki" / "research" / "papers" / "mat_001.md").write_text("Material body", encoding="utf-8")
+    concept_path = root / "wiki" / "research" / "papers" / "concepts" / "archival-habitat.md"
+    concept_path.parent.mkdir(parents=True, exist_ok=True)
+    concept_path.write_text(
+        "# Archival Habitat\n\n## By Material\n\n- [Material One](../mat_001.md)\n",
+        encoding="utf-8",
+    )
+    captured = {}
+
+    class Result:
+        query = "archive"
+        total = 0
+        collection_pages = []
+        canonical_clusters = []
+        results = []
+
+    monkeypatch.setattr(serve_mod.read_mod, "wiki_page_record", lambda path: None)
+
+    def _fake_search(*args, **kwargs):
+        captured["material_ids"] = kwargs.get("material_ids")
+        return Result()
+
+    monkeypatch.setattr(serve_mod.search_mod, "search", _fake_search)
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/wiki/research/papers/concepts/archival-habitat?q=archive")
+    assert response.status_code == 200
+    assert "Search This Concept" in response.text
+    assert captured["material_ids"] == ["mat_001"]

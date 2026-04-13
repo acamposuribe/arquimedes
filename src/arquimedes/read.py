@@ -6,6 +6,7 @@ import json
 import re
 import sqlite3
 from pathlib import Path, PurePosixPath
+from urllib.parse import unquote, urlsplit
 
 from arquimedes.compile_pages import _material_wiki_path
 from arquimedes.config import get_library_root, get_project_root
@@ -196,6 +197,113 @@ def material_id_for_wiki_path(path: Path) -> str | None:
     return material_id
 
 
+def wiki_page_record(path: Path) -> dict | None:
+    project_root = get_project_root()
+    try:
+        rel_path = path.relative_to(project_root).as_posix()
+    except ValueError:
+        return None
+    rows = _index_rows(
+        "SELECT page_type, page_id, title, path, domain, collection FROM wiki_pages WHERE path = ? LIMIT 1",
+        (rel_path,),
+    )
+    if rows:
+        return dict(rows[0])
+    try:
+        rows = _index_rows(
+            """
+            SELECT 'concept' AS page_type, cluster_id AS page_id, canonical_name AS title,
+                   wiki_path AS path, domain, collection
+            FROM local_concept_clusters
+            WHERE wiki_path = ?
+            LIMIT 1
+            """,
+            (rel_path,),
+        )
+        if rows:
+            return dict(rows[0])
+        rows = _index_rows(
+            """
+            SELECT 'concept' AS page_type, cluster_id AS page_id, canonical_name AS title,
+                   wiki_path AS path, 'shared' AS domain, 'bridge-concepts' AS collection
+            FROM concept_clusters
+            WHERE wiki_path = ?
+            LIMIT 1
+            """,
+            (rel_path,),
+        )
+        return dict(rows[0]) if rows else None
+    except sqlite3.OperationalError:
+        return None
+
+
+def materials_for_concept(cluster_id: str) -> list[dict]:
+    rows = _index_rows(
+        """
+        SELECT DISTINCT m.material_id, m.title
+        FROM materials m
+        JOIN (
+            SELECT material_id FROM local_cluster_materials WHERE cluster_id = ?
+            UNION
+            SELECT material_id FROM cluster_materials WHERE cluster_id = ?
+        ) scoped ON scoped.material_id = m.material_id
+        ORDER BY m.title
+        """,
+        (cluster_id, cluster_id),
+    )
+    return [dict(row) for row in rows]
+
+
+def _resolve_wiki_target(base_rel: PurePosixPath, target: str) -> PurePosixPath | None:
+    parsed = urlsplit((target or "").strip().strip("<>"))
+    raw_path = unquote(parsed.path or "").strip()
+    if not raw_path or parsed.scheme in {"http", "https", "mailto", "data", "javascript", "file"}:
+        return None
+    if raw_path.startswith("/"):
+        return PurePosixPath(raw_path.lstrip("/"))
+    if raw_path.startswith("wiki/"):
+        return PurePosixPath(raw_path)
+
+    parts: list[str] = []
+    for part in (*base_rel.parent.parts, *PurePosixPath(raw_path).parts):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+            continue
+        parts.append(part)
+    return PurePosixPath(*parts)
+
+
+def materials_for_concept_page(path: Path, body: str) -> list[dict]:
+    project_root = get_project_root()
+    try:
+        base_rel = PurePosixPath(path.relative_to(project_root).as_posix())
+    except ValueError:
+        return []
+
+    seen: set[str] = set()
+    materials: list[dict] = []
+    for match in re.finditer(r"\[[^\]]+\]\(([^)]+)\)", body):
+        resolved = _resolve_wiki_target(base_rel, match.group(1))
+        if not resolved or resolved.parts[:1] != ("wiki",):
+            continue
+        if resolved.suffix != ".md" or resolved.name == "_index.md" or len(resolved.parts) != 4:
+            continue
+        material_id = resolved.stem
+        if material_id in seen:
+            continue
+        try:
+            meta = load_material_meta(material_id)
+        except FileNotFoundError:
+            continue
+        seen.add(material_id)
+        materials.append({"material_id": material_id, "title": str(meta.get("title") or material_id)})
+    return materials
+
+
 def list_domains_and_collections() -> list[dict]:
     rows = _index_rows(
         "SELECT DISTINCT domain, collection FROM materials ORDER BY domain, collection"
@@ -209,6 +317,14 @@ def list_glossary_concepts() -> list[dict]:
     except FileNotFoundError:
         return []
     return [{"name": name.removesuffix(" (main)"), "path": path} for name, path in re.findall(r"\[([^\]]+)\]\((wiki/shared/bridge-concepts/[^)]+\.md)\)", body)]
+
+
+def materials_for_collection(domain: str, collection: str) -> list[dict]:
+    rows = _index_rows(
+        "SELECT material_id, title FROM materials WHERE domain=? AND collection=? ORDER BY title",
+        (domain, collection),
+    )
+    return [dict(row) for row in rows]
 
 
 def recent_materials(limit: int = 10) -> list[dict]:

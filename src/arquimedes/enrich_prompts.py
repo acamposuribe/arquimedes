@@ -229,7 +229,7 @@ Output schema:
 Field instructions:
 
 summary:
-- A dense but readable synthesis of the document's distinctive contribution. Do not merely restate the topic. Name the central argument, method, archive/project/case focus when important, and what the document helps the reader understand that is not obvious from the title alone. Prefer intellectual specificity and nuance over a bland generic abstract.
+- A dense but readable synthesis of the document's distinctive contribution. Do not merely restate the topic. Name the central argument, method, archive/project/case focus when important, and what the document helps the reader understand that is not obvious from the title alone. Prefer intellectual specificity and nuance over a bland generic abstract. Ideally between 150-300 words, but quality over length. If the document is very short, a concise summary is fine. If the document is very long, capture the core contributions and what makes them distinctive.
 
 document_type:
 - One of: regulation|catalogue|monograph|paper|lecture_note|precedent|technical_spec|site_document
@@ -240,11 +240,11 @@ keywords:
 - When a distinctive in-text phrase is central, preserve it instead of replacing it with a broader paraphrase.
 
 methodological_conclusions:
-- 2-4 short (30-40 words each), reusable statements about how the document says methods should be used, why they matter, and what methodological stance or procedure it contributes. Keep them concrete and archival/architectural rather than generic.
+- Max 5 short (50-70 words each), reusable statements about how the document says methods should be used, why they matter, and what methodological stance or procedure it contributes. Keep them concrete and archival/architectural rather than generic. Avoid redundancy.
 - Keep these methodological.
 
 main_content_learnings:
-- 2-4 short (30-40 words each), reusable statements about what the document contributes to architectural knowledge. Focus on the main claims, conceptual contributions, or historically useful learnings that another reader could reuse across materials.
+- Max 5 short (50-70 words each), reusable statements about what the document contributes to architectural knowledge. Focus on the main claims, conceptual contributions, or historically useful learnings that another reader could reuse across materials.
 - Preserve the document's sharpest named concepts and formulations when they are central to the claim.
 
 bibliography:
@@ -453,7 +453,7 @@ _CHUNK_BATCH_USER_TEMPLATE = """\
 For each chunk, output exactly one line: {{"id":"<chunk_id>","cls":"<content_class>","kw":["term1","term2","term3"],"s":"<summary>"}}
 
 Rules:
-- "s": two-line summary explaining it's main claim, contribution, method, or proposal. When it centers on a specific person, archive, project, place, or event, keep that focus visible — do not flatten into abstract theory. Do not start with "This chunk..." or similar. Just the summary.
+- "s": two-line summary in English explaining it's main claim, contribution, method, or proposal. When it centers on a specific person, archive, project, place, or event, keep that focus visible — do not flatten into abstract theory. Do not start with "This chunk..." or similar. Just the summary.
 - "kw": exactly 3 architecture-relevant keywords. Prefer a mix of concrete entities, mechanisms, and named concepts central to this chunk. Preserve named actors, places, buildings, or projects when they are central. Avoid generic repeats from the overall document context unless they are truly central here.
 - "cls": choose the most specific class:
   - "front_matter": title pages, abstracts, acknowledgments, author bios, journal metadata
@@ -465,7 +465,7 @@ Rules:
   - "argument": substantive analysis or theory only when no more specific class fits
   Prefer the most specific valid class. Do not default to "argument" when the chunk is mainly a case, method, bibliography, or front matter. If a chunk is interpretive but centered on a specific person, archive, project, or event, still prefer "case_study" — you can synthesize it, but classify it there.
 
-Output one line per chunk, nothing else.\
+Output one line per chunk, nothing else. Language must be English\
 """
 
 
@@ -516,12 +516,9 @@ Field rules:
 - "vt": one of: plan|section|elevation|detail|photo|diagram|chart|render|sketch
 - "rel": one of: substantive|decorative|front_matter
   - "substantive": architectural drawings, photos, diagrams, or other visual knowledge
-  - "decorative": logos, publisher marks, decorative borders, page ornaments
-    - "front_matter": journal covers, title page images, platform/database artifacts, scanner artifacts, empty scans, or non-figure page fragments
-- Mark tiny cropped fragments, page-edge slivers, empty images, scanner/platform artifacts, and low-information inline snippets as "decorative" or "front_matter", not "substantive".
+  - "decorative": logos, publisher marks, decorative borders, page ornaments, empty scans, scanner artifacts
 - "desc": concise description of what is visually present. Do not invent architectural content for non-informative images.
-  If the figure is blank, partial, scanner-generated, heavily degraded, or contains no meaningful visual knowledge beyond logos, borders, watermarks, or platform artifacts, say so plainly and set rel to "decorative" or "front_matter".
-  If the image is a full-page scan of article text or a title page with no standalone visual figure, set rel to "front_matter".
+  If the figure is blank, partial, scanner-generated, heavily degraded, or contains no meaningful visual knowledge beyond logos, borders, watermarks, or platform artifacts, say so plainly and set rel to "decorative".
 - "cap": extracted or inferred caption, or "" if none
 
 When an image is available, prioritize what is visibly present. Use caption candidates and surrounding page text as supporting context only. Fall back to text-only inference only when the image is unavailable or unreadable.

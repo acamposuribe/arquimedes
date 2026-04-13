@@ -10,16 +10,33 @@
   <header class="site-header">
     <a class="brand" href="/">Arquimedes</a>
     <form action="/search" class="nav-search" method="get">
-      <input name="q" placeholder="Search materials, concepts, figures">
+      <input name="q" placeholder="Search the knowledge base…" autocomplete="off">
     </form>
   </header>
   <div class="site-shell">
     <aside class="site-rail">
+      {% set _path = request.url.path %}
       <section class="rail-section">
         <h2>Navigation</h2>
-        <a href="/wiki">Main page</a>
-        <a href="/search">Search</a>
+        <a href="/" {% if _path == '/' %}class="active"{% endif %}>Home</a>
+        <a href="/wiki" {% if _path == '/wiki' %}class="active"{% endif %}>Wiki</a>
+        <a href="/search" {% if _path.startswith('/search') %}class="active"{% endif %}>Search</a>
       </section>
+      {% if nav_collections %}
+      <section class="rail-section">
+        <h2>Collections</h2>
+        {% for item in nav_collections %}
+        {% set _coll_url = wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') %}
+        {% set _concepts_url = wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/concepts/_index.md') %}
+        {% set _coll_active = _path == _coll_url or _path.startswith(_coll_url ~ '/') %}
+        <div class="rail-group">
+          <div class="rail-group-title">{{ item.collection }}</div>
+          <a href="{{ _coll_url }}" {% if _coll_active and not _path.startswith(_concepts_url) %}class="active"{% endif %}>Overview</a>
+          <a href="{{ _concepts_url }}" {% if _path.startswith(_concepts_url) %}class="active"{% endif %}>Concepts</a>
+        </div>
+        {% endfor %}
+      </section>
+      {% endif %}
       {% if nav_global_concepts %}
       <section class="rail-section">
         <h2>Global Concepts</h2>
@@ -28,22 +45,10 @@
         {% endfor %}
       </section>
       {% endif %}
-      {% if nav_collections %}
-      <section class="rail-section">
-        <h2>Collections</h2>
-        {% for item in nav_collections %}
-        <div class="rail-group">
-          <div class="rail-group-title">{{ item.collection }}</div>
-          <a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">Main page</a>
-          <a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/concepts/_index.md') }}">Main concepts</a>
-        </div>
-        {% endfor %}
-      </section>
-      {% endif %}
     </aside>
     <main class="page">
       <div class="freshness-banner" id="freshness-banner">
-        <span>Checking workspace freshness…</span>
+        <span id="freshness-text">Checking workspace…</span>
         <button data-update-url="/update" type="button">Update</button>
       </div>
       {% block content %}{% endblock %}

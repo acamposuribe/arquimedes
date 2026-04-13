@@ -10,4 +10,4 @@ Never use an LLM for something a deterministic program can do reliably. LLMs are
 
 ### Always keep spec and plan in sync
 
-When implementation changes affect the spec or plan, update those documents immediately — never let them drift. The spec and plan are the source of truth for collaborators and other LLM agents picking up work. After any code change that alters the contract, update `docs/superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md` and `docs/PLAN.md` in the same batch of work. 
+When implementation changes affect the spec or plan, update those documents immediately — never let them drift. The spec and plan are the source of truth for collaborators and other LLM agents picking up work. 

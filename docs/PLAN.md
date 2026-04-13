@@ -177,10 +177,10 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 
 ## Phase 8: Web UI
 
-- [ ] FastAPI + Jinja2 server (`arq serve`)
-- [ ] Browse wiki tree, search with facets, view material pages
-- [ ] Figure gallery, links to original iCloud files
-- [ ] Freshness UX: collaborator-facing update path before search (auto-check on app open / first search in session and explicit Update button), followed by `arq index ensure`
+- [x] FastAPI + Jinja2 server (`arq serve`)
+- [x] Browse wiki tree, search with facets, view material pages
+- [x] Figure gallery, links to original iCloud files
+- [x] Freshness UX: collaborator-facing update path before search (auto-check on app open / first search in session and explicit Update button), followed by `arq index ensure`
 
 ## Phase 9: Server Agent + Sync
 

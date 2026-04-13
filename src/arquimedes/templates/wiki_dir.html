@@ -5,7 +5,7 @@
   <h1>{{ page_title }}</h1>
   {% if listing.dirs %}
   <h2>Directories</h2>
-  <div class="stack compact">
+  <div class="dir-listing">
     {% for item in listing.dirs %}
     <a href="/wiki/{{ item.path }}">{{ item.name }}/</a>
     {% endfor %}
@@ -13,7 +13,7 @@
   {% endif %}
   {% if listing.pages %}
   <h2>Pages</h2>
-  <div class="stack compact">
+  <div class="dir-listing">
     {% for item in listing.pages %}
     <a href="/wiki/{{ item.path }}">{{ item.name }}</a>
     {% endfor %}

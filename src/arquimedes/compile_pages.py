@@ -463,20 +463,6 @@ def render_material_page(
                 lines.append(f"> **Note:** {comment}")
             lines.append("")
 
-    # --- Related materials ---
-    if related:
-        lines.append("## Related Materials\n")
-        for r in related:
-            rtitle = r.get("title") or r["material_id"]
-            reasons = r.get("reasons") or []
-            reason_str = f" — {'; '.join(reasons)}" if reasons else ""
-            rel_path = (material_paths or {}).get(r["material_id"], "")
-            if rel_path:
-                lines.append(f"- [{rtitle}]({_relative_link(page_path, rel_path)}){reason_str}")
-            else:
-                lines.append(f"- {rtitle}{reason_str}")
-        lines.append("")
-
     # --- Source ---
     lines.append("## Source\n")
     if page_count:
@@ -490,6 +476,20 @@ def render_material_page(
     if extracted_text_link:
         lines.append(f"[Full extracted text]({extracted_text_link})  ")
     lines.append("")
+
+    # --- Related materials ---
+    if related:
+        lines.append("## Related Materials\n")
+        for r in related:
+            rtitle = r.get("title") or r["material_id"]
+            reasons = r.get("reasons") or []
+            reason_str = f" — {'; '.join(reasons)}" if reasons else ""
+            rel_path = (material_paths or {}).get(r["material_id"], "")
+            if rel_path:
+                lines.append(f"- [{rtitle}]({_relative_link(page_path, rel_path)}){reason_str}")
+            else:
+                lines.append(f"- {rtitle}{reason_str}")
+        lines.append("")
 
     return "\n".join(lines)
 

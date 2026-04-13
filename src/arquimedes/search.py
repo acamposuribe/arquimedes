@@ -118,6 +118,7 @@ class CanonicalClusterHit:
     aliases: list[str]
     material_count: int
     wiki_path: str
+    summary: str = ""
     domain: str = ""
     collection: str = ""
 
@@ -132,10 +133,34 @@ class CanonicalClusterHit:
             d["aliases"] = self.aliases
         if self.wiki_path:
             d["wiki_path"] = self.wiki_path
+        if self.summary:
+            d["summary"] = self.summary
         if self.domain:
             d["domain"] = self.domain
         if self.collection:
             d["collection"] = self.collection
+        return d
+
+
+@dataclass
+class CollectionPageHit:
+    domain: str
+    collection: str
+    title: str
+    wiki_path: str
+    material_count: int
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        d: dict[str, Any] = {
+            "domain": self.domain,
+            "collection": self.collection,
+            "title": self.title,
+            "wiki_path": self.wiki_path,
+            "material_count": self.material_count,
+        }
+        if self.summary:
+            d["summary"] = self.summary
         return d
 
 
@@ -186,6 +211,7 @@ class SearchResult:
     depth: int
     total: int
     results: list[MaterialCard]
+    collection_pages: list[CollectionPageHit] = field(default_factory=list)
     canonical_clusters: list[CanonicalClusterHit] = field(default_factory=list)
 
     def to_dict(self) -> dict:
@@ -195,12 +221,45 @@ class SearchResult:
             "total": self.total,
             "results": [r.to_dict() for r in self.results],
         }
+        if self.collection_pages:
+            d["collection_pages"] = [c.to_dict() for c in self.collection_pages]
         if self.canonical_clusters:
             d["canonical_clusters"] = [c.to_dict() for c in self.canonical_clusters]
         return d
 
     def to_json(self, indent: int | None = 2) -> str:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
+
+
+@dataclass
+class MaterialEvidence:
+    query: str
+    material_id: str
+    depth: int
+    chunks: list[ChunkHit] = field(default_factory=list)
+    annotations: list[AnnotationHit] = field(default_factory=list)
+    figures: list[FigureHit] = field(default_factory=list)
+    concepts: list[ConceptHit] = field(default_factory=list)
+
+    @property
+    def has_hits(self) -> bool:
+        return bool(self.chunks or self.annotations or self.figures or self.concepts)
+
+    def to_dict(self) -> dict:
+        d: dict[str, Any] = {
+            "query": self.query,
+            "material_id": self.material_id,
+            "depth": self.depth,
+        }
+        if self.chunks:
+            d["chunks"] = [c.to_dict() for c in self.chunks]
+        if self.annotations:
+            d["annotations"] = [a.to_dict() for a in self.annotations]
+        if self.figures:
+            d["figures"] = [f.to_dict() for f in self.figures]
+        if self.concepts:
+            d["concepts"] = [c.to_dict() for c in self.concepts]
+        return d
 
 
 # --- FTS query sanitization ---
@@ -239,6 +298,39 @@ def safe_fts_query(query: str) -> str:
 
 def _safe_fts_query(query: str) -> str:
     return safe_fts_query(query)
+
+
+def _parse_json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def _summary_from_reflection(
+    why_this_matters: str | None,
+    main_takeaways: str | None,
+    main_tensions: str | None,
+    open_questions: str | None,
+) -> str:
+    for candidate in (
+        str(why_this_matters or "").strip(),
+        *(_parse_json_list(main_takeaways)[:1]),
+        *(_parse_json_list(main_tensions)[:1]),
+        *(_parse_json_list(open_questions)[:1]),
+    ):
+        if candidate:
+            return candidate
+    return ""
+
+
+def _like_pattern(query: str) -> str:
+    return f"%{(query or '').strip()}%"
 
 
 # --- Facet handling ---
@@ -294,6 +386,8 @@ def search(
     config: dict | None = None,
     *,
     depth: int = 1,
+    scope: str = "all",
+    material_ids: list[str] | None = None,
     facets: list[str] | None = None,
     collection: str | None = None,
     limit: int = 20,
@@ -327,6 +421,8 @@ def search(
         return _do_search(
             con, query,
             depth=depth,
+            scope=scope,
+            material_ids=material_ids or [],
             facets=facets or [],
             collection=collection,
             limit=limit,
@@ -334,6 +430,47 @@ def search(
             annotation_limit=annotation_limit,
             figure_limit=figure_limit,
             concept_limit=concept_limit,
+        )
+    finally:
+        con.close()
+
+
+def search_material_evidence(
+    query: str,
+    material_id: str,
+    config: dict | None = None,
+    *,
+    depth: int = 3,
+    chunk_limit: int = 5,
+    annotation_limit: int = 3,
+    figure_limit: int = 3,
+    concept_limit: int = 3,
+) -> MaterialEvidence:
+    """Return search evidence scoped to a single material."""
+    if config is None:
+        config = load_config()
+
+    index_path = get_index_path(config)
+    if not index_path.exists():
+        raise FileNotFoundError(
+            f"Search index not found at {index_path}. Run `arq index rebuild` first."
+        )
+
+    con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+    con.row_factory = sqlite3.Row
+    try:
+        row = _fetch_material_row(con, material_id, "", [], [])
+        if row is None:
+            raise FileNotFoundError(f"Material {material_id} is not present in the search index.")
+        fts_query = _safe_fts_query(query)
+        return MaterialEvidence(
+            query=query,
+            material_id=material_id,
+            depth=depth,
+            chunks=_search_chunks(con, fts_query, material_id, chunk_limit, include_text=(depth >= 3)),
+            annotations=_search_annotations(con, fts_query, material_id, annotation_limit),
+            figures=_search_figures(con, fts_query, material_id, figure_limit),
+            concepts=_search_concepts(con, fts_query, material_id, concept_limit),
         )
     finally:
         con.close()
@@ -370,6 +507,7 @@ def _fetch_material_row(
     material_id: str,
     facet_where: str,
     facet_params: list[str],
+    scoped_material_ids: list[str],
 ) -> sqlite3.Row | None:
     """Fetch card columns for a single material, respecting any facet filters."""
     base = """
@@ -378,30 +516,54 @@ def _fetch_material_row(
         FROM materials m
         WHERE m.material_id = ?
     """
+    params = [material_id]
+    if scoped_material_ids:
+        placeholders = ",".join("?" for _ in scoped_material_ids)
+        base += f" AND m.material_id IN ({placeholders})"
+        params.extend(scoped_material_ids)
     if facet_where:
-        return con.execute(base + f" AND {facet_where}", [material_id] + facet_params).fetchone()
-    return con.execute(base, [material_id]).fetchone()
+        return con.execute(base + f" AND {facet_where}", params + facet_params).fetchone()
+    return con.execute(base, params).fetchone()
 
 
-def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int) -> list[str]:
+def _find_content_material_ids(con: sqlite3.Connection, query: str, limit: int, scoped_material_ids: list[str]) -> list[str]:
     """Return ordered distinct material_ids with chunk, annotation, figure, or concept FTS matches."""
     seen: set[str] = set()
     result: list[str] = []
-    for sql in (
-        """SELECT DISTINCT c.material_id FROM chunks_fts
-           JOIN chunks c ON chunks_fts.rowid = c.rowid
-           WHERE chunks_fts MATCH ? LIMIT ?""",
-        """SELECT DISTINCT a.material_id FROM annotations_fts
-           JOIN annotations a ON annotations_fts.rowid = a.rowid
-           WHERE annotations_fts MATCH ? LIMIT ?""",
-        """SELECT DISTINCT f.material_id FROM figures_fts
-           JOIN figures f ON figures_fts.rowid = f.rowid
-           WHERE figures_fts MATCH ? LIMIT ?""",
-        """SELECT DISTINCT co.material_id FROM concepts_fts
-           JOIN concepts co ON concepts_fts.rowid = co.rowid
-           WHERE concepts_fts MATCH ? LIMIT ?""",
+    scope_sql = ""
+    scope_params: list[str] = []
+    if scoped_material_ids:
+        placeholders = ",".join("?" for _ in scoped_material_ids)
+        scope_sql = f" AND {{alias}}.material_id IN ({placeholders})"
+        scope_params = list(scoped_material_ids)
+    for sql, alias in (
+        (
+            """SELECT DISTINCT c.material_id FROM chunks_fts
+               JOIN chunks c ON chunks_fts.rowid = c.rowid
+               WHERE chunks_fts MATCH ?{scope} LIMIT ?""",
+            "c",
+        ),
+        (
+            """SELECT DISTINCT a.material_id FROM annotations_fts
+               JOIN annotations a ON annotations_fts.rowid = a.rowid
+               WHERE annotations_fts MATCH ?{scope} LIMIT ?""",
+            "a",
+        ),
+        (
+            """SELECT DISTINCT f.material_id FROM figures_fts
+               JOIN figures f ON figures_fts.rowid = f.rowid
+               WHERE figures_fts MATCH ?{scope} LIMIT ?""",
+            "f",
+        ),
+        (
+            """SELECT DISTINCT co.material_id FROM concepts_fts
+               JOIN concepts co ON concepts_fts.rowid = co.rowid
+               WHERE concepts_fts MATCH ?{scope} LIMIT ?""",
+            "co",
+        ),
     ):
-        for row in con.execute(sql, [query, limit]).fetchall():
+        rendered_sql = sql.format(scope=scope_sql.format(alias=alias) if scope_sql else "")
+        for row in con.execute(rendered_sql, [query, *scope_params, limit]).fetchall():
             mid = row[0]
             if mid not in seen:
                 seen.add(mid)
@@ -425,6 +587,8 @@ def _do_search(
     query: str,
     *,
     depth: int,
+    scope: str,
+    material_ids: list[str],
     facets: list[str],
     collection: str | None,
     limit: int,
@@ -434,20 +598,38 @@ def _do_search(
     concept_limit: int,
 ) -> SearchResult:
     fts_query = _safe_fts_query(query)
+    normalized_scope = (scope or "all").strip().lower()
+    if normalized_scope not in {"all", "title", "author"}:
+        normalized_scope = "all"
+    materials_query = fts_query
+    if normalized_scope == "title":
+        materials_query = f"title : ({fts_query})"
+    elif normalized_scope == "author":
+        materials_query = f"authors : ({fts_query})"
     facet_where, facet_params = _build_facet_where(facets, collection)
+    scoped_material_ids = [mid for mid in material_ids if str(mid).strip()]
+    material_scope_where = ""
+    material_scope_params: list[str] = []
+    if scoped_material_ids:
+        placeholders = ",".join("?" for _ in scoped_material_ids)
+        material_scope_where = f"m.material_id IN ({placeholders})"
+        material_scope_params = scoped_material_ids
+    combined_where_parts = [part for part in (facet_where, material_scope_where) if part]
+    combined_where = " AND ".join(combined_where_parts)
+    combined_params = facet_params + material_scope_params
 
     # --- Card-layer FTS ---
-    if facet_where:
+    if combined_where:
         sql = f"""
             SELECT m.material_id, m.title, m.summary, m.domain, m.collection,
                    m.document_type, m.year, m.authors, m.keywords
             FROM materials_fts
             JOIN materials m ON materials_fts.rowid = m.rowid
-            WHERE materials_fts MATCH ? AND {facet_where}
+            WHERE materials_fts MATCH ? AND {combined_where}
             ORDER BY materials_fts.rank
             LIMIT ?
         """
-        rows = con.execute(sql, [fts_query] + facet_params + [limit]).fetchall()
+        rows = con.execute(sql, [materials_query] + combined_params + [limit]).fetchall()
     else:
         sql = """
             SELECT m.material_id, m.title, m.summary, m.domain, m.collection,
@@ -458,7 +640,7 @@ def _do_search(
             ORDER BY materials_fts.rank
             LIMIT ?
         """
-        rows = con.execute(sql, [fts_query, limit]).fetchall()
+        rows = con.execute(sql, [materials_query, limit]).fetchall()
 
     cards_by_id: dict[str, MaterialCard] = {}
     for i, row in enumerate(rows, 1):
@@ -466,11 +648,11 @@ def _do_search(
         cards_by_id[card.material_id] = card
 
     # --- Content-first: surface materials with chunk/annotation matches at depth >= 2 ---
-    if depth >= 2:
-        content_mids = _find_content_material_ids(con, fts_query, limit)
+    if depth >= 2 and normalized_scope == "all":
+        content_mids = _find_content_material_ids(con, fts_query, limit, scoped_material_ids)
         for mid in content_mids:
             if mid not in cards_by_id:
-                row = _fetch_material_row(con, mid, facet_where, facet_params)
+                row = _fetch_material_row(con, mid, facet_where, facet_params, scoped_material_ids)
                 if row:
                     rank = len(cards_by_id) + 1
                     cards_by_id[mid] = _row_to_card(row, rank)
@@ -478,7 +660,7 @@ def _do_search(
     cards = list(cards_by_id.values())
 
     # --- Populate content for depth >= 2 ---
-    if depth >= 2:
+    if depth >= 2 and normalized_scope == "all":
         for card in cards:
             card.chunks = _search_chunks(
                 con, fts_query, card.material_id, chunk_limit, include_text=(depth >= 3)
@@ -499,13 +681,15 @@ def _do_search(
             card.rank = i
 
     # Always query canonical concept clusters — useful at all depths
-    canonical_clusters = _search_canonical_clusters(con, fts_query)
+    collection_pages = _search_collection_pages(con, query, limit=min(limit, 6)) if normalized_scope == "all" else []
+    canonical_clusters = _search_canonical_clusters(con, fts_query, query, limit=min(limit, 6)) if normalized_scope == "all" else []
 
     return SearchResult(
         query=query,
         depth=depth,
         total=len(cards),
         results=cards,
+        collection_pages=collection_pages,
         canonical_clusters=canonical_clusters,
     )
 
@@ -645,7 +829,8 @@ def _search_concepts(
 
 def _search_canonical_clusters(
     con: sqlite3.Connection,
-    query: str,
+    fts_query: str,
+    raw_query: str,
     limit: int = 5,
 ) -> list[CanonicalClusterHit]:
     hits: list[CanonicalClusterHit] = []
@@ -654,24 +839,27 @@ def _search_canonical_clusters(
     for sql, params, is_local in (
         (
             """SELECT cc.cluster_id, cc.canonical_name, cc.slug,
-                      cc.aliases, cc.material_count, cc.wiki_path, cc.domain, cc.collection
+                      cc.aliases, cc.material_count, cc.wiki_path, cc.domain, cc.collection,
+                      cr.main_takeaways, cr.main_tensions, cr.open_questions, cr.why_this_concept_matters
                FROM local_concept_clusters_fts
                JOIN local_concept_clusters cc ON local_concept_clusters_fts.rowid = cc.rowid
+               LEFT JOIN concept_reflections cr ON cr.cluster_id = cc.cluster_id
                WHERE local_concept_clusters_fts MATCH ?
                ORDER BY local_concept_clusters_fts.rank
                LIMIT ?""",
-            [query, limit],
+            [fts_query, limit],
             True,
         ),
         (
             """SELECT cc.cluster_id, cc.canonical_name, cc.slug,
-                      cc.aliases, cc.material_count, cc.wiki_path, '' AS domain, '' AS collection
+                      cc.aliases, cc.material_count, cc.wiki_path, '' AS domain, '' AS collection,
+                      '' AS main_takeaways, '' AS main_tensions, '' AS open_questions, '' AS why_this_concept_matters
                FROM concept_clusters_fts
                JOIN concept_clusters cc ON concept_clusters_fts.rowid = cc.rowid
                WHERE concept_clusters_fts MATCH ?
                ORDER BY concept_clusters_fts.rank
                LIMIT ?""",
-            [query, limit],
+            [fts_query, limit],
             False,
         ),
     ):
@@ -695,12 +883,124 @@ def _search_canonical_clusters(
                 aliases=aliases,
                 material_count=row["material_count"] or 0,
                 wiki_path=row["wiki_path"] or "",
+                summary=_summary_from_reflection(
+                    row["why_this_concept_matters"],
+                    row["main_takeaways"],
+                    row["main_tensions"],
+                    row["open_questions"],
+                ),
                 domain=row["domain"] or "",
                 collection=row["collection"] or "",
             ))
             if len(hits) >= limit:
                 return hits
+
+    like = _like_pattern(raw_query)
+    try:
+        rows = con.execute(
+            """
+            SELECT cc.cluster_id, cc.canonical_name, cc.slug, cc.aliases, cc.material_count,
+                   cc.wiki_path, cc.domain, cc.collection,
+                   cr.main_takeaways, cr.main_tensions, cr.open_questions, cr.why_this_concept_matters
+            FROM concept_reflections cr
+            JOIN local_concept_clusters cc ON cr.cluster_id = cc.cluster_id
+            WHERE lower(cr.why_this_concept_matters) LIKE lower(?)
+               OR lower(cr.main_takeaways) LIKE lower(?)
+               OR lower(cr.main_tensions) LIKE lower(?)
+               OR lower(cr.open_questions) LIKE lower(?)
+               OR lower(cr.helpful_new_sources) LIKE lower(?)
+            ORDER BY cc.material_count DESC, cc.canonical_name
+            LIMIT ?
+            """,
+            [like, like, like, like, like, limit],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    for row in rows:
+        cluster_id = row["cluster_id"]
+        if cluster_id in seen:
+            continue
+        seen.add(cluster_id)
+        aliases = _parse_json_list(row["aliases"] or "[]")
+        hits.append(CanonicalClusterHit(
+            cluster_id=cluster_id,
+            canonical_name=row["canonical_name"],
+            slug=row["slug"],
+            aliases=aliases,
+            material_count=row["material_count"] or 0,
+            wiki_path=row["wiki_path"] or "",
+            summary=_summary_from_reflection(
+                row["why_this_concept_matters"],
+                row["main_takeaways"],
+                row["main_tensions"],
+                row["open_questions"],
+            ),
+            domain=row["domain"] or "",
+            collection=row["collection"] or "",
+        ))
+        if len(hits) >= limit:
+            return hits
     return hits
+
+
+def _search_collection_pages(
+    con: sqlite3.Connection,
+    raw_query: str,
+    limit: int = 5,
+) -> list[CollectionPageHit]:
+    pattern = _like_pattern(raw_query)
+    try:
+        rows = con.execute(
+            """
+            WITH collection_counts AS (
+                SELECT domain, collection, COUNT(*) AS material_count
+                FROM materials
+                GROUP BY domain, collection
+            )
+            SELECT cc.domain, cc.collection,
+                   COALESCE(wp.title, cc.domain || ' / ' || cc.collection) AS title,
+                   COALESCE(cr.wiki_path, wp.path, 'wiki/' || cc.domain || '/' || cc.collection || '/_index.md') AS wiki_path,
+                   cc.material_count,
+                   cr.main_takeaways,
+                   cr.main_tensions,
+                   cr.open_questions,
+                   cr.why_this_collection_matters
+            FROM collection_counts cc
+            LEFT JOIN collection_reflections cr
+              ON cr.domain = cc.domain AND cr.collection = cc.collection
+            LEFT JOIN wiki_pages wp
+              ON wp.page_type = 'collection' AND wp.page_id = cc.domain || '/' || cc.collection
+            WHERE lower(cc.domain) LIKE lower(?)
+               OR lower(cc.collection) LIKE lower(?)
+               OR lower(COALESCE(wp.title, '')) LIKE lower(?)
+               OR lower(COALESCE(cr.why_this_collection_matters, '')) LIKE lower(?)
+               OR lower(COALESCE(cr.main_takeaways, '')) LIKE lower(?)
+               OR lower(COALESCE(cr.main_tensions, '')) LIKE lower(?)
+               OR lower(COALESCE(cr.open_questions, '')) LIKE lower(?)
+               OR lower(COALESCE(cr.helpful_new_sources, '')) LIKE lower(?)
+            ORDER BY cc.material_count DESC, cc.domain, cc.collection
+            LIMIT ?
+            """,
+            [pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, limit],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    return [
+        CollectionPageHit(
+            domain=row["domain"] or "",
+            collection=row["collection"] or "",
+            title=row["title"] or f"{row['domain']} / {row['collection']}",
+            wiki_path=row["wiki_path"] or f"wiki/{row['domain']}/{row['collection']}/_index.md",
+            material_count=row["material_count"] or 0,
+            summary=_summary_from_reflection(
+                row["why_this_collection_matters"],
+                row["main_takeaways"],
+                row["main_tensions"],
+                row["open_questions"],
+            ),
+        )
+        for row in rows
+    ]
 
 
 def _local_cluster_rows_for_material(con: sqlite3.Connection, material_id: str) -> list[sqlite3.Row]:
@@ -785,10 +1085,35 @@ def _rows_to_cluster_hits(rows: list[sqlite3.Row]) -> list[CanonicalClusterHit]:
 # --- Human-readable formatting ---
 
 def format_human(result: SearchResult) -> str:
-    if result.total == 0:
+    if result.total == 0 and not result.collection_pages and not result.canonical_clusters:
         return f'No results for "{result.query}"'
 
     lines: list[str] = []
+
+    if result.collection_pages:
+        lines.append("Collection pages:")
+        for hit in result.collection_pages:
+            summary = hit.summary[:100] + "…" if len(hit.summary) > 100 else hit.summary
+            lines.append(f"  • {hit.title} [{hit.material_count} material(s)]")
+            if summary:
+                lines.append(f"    {summary}")
+        lines.append("")
+
+    if result.canonical_clusters:
+        lines.append("Concept pages:")
+        for cl in result.canonical_clusters:
+            alias_str = f"  (aliases: {', '.join(cl.aliases[:3])})" if cl.aliases else ""
+            if "/bridge-concepts/" in cl.wiki_path:
+                tag = " [global]"
+            elif cl.domain and cl.collection:
+                tag = f" [local {cl.domain}/{cl.collection}]"
+            else:
+                tag = ""
+            lines.append(f"  • {cl.canonical_name}{tag}{alias_str}  [{cl.material_count} material(s)]")
+            if cl.summary:
+                summary = cl.summary[:100] + "…" if len(cl.summary) > 100 else cl.summary
+                lines.append(f"    {summary}")
+        lines.append("")
 
     if result.depth == 1:
         # Table format
@@ -847,19 +1172,6 @@ def format_human(result: SearchResult) -> str:
 
         lines.append("")
         lines.append(f'{result.total} result(s) for "{result.query}" (depth {result.depth})')
-
-    if result.canonical_clusters:
-        lines.append("")
-        lines.append("Canonical concept clusters:")
-        for cl in result.canonical_clusters:
-            alias_str = f"  (aliases: {', '.join(cl.aliases[:3])})" if cl.aliases else ""
-            if "/bridge-concepts/" in cl.wiki_path:
-                tag = " [global]"
-            elif cl.domain and cl.collection:
-                tag = f" [local {cl.domain}/{cl.collection}]"
-            else:
-                tag = ""
-            lines.append(f"  • {cl.canonical_name}{tag}{alias_str}  [{cl.material_count} material(s)]")
 
     return "\n".join(lines)
 

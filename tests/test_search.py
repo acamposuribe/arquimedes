@@ -9,7 +9,7 @@ import pytest
 
 from arquimedes.index import rebuild_index
 from arquimedes.memory import memory_rebuild
-from arquimedes.search import SearchResult, format_human, get_bridge_member_clusters, get_cluster_global_bridges, get_collection_clusters, get_material_clusters, search
+from arquimedes.search import SearchResult, format_human, get_bridge_member_clusters, get_cluster_global_bridges, get_collection_clusters, get_material_clusters, search, search_material_evidence
 
 
 # --- Fixtures (reuse helpers from test_index pattern) ---
@@ -184,6 +184,46 @@ class TestFacetFiltering:
         assert "aabb001122" in ids
 
 
+@pytest.fixture
+def scoped_search_repo(tmp_path, monkeypatch):
+    _setup_repo(tmp_path, [
+        {
+            "mid": "title001122aa",
+            "title": "Musee Imaginaire and Architectural Imagination",
+            "authors": ["Mariabruna Fabrizi"],
+            "domain": "research",
+            "document_type": "paper",
+            "summary": "A study of image archives in architecture.",
+        },
+        {
+            "mid": "author001122aa",
+            "title": "Otterlo Circles and Collage",
+            "authors": ["Aldo van Eyck"],
+            "domain": "research",
+            "document_type": "paper",
+            "summary": "A study of collage as architectural thinking.",
+        },
+    ])
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+    return tmp_path
+
+
+class TestScopedSearch:
+    def test_title_scope_limits_card_matches_to_title(self, scoped_search_repo):
+        result = search("Musee Imaginaire", depth=3, scope="title")
+        ids = [r.material_id for r in result.results]
+        assert ids == ["title001122aa"]
+        assert result.canonical_clusters == []
+        assert result.results[0].chunks == []
+
+    def test_author_scope_limits_card_matches_to_authors(self, scoped_search_repo):
+        result = search("Aldo van Eyck", depth=3, scope="author")
+        ids = [r.material_id for r in result.results]
+        assert ids == ["author001122aa"]
+        assert result.results[0].chunks == []
+
+
 class TestDeepSearch:
     def test_depth_2_includes_chunks(self, index_repo):
         result = search("thermal mass", depth=2)
@@ -221,6 +261,14 @@ class TestDeepSearch:
         result = search("thermal mass", depth=2, figure_limit=0)
         for card in result.results:
             assert len(card.figures) == 0
+
+    def test_search_material_evidence_returns_full_chunk_text(self, index_repo):
+        evidence = search_material_evidence("thermal mass", "aabb001122", depth=3)
+        assert evidence.material_id == "aabb001122"
+        assert evidence.has_hits is True
+        assert evidence.chunks
+        assert "Thermal mass concrete walls reduce heat transfer." in evidence.chunks[0].text
+        assert evidence.annotations
 
 
 @pytest.fixture
@@ -694,6 +742,15 @@ def _write_global_bridge_clusters(root: Path, clusters: list[dict]) -> None:
     )
 
 
+def _write_lint_jsonl(root: Path, name: str, rows: list[dict]) -> None:
+    lint_dir = root / "derived" / "lint"
+    lint_dir.mkdir(parents=True, exist_ok=True)
+    (lint_dir / name).write_text(
+        "\n".join(json.dumps(row) for row in rows) + ("\n" if rows else ""),
+        encoding="utf-8",
+    )
+
+
 @pytest.fixture
 def concepts_repo(tmp_path, monkeypatch):
     """Two materials: mat_alpha shares a concept with mat_beta; different keywords and authors."""
@@ -807,6 +864,37 @@ def concepts_repo(tmp_path, monkeypatch):
             "wiki_path": "wiki/shared/bridge-concepts/archival-habitat-cluster.md",
         }
     ])
+    _write_lint_jsonl(tmp_path, "concept_reflections.jsonl", [
+        {
+            "cluster_id": "research___general__local_0001",
+            "slug": "archival-habitat-cluster",
+            "canonical_name": "Archival Habitat Cluster",
+            "main_takeaways": ["Archival habitat frames domestic space as a site of memory work."],
+            "main_tensions": ["Archival order can stabilize memory while also flattening lived contradiction."],
+            "open_questions": ["How can domestic archives stay open to contested histories?"],
+            "helpful_new_sources": ["Comparative work on household archives in postcolonial settings."],
+            "why_this_concept_matters": "This concept shows how architecture can operate as a living archive rather than a neutral container.",
+            "supporting_material_ids": ["mat_alpha", "mat_beta"],
+            "supporting_evidence": [],
+            "input_fingerprint": "abc123",
+            "wiki_path": "wiki/research/_general/concepts/archival-habitat-cluster.md",
+        }
+    ])
+    _write_lint_jsonl(tmp_path, "collection_reflections.jsonl", [
+        {
+            "domain": "research",
+            "collection": "_general",
+            "main_takeaways": ["The collection connects archival method, domestic space, and architectural imagination."],
+            "main_tensions": ["Archival frameworks can clarify evidence while narrowing the messier life of images and memory."],
+            "important_material_ids": ["mat_alpha", "mat_beta"],
+            "important_cluster_ids": ["research___general__local_0001"],
+            "open_questions": ["What kinds of domestic evidence resist archival classification?"],
+            "helpful_new_sources": ["Studies of household archives and curatorial memory."],
+            "why_this_collection_matters": "This collection matters because it treats architecture as a field of archival imagination rather than just a record of buildings.",
+            "input_fingerprint": "def456",
+            "wiki_path": "wiki/research/_general/_index.md",
+        }
+    ])
     memory_rebuild()
     return tmp_path
 
@@ -867,6 +955,29 @@ class TestConceptSearch:
         assert hit.source_pages == [2, 3]
         assert "the archival habitat" in hit.evidence_spans
         assert hit.confidence == 1.0
+
+    def test_concept_pages_surface_with_reflection_summary(self, concepts_repo):
+        result = search("living archive", depth=3)
+        assert result.canonical_clusters
+        cluster = next(c for c in result.canonical_clusters if c.cluster_id == "research___general__local_0001")
+        assert "living archive" in cluster.summary.lower()
+
+
+class TestCollectionPageSearch:
+    def test_collection_pages_surface_from_reflection_text(self, concepts_repo):
+        result = search("archival imagination", depth=3)
+        assert result.collection_pages
+        hit = next(c for c in result.collection_pages if c.domain == "research" and c.collection == "_general")
+        assert "architecture as a field of archival imagination" in hit.summary.lower()
+
+    def test_title_scope_suppresses_collection_and_concept_pages(self, concepts_repo):
+        result = search("archival habitat", depth=3, scope="title")
+        assert result.collection_pages == []
+        assert result.canonical_clusters == []
+
+    def test_material_id_scope_restricts_results_to_linked_materials(self, concepts_repo):
+        result = search("Smith J", depth=3, scope="author", material_ids=["mat_alpha", "mat_beta"])
+        assert result.results == []
 
 
 # --- C4.3: arq related ---

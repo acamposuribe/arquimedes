@@ -1,4 +1,5 @@
 const banner = document.getElementById("freshness-banner");
+const bannerText = document.getElementById("freshness-text");
 const lightbox = document.getElementById("lightbox");
 const lightboxImage = document.getElementById("lightbox-image");
 const lightboxCaption = document.getElementById("lightbox-caption");
@@ -11,26 +12,45 @@ const lightboxNext = document.getElementById("lightbox-next");
 
 function setBanner(data) {
   if (!banner || !data) return;
-  const state = data.pull_result === "error" ? "error" : (data.repo_dirty ? "warning" : "ok");
+  const dirty = data.repo_dirty;
+  const pullFailed = data.pull_result === "error";
+  const state = pullFailed ? "error" : dirty ? "warning" : "ok";
   banner.dataset.state = state;
-  banner.querySelector("span").textContent = data.message || "Workspace status unavailable.";
+  if (bannerText) bannerText.textContent = data.message || "Workspace status unavailable.";
+  // Hide banner after a moment if everything is fine
+  if (state === "ok") {
+    setTimeout(() => { banner.style.display = "none"; }, 2500);
+  }
 }
 
 async function fetchFreshness(url, options = {}) {
-  const response = await fetch(url, {headers: {"Accept": "application/json"}, ...options});
-  setBanner(await response.json());
+  try {
+    const response = await fetch(url, {headers: {"Accept": "application/json"}, ...options});
+    setBanner(await response.json());
+  } catch (_) {
+    if (bannerText) bannerText.textContent = "Workspace status unavailable.";
+    if (banner) banner.dataset.state = "error";
+  }
 }
 
 if (banner) {
   const button = banner.querySelector("button");
   if (button) {
-    button.addEventListener("click", () => fetchFreshness(button.dataset.updateUrl, {method: "POST"}));
+    button.addEventListener("click", () => {
+      if (bannerText) bannerText.textContent = "Updating…";
+      fetchFreshness(button.dataset.updateUrl, {method: "POST"});
+    });
   }
   if (!sessionStorage.getItem("arquimedes-freshness-checked")) {
     sessionStorage.setItem("arquimedes-freshness-checked", "1");
-    fetchFreshness("/api/freshness").catch(() => setBanner({message: "Workspace status unavailable.", pull_result: "error"}));
+    fetchFreshness("/api/freshness");
+  } else {
+    // Already checked this session — hide banner immediately
+    banner.style.display = "none";
   }
 }
+
+// ── Lightbox ──────────────────────────────────────
 
 if (lightbox && lightboxImage) {
   let zoomItems = [];
@@ -64,8 +84,8 @@ if (lightbox && lightboxImage) {
     lightboxImage.src = node.dataset.zoomSrc || "";
     lightboxImage.alt = node.dataset.zoomAlt || "";
     setLightboxText(node);
-    lightboxPrev.hidden = zoomItems.length < 2;
-    lightboxNext.hidden = zoomItems.length < 2;
+    if (lightboxPrev) lightboxPrev.hidden = zoomItems.length < 2;
+    if (lightboxNext) lightboxNext.hidden = zoomItems.length < 2;
     lightbox.removeAttribute("hidden");
     document.body.classList.add("lightbox-open");
   }
@@ -90,15 +110,18 @@ if (lightbox && lightboxImage) {
     event.preventDefault();
     openLightbox(node);
   });
+
   lightbox.addEventListener("click", (event) => {
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest(".lightbox-prev")) return moveLightbox(-1);
     if (target?.closest(".lightbox-next")) return moveLightbox(1);
     if (event.target === lightbox || target?.closest(".lightbox-close")) closeLightbox();
   });
+
   document.addEventListener("keydown", (event) => {
-    if (event.key === "Escape" && !lightbox.hasAttribute("hidden")) closeLightbox();
-    if (event.key === "ArrowLeft" && !lightbox.hasAttribute("hidden")) moveLightbox(-1);
-    if (event.key === "ArrowRight" && !lightbox.hasAttribute("hidden")) moveLightbox(1);
+    if (lightbox.hasAttribute("hidden")) return;
+    if (event.key === "Escape") closeLightbox();
+    if (event.key === "ArrowLeft") moveLightbox(-1);
+    if (event.key === "ArrowRight") moveLightbox(1);
   });
 }

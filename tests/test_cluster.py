@@ -12,8 +12,10 @@ from click.testing import CliRunner
 
 from arquimedes.cluster import (
     _BRIDGE_SYSTEM_PROMPT,
+    _apply_bridge_delta,
     _build_bridge_prompt,
     cluster_concepts,
+    _cluster_input_path,
     _pending_local_concept_rows,
     _pending_local_material_rows,
     bridge_cluster_fingerprint,
@@ -25,6 +27,7 @@ from arquimedes.cluster import (
     local_concept_wiki_path,
     local_cluster_fingerprint,
     normalize_local_clusters,
+    _stage_bridge_memory_input,
     _stage_bridge_packet_input,
     _pending_bridge_concept_rows,
     _pending_bridge_material_rows,
@@ -343,6 +346,219 @@ def test_bridge_packet_file_is_staged(tmp_path):
     assert set(packet["concepts"][0].keys()) == {"concept", "descriptor"}
     assert packet["concepts"][0]["descriptor"] == "A habitat for archives."
     assert packet["bridge"] == []
+
+
+def test_apply_bridge_delta_skips_invalid_rows_and_preserves_valid_output(caplog):
+    existing = [
+        {
+            "cluster_id": "research__papers__local_0001",
+            "canonical_name": "Existing Cluster",
+            "aliases": ["Existing Cluster"],
+            "material_ids": ["m1", "m2"],
+            "source_concepts": [{"material_id": "m1", "concept_name": "existing concept"}],
+            "confidence": 0.9,
+        }
+    ]
+
+    parsed = {
+        "links_to_existing": [
+            {
+                "cluster_id": "research__papers__local_0001",
+                "source_concepts": [{"material_id": "m2", "concept_name": "attached concept"}],
+            },
+            {
+                "cluster_id": "research__missing__local_9999",
+                "source_concepts": [{"material_id": "m3", "concept_name": "bad link"}],
+            },
+        ],
+        "new_clusters": [
+            {
+                "canonical_name": "Valid New Cluster",
+                "aliases": ["Valid New Cluster"],
+                "source_concepts": [
+                    {"material_id": "m4", "concept_name": "new concept a"},
+                    {"material_id": "m5", "concept_name": "new concept b"},
+                ],
+            },
+            {
+                "canonical_name": "",
+                "aliases": ["Broken Cluster"],
+                "source_concepts": [{"material_id": "m6", "concept_name": "broken concept"}],
+            },
+        ],
+    }
+
+    combined = _apply_bridge_delta(existing, parsed)
+
+    assert len(combined) == 2
+    assert combined[0]["cluster_id"] == "research__papers__local_0001"
+    assert combined[0]["source_concepts"] == [
+        {"material_id": "m1", "concept_name": "existing concept"},
+        {"material_id": "m2", "concept_name": "attached concept"},
+    ]
+    assert combined[1]["canonical_name"] == "Valid New Cluster"
+    assert "unknown" in caplog.text or "missing" in caplog.text
+
+
+def test_apply_bridge_delta_treats_malformed_sections_as_empty(caplog):
+    existing = [
+        {
+            "cluster_id": "research__papers__local_0001",
+            "canonical_name": "Existing Cluster",
+            "aliases": ["Existing Cluster"],
+            "material_ids": ["m1", "m2"],
+            "source_concepts": [{"material_id": "m1", "concept_name": "existing concept"}],
+            "confidence": 0.9,
+        }
+    ]
+
+    combined = _apply_bridge_delta(existing, {"links_to_existing": "oops", "new_clusters": None})
+
+    assert len(combined) == 1
+    assert combined[0]["cluster_id"] == "research__papers__local_0001"
+    assert "not a list" in caplog.text
+
+
+def test_scope_specific_cluster_input_paths_do_not_collide(tmp_path):
+    packet_a = _cluster_input_path(tmp_path, "bridge", scope_key="local_research__Archives")
+    packet_b = _cluster_input_path(tmp_path, "bridge", scope_key="local_research__Van Eyck")
+    memory_a = _cluster_input_path(tmp_path, "bridge_memory", scope_key="local_research__Archives")
+    memory_b = _cluster_input_path(tmp_path, "bridge_memory", scope_key="local_research__Van Eyck")
+
+    assert packet_a != packet_b
+    assert memory_a != memory_b
+    assert packet_a.parent.name == "local_research__Archives"
+    assert packet_b.parent.name == "local_research__Van_Eyck"
+    assert memory_a.parent.name == "local_research__Archives"
+    assert memory_b.parent.name == "local_research__Van_Eyck"
+    assert packet_a.name == "bridge_cluster_input.json"
+    assert memory_a.name == "bridge_memory_cluster_input.json"
+
+
+def test_bridge_staging_uses_scope_specific_temp_files(tmp_path):
+    concept_rows = [
+        ("archival habitat", "archival habitat", "m1", "high", "[1]", '["evidence"]', 0.9, "local", "A habitat for archives."),
+    ]
+    material_rows = [
+        ("m1", "Archival Habitat", "Summary", '["archive"]'),
+    ]
+
+    packet_a = _stage_bridge_packet_input(tmp_path, concept_rows, material_rows, scope_key="local_research__Archives")
+    packet_b = _stage_bridge_packet_input(tmp_path, concept_rows, material_rows, scope_key="local_research__Van Eyck")
+    memory_a = _stage_bridge_memory_input(tmp_path, [{"cluster_id": "research__Archives__local_0001"}], scope_key="local_research__Archives")
+    memory_b = _stage_bridge_memory_input(tmp_path, [{"cluster_id": "research__Van Eyck__local_0014"}], scope_key="local_research__Van Eyck")
+
+    assert packet_a != packet_b
+    assert memory_a != memory_b
+    assert packet_a.parent.name == "local_research__Archives"
+    assert packet_b.parent.name == "local_research__Van_Eyck"
+    assert json.loads(packet_a.read_text(encoding="utf-8"))["kind"] == "bridge_packets"
+    assert json.loads(packet_b.read_text(encoding="utf-8"))["kind"] == "bridge_packets"
+    assert json.loads(memory_a.read_text(encoding="utf-8"))["clusters"][0]["cluster_id"] == "research__Archives__local_0001"
+    assert json.loads(memory_b.read_text(encoding="utf-8"))["clusters"][0]["cluster_id"] == "research__Van Eyck__local_0014"
+
+
+def test_local_cluster_llm_only_sees_its_own_collection_scope(tmp_path, monkeypatch):
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.config as config_mod
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n", encoding="utf-8")
+    (tmp_path / "indexes").mkdir()
+    con = sqlite3.connect(str(tmp_path / "indexes" / "search.sqlite"))
+    con.execute("CREATE TABLE materials (material_id TEXT PRIMARY KEY, title TEXT, summary TEXT, keywords TEXT)")
+    con.execute("CREATE TABLE concepts (concept_name TEXT, descriptor TEXT DEFAULT '', concept_key TEXT, material_id TEXT, relevance TEXT, source_pages TEXT, evidence_spans TEXT, confidence REAL, concept_type TEXT DEFAULT 'local', PRIMARY KEY (material_id, concept_type, concept_key))")
+    con.execute("INSERT INTO materials VALUES ('m1', 'Paper One', 'Papers summary', '[\"paper\"]')")
+    con.execute("INSERT INTO materials VALUES ('m2', 'Paper Two', 'Papers summary', '[\"paper\"]')")
+    con.execute("INSERT INTO materials VALUES ('m3', 'Book One', 'Books summary', '[\"book\"]')")
+    con.execute("INSERT INTO concepts VALUES ('paper concept one', '', 'paper concept one', 'm1', 'high', '[1]', '[\"paper evidence\"]', 0.9, 'local')")
+    con.execute("INSERT INTO concepts VALUES ('paper concept two', '', 'paper concept two', 'm2', 'high', '[2]', '[\"paper evidence\"]', 0.8, 'local')")
+    con.execute("INSERT INTO concepts VALUES ('book concept one', '', 'book concept one', 'm3', 'high', '[3]', '[\"book evidence\"]', 0.8, 'local')")
+    con.commit()
+    con.close()
+
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "manifests" / "materials.jsonl").write_text(
+        "\n".join([
+            json.dumps({"material_id": "m1", "domain": "research", "collection": "papers", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+            json.dumps({"material_id": "m2", "domain": "research", "collection": "papers", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+            json.dumps({"material_id": "m3", "domain": "research", "collection": "books", "ingested_at": "2026-01-01T00:00:00+00:00"}),
+        ]) + "\n",
+        encoding="utf-8",
+    )
+
+    local_cluster_path(tmp_path, "research", "papers").parent.mkdir(parents=True, exist_ok=True)
+    local_cluster_path(tmp_path, "research", "papers").write_text(
+        json.dumps({
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "canonical_name": "Existing Paper Cluster",
+            "slug": "existing-paper-cluster",
+            "aliases": ["Existing Paper Cluster"],
+            "material_ids": ["m1", "m2"],
+            "source_concepts": [
+                {"material_id": "m1", "concept_name": "paper concept one"},
+                {"material_id": "m2", "concept_name": "paper concept two"},
+            ],
+            "confidence": 0.9,
+            "wiki_path": "wiki/research/papers/concepts/existing-paper-cluster.md",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    local_cluster_path(tmp_path, "research", "books").parent.mkdir(parents=True, exist_ok=True)
+    local_cluster_path(tmp_path, "research", "books").write_text(
+        json.dumps({
+            "cluster_id": "research__books__local_0001",
+            "domain": "research",
+            "collection": "books",
+            "canonical_name": "Existing Book Cluster",
+            "slug": "existing-book-cluster",
+            "aliases": ["Existing Book Cluster"],
+            "material_ids": ["m3"],
+            "source_concepts": [{"material_id": "m3", "concept_name": "book concept one"}],
+            "confidence": 0.9,
+            "wiki_path": "wiki/research/books/concepts/existing-book-cluster.md",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(cluster_mod, "get_project_root", lambda: tmp_path)
+
+    def mock_llm(_system, messages):
+        prompt = messages[0]["content"]
+        packet_path = None
+        memory_path = None
+        for line in prompt.splitlines():
+            if line.startswith("Read the new concepts packet file from "):
+                packet_path = Path(line.removeprefix("Read the new concepts packet file from ").rstrip("."))
+            if line.startswith("Read the existing bridge cluster memory file from "):
+                memory_path = Path(line.removeprefix("Read the existing bridge cluster memory file from ").rstrip("."))
+
+        assert packet_path is not None
+        assert memory_path is not None
+        assert packet_path.parent.name == "local_research__papers"
+        assert memory_path.parent.name == "local_research__papers"
+
+        packet = json.loads(packet_path.read_text(encoding="utf-8"))
+        memory = json.loads(memory_path.read_text(encoding="utf-8"))
+
+        assert {row["material_id"] for row in packet["materials"]} == {"m1", "m2"}
+        assert all("book" not in row["title"].lower() for row in packet["materials"])
+        assert {row["cluster_id"] for row in memory["clusters"]} == {"research__papers__local_0001"}
+
+        return json.dumps({
+            "links_to_existing": [],
+            "new_clusters": [],
+            "_finished": True,
+        })
+
+    result = cluster_concepts({"llm": {"agent_cmd": "echo"}}, llm_fn=mock_llm, force=True, domain="research", collection="papers")
+
+    assert result["collections"] == 1
+    assert result["clusters"] == 1
 
 
 def test_bridge_clustering_only_stages_materials_ingested_after_cutoff(tmp_path):
@@ -746,3 +962,22 @@ def test_cluster_logs_failed_outcome(tmp_path, monkeypatch):
     assert "\tSTART\tbridge\tTrue" in log_lines[0]
     assert "\tFAILED\tboom" in log_lines[1]
     assert "DONE" not in log_lines[1]
+
+
+def test_serve_cli_reports_missing_web_dependency(monkeypatch):
+    import builtins
+    import arquimedes.cli as cli_mod
+
+    real_import = builtins.__import__
+
+    def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "arquimedes.serve":
+            raise ModuleNotFoundError("No module named 'mistune'", name="mistune")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+
+    result = CliRunner().invoke(cli_mod.cli, ["serve"])
+
+    assert result.exit_code != 0
+    assert "Missing web UI dependency: mistune" in result.output

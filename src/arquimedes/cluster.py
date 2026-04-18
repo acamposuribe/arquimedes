@@ -207,8 +207,26 @@ def _split_concept_row(row: tuple) -> tuple[str, str, str, str, str, str, str, f
     raise ValueError(f"Unexpected concept row shape: {len(row)}")
 
 
-def _cluster_input_path(root: Path, kind: str) -> Path:
-    """Return the staged input path for a clustering run."""
+def _tmp_name_fragment(value: str) -> str:
+    """Return a filesystem-safe suffix for staged clustering inputs."""
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"[^A-Za-z0-9_.-]+", "_", text).strip("._-")
+
+
+def _cluster_input_path(root: Path, kind: str, *, scope_key: str | None = None) -> Path:
+    """Return the staged input path for a clustering run.
+
+    Local collection clustering may run multiple scopes in parallel, so callers
+    can provide a ``scope_key`` to avoid different workers overwriting each
+    other's staged packet/memory files under ``derived/tmp``. Scope-specific
+    runs also get their own subdirectory so different collection workers never
+    share the same staging area.
+    """
+    suffix = _tmp_name_fragment(scope_key or "")
+    if suffix:
+        return root / "derived" / "tmp" / suffix / f"{kind}_cluster_input.json"
     return root / "derived" / "tmp" / f"{kind}_cluster_input.json"
 
 
@@ -303,6 +321,11 @@ def _cleanup_paths(*paths: Path) -> None:
                 path.unlink()
         except OSError:
             pass
+        try:
+            if path and path.parent.name != "tmp":
+                path.parent.rmdir()
+        except OSError:
+            pass
 
 
 def _stage_bridge_packet_input(
@@ -310,6 +333,7 @@ def _stage_bridge_packet_input(
     concept_rows: list[tuple],
     material_rows: list[tuple],
     *,
+    scope_key: str | None = None,
     max_local_concepts_per_material: int | None = 8,
     max_bridge_candidates_per_material: int | None = 8,
     max_evidence_snippets_per_material: int | None = 5,
@@ -393,7 +417,7 @@ def _stage_bridge_packet_input(
         "kind": "bridge_packets",
         "materials": material_packets,
     }
-    path = _cluster_input_path(root, "bridge")
+    path = _cluster_input_path(root, "bridge", scope_key=scope_key)
     _write_json(path, payload)
     return path
 
@@ -783,13 +807,13 @@ def _bridge_cluster_snapshot(cluster: dict) -> dict:
         }
 
 
-def _stage_bridge_memory_input(root: Path, clusters: list[dict]) -> Path:
+def _stage_bridge_memory_input(root: Path, clusters: list[dict], *, scope_key: str | None = None) -> Path:
         """Write a compact snapshot of the current bridge graph for the LLM to read."""
         payload = {
                 "kind": "bridge_memory",
                 "clusters": [_bridge_cluster_snapshot(cluster) for cluster in clusters],
         }
-        path = _cluster_input_path(root, "bridge_memory")
+        path = _cluster_input_path(root, "bridge_memory", scope_key=scope_key)
         _write_json(path, payload)
         return path
 
@@ -845,9 +869,11 @@ def _apply_bridge_delta(existing_clusters: list[dict], parsed: dict) -> list[dic
     links_to_existing = parsed.get("links_to_existing")
     new_clusters = parsed.get("new_clusters")
     if not isinstance(links_to_existing, list):
-        raise EnrichmentError("Bridge clustering output field 'links_to_existing' must be a list")
+        logger.warning("Bridge clustering: output field 'links_to_existing' is not a list; skipping it")
+        links_to_existing = []
     if not isinstance(new_clusters, list):
-        raise EnrichmentError("Bridge clustering output field 'new_clusters' must be a list")
+        logger.warning("Bridge clustering: output field 'new_clusters' is not a list; skipping it")
+        new_clusters = []
 
     combined = [_bridge_cluster_snapshot(cluster) for cluster in existing_clusters]
     by_id = {
@@ -858,40 +884,58 @@ def _apply_bridge_delta(existing_clusters: list[dict], parsed: dict) -> list[dic
 
     for idx, link in enumerate(links_to_existing, start=1):
         if not isinstance(link, dict):
-            raise EnrichmentError(f"links_to_existing[{idx}] must be an object")
+            logger.warning("Bridge clustering: skipping links_to_existing[%s] because it is not an object", idx)
+            continue
         cluster_id = str(link.get("cluster_id", "")).strip()
         if not cluster_id:
-            raise EnrichmentError(f"links_to_existing[{idx}] is missing cluster_id")
+            logger.warning("Bridge clustering: skipping links_to_existing[%s] because cluster_id is missing", idx)
+            continue
         target = by_id.get(cluster_id)
         if target is None:
-            raise EnrichmentError(f"links_to_existing[{idx}] references unknown cluster_id '{cluster_id}'")
-        target.setdefault("source_concepts", []).extend(
-            _normalize_bridge_source_concepts(
+            logger.warning(
+                "Bridge clustering: skipping links_to_existing[%s] because cluster_id %r is unknown",
+                idx,
+                cluster_id,
+            )
+            continue
+        try:
+            normalized_source = _normalize_bridge_source_concepts(
                 link.get("source_concepts"),
                 label=f"links_to_existing[{idx}]",
             )
-        )
+        except EnrichmentError as exc:
+            logger.warning("Bridge clustering: skipping links_to_existing[%s]: %s", idx, exc)
+            continue
+        target.setdefault("source_concepts", []).extend(normalized_source)
 
     for idx, cluster in enumerate(new_clusters, start=1):
         if not isinstance(cluster, dict):
-            raise EnrichmentError(f"new_clusters[{idx}] must be an object")
+            logger.warning("Bridge clustering: skipping new_clusters[%s] because it is not an object", idx)
+            continue
         canonical_name = str(cluster.get("canonical_name", "")).strip()
         if not canonical_name:
-            raise EnrichmentError(f"new_clusters[{idx}] is missing canonical_name")
+            logger.warning("Bridge clustering: skipping new_clusters[%s] because canonical_name is missing", idx)
+            continue
         descriptor = str(cluster.get("descriptor", "")).strip()
         aliases = cluster.get("aliases", [])
         if aliases is None:
             aliases = []
         if not isinstance(aliases, list):
-            raise EnrichmentError(f"new_clusters[{idx}] field 'aliases' must be a list")
+            logger.warning("Bridge clustering: skipping new_clusters[%s] because aliases is not a list", idx)
+            continue
+        try:
+            normalized_source = _normalize_bridge_source_concepts(
+                cluster.get("source_concepts"),
+                label=f"new_clusters[{idx}]",
+            )
+        except EnrichmentError as exc:
+            logger.warning("Bridge clustering: skipping new_clusters[%s]: %s", idx, exc)
+            continue
         combined.append({
             "canonical_name": canonical_name,
             "descriptor": descriptor,
             "aliases": _dedupe_aliases([canonical_name, *[str(alias) for alias in aliases if str(alias).strip()]]),
-            "source_concepts": _normalize_bridge_source_concepts(
-                cluster.get("source_concepts"),
-                label=f"new_clusters[{idx}]",
-            ),
+            "source_concepts": normalized_source,
         })
 
     return combined
@@ -1135,8 +1179,18 @@ def cluster_concepts(
                     return {"total_concepts": 0, "clusters": len(existing), "multi_material": sum(1 for row in existing if len(row.get("material_ids", [])) > 1), "changed": 0}
 
                 scope_llm_fn = base_llm_fn or make_cli_llm_fn(config, "cluster")
-                bridge_packets_path = _stage_bridge_packet_input(root, pending_concept_rows, pending_material_rows)
-                bridge_memory_path = _stage_bridge_memory_input(root, existing)
+                scope_tmp_key = f"local_{local_collection_key(scope_domain, scope_collection)}"
+                bridge_packets_path = _stage_bridge_packet_input(
+                    root,
+                    pending_concept_rows,
+                    pending_material_rows,
+                    scope_key=scope_tmp_key,
+                )
+                bridge_memory_path = _stage_bridge_memory_input(
+                    root,
+                    existing,
+                    scope_key=scope_tmp_key,
+                )
                 try:
                     user_msg = _build_bridge_prompt(bridge_packets_path, bridge_memory_path)
                     raw_text = scope_llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
@@ -1316,8 +1370,17 @@ def cluster_bridge_concepts(
         if llm_fn is None:
             llm_fn = make_cli_llm_fn(config, "cluster", state=llm_state)
 
-        bridge_packets_path = _stage_bridge_packet_input(root, pending_concept_rows, pending_material_rows)
-        bridge_memory_path = _stage_bridge_memory_input(root, existing_bridge_clusters)
+        bridge_packets_path = _stage_bridge_packet_input(
+            root,
+            pending_concept_rows,
+            pending_material_rows,
+            scope_key="global_bridge",
+        )
+        bridge_memory_path = _stage_bridge_memory_input(
+            root,
+            existing_bridge_clusters,
+            scope_key="global_bridge",
+        )
         try:
             user_msg = _build_bridge_prompt(bridge_packets_path, bridge_memory_path)
             raw_text = llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])

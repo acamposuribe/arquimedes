@@ -789,8 +789,15 @@ def sync(install: bool):
 def serve(host: str | None, port: int | None):
     """Start the web UI."""
     from arquimedes.config import load_config
-    from arquimedes.serve import create_app
     import uvicorn
+
+    try:
+        from arquimedes.serve import create_app
+    except ModuleNotFoundError as exc:
+        raise click.ClickException(
+            f"Missing web UI dependency: {exc.name}. Install project dependencies "
+            "for the current Python environment, e.g. `python3 -m pip install -e .`."
+        ) from exc
 
     config = load_config()
     serve_cfg = config.get("serve") or {}

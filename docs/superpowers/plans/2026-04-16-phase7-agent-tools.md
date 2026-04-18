@@ -10,24 +10,23 @@ Make the `arq` CLI the complete token-efficient usage surface for collaborator-s
 
 Phase 7 does not add semantic layers, does not run LLMs, and does not mutate knowledge-base artifacts. It wraps existing deterministic helpers (`search.py`, `read.py`, `freshness.py`, `index.py`) into a small, disciplined set of read commands plus an orientation command, a refresh command, and a handbook.
 
-## Prerequisite (must land before Slice 7.1)
+## Prerequisite (landed 2026-04-16)
 
-Phase 7 commands are wrappers over `search.py`. Before wrapping, search itself must cover every reflection layer. Two layers are currently missing:
+Phase 7 commands are wrappers over `search.py`. Before wrapping, search itself had to cover every reflection layer. Two gaps are now closed:
 
-- Step 2 global bridge clusters (names, aliases, wiki paths) — no FTS, not in `SearchResult`
-- Bridge reflection prose (`why_this_bridge_matters` etc.) — not stored in SQLite at all
+- ✅ Step 2 global bridge clusters (bridge_id, canonical_name, aliases, descriptor, wiki_path) — FTS-indexed in `global_bridge_clusters_fts` and surfaced as `SearchResult.global_bridges`
+- ✅ Bridge reflection prose (`why_this_bridge_matters`, `bridge_takeaways`, `bridge_tensions`, `bridge_open_questions`, `helpful_new_sources`) — stored in `global_bridge_clusters` and covered by both FTS and a LIKE fallback
 
-See the Phase 7 spec's "Prerequisite: Search Must Cover All Reflection Layers" section and the `PLAN.md` "Search Coverage for Bridge Layer" block for scope.
+Shipped:
 
-Concretely the precursor task ships:
+- `global_bridge_clusters` table + `global_bridge_clusters_fts` in `memory.py`
+- population from `derived/global_bridge_clusters.jsonl` during `arq memory rebuild`
+- `GlobalBridgeHit` dataclass + `_search_global_bridges` helper in `search.py`
+- `global_bridges` field on `SearchResult` populated alongside `collection_pages` and `canonical_clusters`
+- tests in `TestGlobalBridgeSearch` covering FTS name matches and LIKE fallback over bridge reflection prose
+- legacy `concept_clusters_fts` path retained unchanged during the Step 2 retirement transition
 
-- new `global_bridge_clusters` table + `global_bridge_clusters_fts` in `memory.py`
-- population from `derived/global_bridge_clusters.jsonl` during `arq compile` / `arq memory rebuild`
-- new `GlobalBridgeHit` dataclass + `_search_global_bridges` helper in `search.py`
-- new `global_bridges` field on `SearchResult` populated alongside `collection_pages` and `canonical_clusters`
-- tests covering FTS matches, LIKE fallback over bridge reflections, and coexistence with the legacy `concept_clusters_fts` path during transition
-
-This work is not Phase 7. It is the precondition that makes Phase 7 commands uniform across all corpus reflections.
+Slice 7.1 can now proceed.
 
 ## Current Implementation Snapshot
 

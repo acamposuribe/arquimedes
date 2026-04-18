@@ -165,6 +165,35 @@ class CollectionPageHit:
 
 
 @dataclass
+class GlobalBridgeHit:
+    bridge_id: str
+    canonical_name: str
+    slug: str
+    descriptor: str
+    aliases: list[str]
+    material_count: int
+    wiki_path: str
+    summary: str = ""
+
+    def to_dict(self) -> dict:
+        d: dict[str, Any] = {
+            "bridge_id": self.bridge_id,
+            "canonical_name": self.canonical_name,
+            "slug": self.slug,
+            "material_count": self.material_count,
+        }
+        if self.descriptor:
+            d["descriptor"] = self.descriptor
+        if self.aliases:
+            d["aliases"] = self.aliases
+        if self.wiki_path:
+            d["wiki_path"] = self.wiki_path
+        if self.summary:
+            d["summary"] = self.summary
+        return d
+
+
+@dataclass
 class MaterialCard:
     material_id: str
     title: str
@@ -213,6 +242,7 @@ class SearchResult:
     results: list[MaterialCard]
     collection_pages: list[CollectionPageHit] = field(default_factory=list)
     canonical_clusters: list[CanonicalClusterHit] = field(default_factory=list)
+    global_bridges: list[GlobalBridgeHit] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         d: dict[str, Any] = {
@@ -225,6 +255,8 @@ class SearchResult:
             d["collection_pages"] = [c.to_dict() for c in self.collection_pages]
         if self.canonical_clusters:
             d["canonical_clusters"] = [c.to_dict() for c in self.canonical_clusters]
+        if self.global_bridges:
+            d["global_bridges"] = [b.to_dict() for b in self.global_bridges]
         return d
 
     def to_json(self, indent: int | None = 2) -> str:
@@ -683,6 +715,7 @@ def _do_search(
     # Always query canonical concept clusters — useful at all depths
     collection_pages = _search_collection_pages(con, query, limit=min(limit, 6)) if normalized_scope == "all" else []
     canonical_clusters = _search_canonical_clusters(con, fts_query, query, limit=min(limit, 6)) if normalized_scope == "all" else []
+    global_bridges = _search_global_bridges(con, fts_query, query, limit=min(limit, 6)) if normalized_scope == "all" else []
 
     return SearchResult(
         query=query,
@@ -691,6 +724,7 @@ def _do_search(
         results=cards,
         collection_pages=collection_pages,
         canonical_clusters=canonical_clusters,
+        global_bridges=global_bridges,
     )
 
 
@@ -1003,6 +1037,132 @@ def _search_collection_pages(
     ]
 
 
+def _bridge_summary(
+    why_this_bridge_matters: str | None,
+    descriptor: str | None,
+    bridge_takeaways: str | None,
+    bridge_tensions: str | None,
+    bridge_open_questions: str | None,
+) -> str:
+    for candidate in (
+        str(why_this_bridge_matters or "").strip(),
+        str(descriptor or "").strip(),
+        *(_parse_json_list(bridge_takeaways)[:1]),
+        *(_parse_json_list(bridge_tensions)[:1]),
+        *(_parse_json_list(bridge_open_questions)[:1]),
+    ):
+        if candidate:
+            return candidate
+    return ""
+
+
+def _search_global_bridges(
+    con: sqlite3.Connection,
+    fts_query: str,
+    raw_query: str,
+    limit: int = 5,
+) -> list[GlobalBridgeHit]:
+    """Search Step 2 global bridges via FTS over name, aliases, and bridge reflection prose.
+
+    Falls back to LIKE over bridge reflection columns when FTS returns nothing,
+    so substring queries (e.g., short terms the porter tokenizer drops) still
+    find matches.
+    """
+    hits: list[GlobalBridgeHit] = []
+    seen: set[str] = set()
+
+    # Primary: FTS over bridge_clusters_fts (canonical_name, aliases, descriptor,
+    # bridge_takeaways, bridge_tensions, bridge_open_questions,
+    # helpful_new_sources, why_this_bridge_matters).
+    try:
+        rows = con.execute(
+            """SELECT gbc.bridge_id, gbc.canonical_name, gbc.slug, gbc.descriptor,
+                      gbc.aliases, gbc.material_count, gbc.wiki_path,
+                      gbc.bridge_takeaways, gbc.bridge_tensions,
+                      gbc.bridge_open_questions, gbc.why_this_bridge_matters
+               FROM global_bridge_clusters_fts
+               JOIN global_bridge_clusters gbc
+                 ON global_bridge_clusters_fts.rowid = gbc.rowid
+               WHERE global_bridge_clusters_fts MATCH ?
+               ORDER BY global_bridge_clusters_fts.rank
+               LIMIT ?""",
+            [fts_query, limit],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    for row in rows:
+        bridge_id = row["bridge_id"]
+        if bridge_id in seen:
+            continue
+        seen.add(bridge_id)
+        hits.append(GlobalBridgeHit(
+            bridge_id=bridge_id,
+            canonical_name=row["canonical_name"],
+            slug=row["slug"] or "",
+            descriptor=row["descriptor"] or "",
+            aliases=_parse_json_list(row["aliases"] or "[]"),
+            material_count=row["material_count"] or 0,
+            wiki_path=row["wiki_path"] or "",
+            summary=_bridge_summary(
+                row["why_this_bridge_matters"],
+                row["descriptor"],
+                row["bridge_takeaways"],
+                row["bridge_tensions"],
+                row["bridge_open_questions"],
+            ),
+        ))
+        if len(hits) >= limit:
+            return hits
+
+    # Fallback: LIKE over reflection prose columns for substring matches the
+    # porter tokenizer might drop.
+    pattern = _like_pattern(raw_query)
+    try:
+        rows = con.execute(
+            """SELECT bridge_id, canonical_name, slug, descriptor, aliases,
+                      material_count, wiki_path, bridge_takeaways, bridge_tensions,
+                      bridge_open_questions, helpful_new_sources, why_this_bridge_matters
+               FROM global_bridge_clusters
+               WHERE lower(canonical_name) LIKE lower(?)
+                  OR lower(descriptor) LIKE lower(?)
+                  OR lower(aliases) LIKE lower(?)
+                  OR lower(why_this_bridge_matters) LIKE lower(?)
+                  OR lower(bridge_takeaways) LIKE lower(?)
+                  OR lower(bridge_tensions) LIKE lower(?)
+                  OR lower(bridge_open_questions) LIKE lower(?)
+                  OR lower(helpful_new_sources) LIKE lower(?)
+               ORDER BY material_count DESC, canonical_name
+               LIMIT ?""",
+            [pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern, limit],
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    for row in rows:
+        bridge_id = row["bridge_id"]
+        if bridge_id in seen:
+            continue
+        seen.add(bridge_id)
+        hits.append(GlobalBridgeHit(
+            bridge_id=bridge_id,
+            canonical_name=row["canonical_name"],
+            slug=row["slug"] or "",
+            descriptor=row["descriptor"] or "",
+            aliases=_parse_json_list(row["aliases"] or "[]"),
+            material_count=row["material_count"] or 0,
+            wiki_path=row["wiki_path"] or "",
+            summary=_bridge_summary(
+                row["why_this_bridge_matters"],
+                row["descriptor"],
+                row["bridge_takeaways"],
+                row["bridge_tensions"],
+                row["bridge_open_questions"],
+            ),
+        ))
+        if len(hits) >= limit:
+            return hits
+    return hits
+
+
 def _local_cluster_rows_for_material(con: sqlite3.Connection, material_id: str) -> list[sqlite3.Row]:
     try:
         return con.execute(
@@ -1085,7 +1245,12 @@ def _rows_to_cluster_hits(rows: list[sqlite3.Row]) -> list[CanonicalClusterHit]:
 # --- Human-readable formatting ---
 
 def format_human(result: SearchResult) -> str:
-    if result.total == 0 and not result.collection_pages and not result.canonical_clusters:
+    if (
+        result.total == 0
+        and not result.collection_pages
+        and not result.canonical_clusters
+        and not result.global_bridges
+    ):
         return f'No results for "{result.query}"'
 
     lines: list[str] = []
@@ -1112,6 +1277,16 @@ def format_human(result: SearchResult) -> str:
             lines.append(f"  • {cl.canonical_name}{tag}{alias_str}  [{cl.material_count} material(s)]")
             if cl.summary:
                 summary = cl.summary[:100] + "…" if len(cl.summary) > 100 else cl.summary
+                lines.append(f"    {summary}")
+        lines.append("")
+
+    if result.global_bridges:
+        lines.append("Global bridges:")
+        for br in result.global_bridges:
+            alias_str = f"  (aliases: {', '.join(br.aliases[:3])})" if br.aliases else ""
+            lines.append(f"  • {br.canonical_name}{alias_str}  [{br.material_count} material(s)]")
+            if br.summary:
+                summary = br.summary[:100] + "…" if len(br.summary) > 100 else br.summary
                 lines.append(f"    {summary}")
         lines.append("")
 

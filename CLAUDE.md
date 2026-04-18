@@ -1,5 +1,7 @@
 # Arquimedes — Claude Code Instructions
 
+> If you are an agent **investigating** the knowledge base (answering questions about its contents), stop here and read [docs/agent-handbook.md](docs/agent-handbook.md) instead. This file is for agents **modifying the Arquimedes code itself**.
+
 ## Project
 
 Collaborative LLM knowledge base for architecture (building design) practice and research.

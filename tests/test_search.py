@@ -862,6 +862,22 @@ def concepts_repo(tmp_path, monkeypatch):
             "supporting_material_ids": ["mat_alpha", "mat_beta"],
             "confidence": 0.9,
             "wiki_path": "wiki/shared/bridge-concepts/archival-habitat-cluster.md",
+            "bridge_takeaways": [
+                "Cross-collection bridges reveal how archival practice spans domestic and institutional scales.",
+            ],
+            "bridge_tensions": [
+                "Bridge synthesis risks flattening the situated specificity of each local cluster.",
+            ],
+            "bridge_open_questions": [
+                "How should we trace lineages of archival bricolage across collections?",
+            ],
+            "helpful_new_sources": [
+                "Comparative work on transnational archival practice.",
+            ],
+            "why_this_bridge_matters": (
+                "This bridge matters because it frames archival bricolage as the connector "
+                "between household memory and institutional knowledge infrastructures."
+            ),
         }
     ])
     _write_lint_jsonl(tmp_path, "concept_reflections.jsonl", [
@@ -1172,6 +1188,22 @@ class TestLocalClusterTraversal:
     def test_get_bridge_member_clusters_returns_local_hits(self, concepts_repo):
         hits = get_bridge_member_clusters("global_bridge__archival-habitat-cluster")
         assert [hit.cluster_id for hit in hits] == ["research___general__local_0001"]
+
+
+class TestGlobalBridgeSearch:
+    def test_search_surfaces_global_bridges_by_name(self, concepts_repo):
+        result = search("archival habitat")
+        ids = [hit.bridge_id for hit in result.global_bridges]
+        assert "global_bridge__archival-habitat-cluster" in ids
+
+    def test_search_surfaces_global_bridges_by_reflection_prose(self, concepts_repo):
+        # "bricolage" appears only in why_this_bridge_matters and bridge_takeaways,
+        # not in material cards / chunks / annotations / concepts.
+        result = search("bricolage")
+        ids = [hit.bridge_id for hit in result.global_bridges]
+        assert "global_bridge__archival-habitat-cluster" in ids
+        hit = next(h for h in result.global_bridges if h.bridge_id == "global_bridge__archival-habitat-cluster")
+        assert "bricolage" in hit.summary.lower()
 
 
 # --- Concept normalization ---

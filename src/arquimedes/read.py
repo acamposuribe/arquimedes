@@ -333,3 +333,224 @@ def recent_materials(limit: int = 10) -> list[dict]:
         (limit,),
     )
     return [dict(row) for row in rows]
+
+
+# ---------------------------------------------------------------------------
+# Phase 7 agent-facing accessors
+# ---------------------------------------------------------------------------
+
+
+def _load_jsonl(path: Path) -> list[dict]:
+    if not path.exists():
+        return []
+    rows: list[dict] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(obj, dict):
+            rows.append(obj)
+    return rows
+
+
+def _wiki_rel_path(material_id: str, meta: dict) -> str:
+    rel = _material_wiki_path(meta)
+    return rel if rel.startswith("wiki/") else f"wiki/{rel}"
+
+
+def build_material_card(material_id: str) -> dict:
+    """Compact summary of a material: meta + counts + pointers, no bodies."""
+    meta = load_material_meta(material_id)
+    material_dir = _material_dir(material_id)
+    chunks = _load_jsonl(material_dir / "chunks.jsonl")
+    pages = _load_jsonl(material_dir / "pages.jsonl")
+    annotations = _load_jsonl(material_dir / "annotations.jsonl")
+    figures_dir = material_dir / "figures"
+    figure_count = len(list(figures_dir.glob("fig_*.json"))) if figures_dir.is_dir() else 0
+
+    source_path = str(meta.get("source_path") or "").strip()
+
+    return {
+        "material_id": material_id,
+        "title": str(meta.get("title") or ""),
+        "authors": list(meta.get("authors") or []),
+        "year": str(meta.get("year") or ""),
+        "document_type": str(meta.get("document_type") or ""),
+        "domain": str(meta.get("domain") or ""),
+        "collection": str(meta.get("collection") or ""),
+        "summary": str(meta.get("summary") or ""),
+        "wiki_path": _wiki_rel_path(material_id, meta),
+        "source_path": source_path,
+        "counts": {
+            "pages": len(pages),
+            "chunks": len(chunks),
+            "annotations": len(annotations),
+            "figures": figure_count,
+        },
+    }
+
+
+def list_chunks_compact(material_id: str) -> list[dict]:
+    """One entry per chunk: id, pages, emphasized flag, summary (if present)."""
+    material_dir = _material_dir(material_id)
+    if not (material_dir / "meta.json").exists():
+        raise FileNotFoundError(material_dir / "meta.json")
+    rows: list[dict] = []
+    for chunk in _load_jsonl(material_dir / "chunks.jsonl"):
+        summary_value = chunk.get("summary")
+        summary_text = ""
+        if isinstance(summary_value, dict):
+            summary_text = str(summary_value.get("value") or "")
+        elif isinstance(summary_value, str):
+            summary_text = summary_value
+        rows.append({
+            "chunk_id": str(chunk.get("chunk_id") or ""),
+            "source_pages": list(chunk.get("source_pages") or []),
+            "emphasized": bool(chunk.get("emphasized")),
+            "content_class": str(chunk.get("content_class") or ""),
+            "summary": summary_text,
+        })
+    return rows
+
+
+def get_chunk_by_id(material_id: str, chunk_id: str) -> dict:
+    """Full chunk record (text + metadata) by id."""
+    material_dir = _material_dir(material_id)
+    if not (material_dir / "meta.json").exists():
+        raise FileNotFoundError(material_dir / "meta.json")
+    for chunk in _load_jsonl(material_dir / "chunks.jsonl"):
+        if str(chunk.get("chunk_id") or "") == chunk_id:
+            return chunk
+    raise FileNotFoundError(f"chunk {chunk_id!r} in material {material_id!r}")
+
+
+def get_page(material_id: str, page_number: int) -> dict:
+    """Full page record (text + metadata) by 1-based page number."""
+    material_dir = _material_dir(material_id)
+    if not (material_dir / "meta.json").exists():
+        raise FileNotFoundError(material_dir / "meta.json")
+    for page in _load_jsonl(material_dir / "pages.jsonl"):
+        if int(page.get("page_number") or 0) == page_number:
+            return page
+    raise FileNotFoundError(f"page {page_number} in material {material_id!r}")
+
+
+def _figure_field_value(value: object) -> str:
+    if isinstance(value, dict):
+        return str(value.get("value") or "")
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def list_figures_compact(material_id: str, visual_type: str | None = None) -> list[dict]:
+    """Compact figure index: id, page, visual_type, caption (flattened)."""
+    figures = load_material_figures(material_id)
+    vt_filter = (visual_type or "").strip().lower() or None
+    rows: list[dict] = []
+    for fig in figures:
+        vt = _figure_field_value(fig.get("visual_type")).strip()
+        if vt_filter and vt.lower() != vt_filter:
+            continue
+        rows.append({
+            "figure_id": str(fig.get("figure_id") or ""),
+            "source_page": int(fig.get("source_page") or 0),
+            "visual_type": vt,
+            "relevance": str(fig.get("relevance") or ""),
+            "caption": _figure_field_value(fig.get("caption")),
+            "image_path": str(fig.get("image_path") or ""),
+        })
+    return rows
+
+
+def get_figure(material_id: str, figure_id: str) -> dict:
+    """Full figure sidecar by id."""
+    for fig in load_material_figures(material_id):
+        if str(fig.get("figure_id") or "") == figure_id:
+            return fig
+    raise FileNotFoundError(f"figure {figure_id!r} in material {material_id!r}")
+
+
+def list_annotations(
+    material_id: str,
+    page: int | None = None,
+    kind: str | None = None,
+) -> list[dict]:
+    """Annotations for a material, optionally filtered by page or type."""
+    material_dir = _material_dir(material_id)
+    if not (material_dir / "meta.json").exists():
+        raise FileNotFoundError(material_dir / "meta.json")
+    kind_filter = (kind or "").strip().lower() or None
+    rows: list[dict] = []
+    for ann in _load_jsonl(material_dir / "annotations.jsonl"):
+        if page is not None and int(ann.get("page") or 0) != page:
+            continue
+        if kind_filter and str(ann.get("type") or "").lower() != kind_filter:
+            continue
+        rows.append(ann)
+    return rows
+
+
+def _read_json_if_exists(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    try:
+        return _read_json(path)
+    except (json.JSONDecodeError, ValueError, OSError):
+        return None
+
+
+def _count_one(sql: str, params: tuple = ()) -> int:
+    try:
+        rows = _index_rows(sql, params)
+    except sqlite3.OperationalError:
+        return 0
+    if not rows:
+        return 0
+    first = rows[0]
+    value = first[0] if len(first.keys()) == 1 else first["c"]
+    return int(value or 0)
+
+
+def build_corpus_overview() -> dict:
+    """Live snapshot of corpus counts and freshness stamps."""
+    project_root = get_project_root()
+    derived_dir = project_root / "derived"
+    index_path = get_index_path()
+
+    counts = {
+        "materials": _count_one("SELECT COUNT(*) FROM materials"),
+        "chunks": _count_one("SELECT COUNT(*) FROM chunks"),
+        "figures": _count_one("SELECT COUNT(*) FROM figures"),
+        "annotations": _count_one("SELECT COUNT(*) FROM annotations"),
+        "wiki_pages": _count_one("SELECT COUNT(*) FROM wiki_pages"),
+    }
+    try:
+        domain_rows = _index_rows(
+            "SELECT domain, collection, COUNT(*) AS c FROM materials GROUP BY domain, collection ORDER BY domain, collection"
+        )
+    except sqlite3.OperationalError:
+        domain_rows = []
+    collections = [
+        {"domain": row["domain"], "collection": row["collection"], "material_count": int(row["c"])}
+        for row in domain_rows
+    ]
+
+    stamps = {
+        "compile": _read_json_if_exists(derived_dir / "compile_stamp.json"),
+        "memory_bridge": _read_json_if_exists(derived_dir / "memory_bridge_stamp.json"),
+        "global_bridge": _read_json_if_exists(derived_dir / "global_bridge_stamp.json"),
+    }
+
+    return {
+        "project_root": str(project_root),
+        "index_path": str(index_path),
+        "index_exists": index_path.exists(),
+        "counts": counts,
+        "collections": collections,
+        "stamps": stamps,
+    }

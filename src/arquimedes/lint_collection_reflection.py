@@ -392,6 +392,7 @@ def _collection_reflection_prompt(
         f"- SQL evidence file: {evidence_path}\n"
         "\n"
         "Return only the reflection fields requested by the schema: main_takeaways, main_tensions, important_material_ids, important_cluster_ids, open_questions, helpful_new_sources, why_this_collection_matters, and _finished.\n"
+        "Use the SQL evidence file's methodological conclusions and main content learnings as the primary reusable material-level evidence. Treat new_materials as the main evidence for this run and old_materials as continuity context. The chunks are only secondary support.\n"
         "Write a strong reflection that includes main takeaways, main tensions, important materials, important local clusters, open questions, helpful new sources, and why this collection matters.\n"
         "Field guidance:\n"
         "- why_this_collection_matters: write one concise didactic paragraph that states the collection's thesis or through-line, why it matters in this corpus, and at least one concrete distinction, example, or stake that keeps the paragraph from becoming generic. Don't start with 'this collection matters becaus...'. Maintain scholarly rigor.\n"

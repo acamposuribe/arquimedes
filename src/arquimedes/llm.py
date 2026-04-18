@@ -221,12 +221,19 @@ class EnrichmentError(Exception):
 # ---------------------------------------------------------------------------
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```\s*$", re.DOTALL)
+_FENCE_SEARCH_RE = re.compile(r"```(?:json)?\s*\n?(.*?)\n?```", re.DOTALL | re.IGNORECASE)
 
 
 def _strip_fences(text: str) -> str:
     """Remove surrounding ```json...``` or ```...``` fences if present."""
-    m = _FENCE_RE.match(text.strip())
-    return m.group(1).strip() if m else text.strip()
+    stripped = text.strip()
+    m = _FENCE_RE.match(stripped)
+    if m:
+        return m.group(1).strip()
+    search = _FENCE_SEARCH_RE.search(stripped)
+    if search:
+        return search.group(1).strip()
+    return stripped
 
 
 def _parse_json_prefix(text: str):
@@ -282,13 +289,21 @@ def parse_json_or_repair(
         pass
 
     # Step 4: one-shot LLM schema repair
+    if isinstance(schema_description, str):
+        schema_text = schema_description
+    else:
+        try:
+            schema_text = json.dumps(schema_description, ensure_ascii=False, indent=2)
+        except TypeError:
+            schema_text = str(schema_description)
+
     repair_response = llm_fn(
         "You are a JSON repair assistant. Return ONLY valid JSON, no markdown fences.",
         [
             {
                 "role": "user",
                 "content": (
-                    f"Return valid JSON matching this schema:\n{schema_description}"
+                    f"Return valid JSON matching this schema:\n{schema_text}"
                     f"\n\nYour previous output was:\n{text}"
                 ),
             }
@@ -302,8 +317,15 @@ def parse_json_or_repair(
     try:
         return json.loads(repair_response)
     except json.JSONDecodeError:
-        _llm_debug("schema repair failed to produce valid JSON")
-        raise EnrichmentError("Schema repair failed")
+        repaired = _strip_fences(repair_response)
+        try:
+            return json.loads(repaired)
+        except json.JSONDecodeError:
+            try:
+                return _parse_json_prefix(repaired)
+            except json.JSONDecodeError:
+                _llm_debug("schema repair failed to produce valid JSON")
+                raise EnrichmentError("Schema repair failed")
 
 
 # ---------------------------------------------------------------------------

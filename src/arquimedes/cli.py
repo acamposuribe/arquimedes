@@ -311,19 +311,225 @@ def concepts(min_materials: int, limit: int, human: bool):
         ))
 
 
-@cli.command()
-@click.argument("material_id")
-@click.option("--page", type=int, help="Read a specific page")
-def read(material_id: str, page: int | None):
-    """Read extracted content for a material."""
-    click.echo("arq read: not yet implemented")
+def _format_card_human(card: dict) -> str:
+    lines = [
+        f"{card['title']} ({card['material_id']})",
+        f"  {card['domain']}/{card['collection']}  {card['document_type']}  {card['year']}",
+        f"  wiki: {card['wiki_path']}",
+    ]
+    if card.get("authors"):
+        lines.append(f"  authors: {', '.join(card['authors'])}")
+    c = card["counts"]
+    lines.append(
+        f"  counts: {c['pages']} pages, {c['chunks']} chunks, {c['annotations']} annotations, {c['figures']} figures"
+    )
+    if card.get("summary"):
+        lines.append("")
+        lines.append(card["summary"])
+    return "\n".join(lines)
+
+
+def _format_chunk_list_human(chunks: list[dict]) -> str:
+    if not chunks:
+        return "(no chunks)"
+    out = []
+    for c in chunks:
+        marker = "*" if c.get("emphasized") else " "
+        pages = ",".join(str(p) for p in c.get("source_pages") or [])
+        summary = c.get("summary") or ""
+        out.append(f"{marker} {c['chunk_id']}  p{pages}  {summary}")
+    return "\n".join(out)
+
+
+def _format_figure_list_human(rows: list[dict]) -> str:
+    if not rows:
+        return "(no figures)"
+    out = []
+    for f in rows:
+        out.append(f"  {f['figure_id']}  p{f['source_page']}  [{f.get('visual_type') or '-'}]  {f.get('caption') or ''}")
+    return "\n".join(out)
+
+
+def _format_annotations_human(rows: list[dict]) -> str:
+    if not rows:
+        return "(no annotations)"
+    out = []
+    for a in rows:
+        body = a.get("quoted_text") or a.get("comment") or ""
+        out.append(f"  {a.get('annotation_id','')}  p{a.get('page',0)}  [{a.get('type','')}]  {body}")
+    return "\n".join(out)
+
+
+def _format_overview_human(overview: dict) -> str:
+    c = overview["counts"]
+    lines = [
+        f"corpus at {overview['project_root']}",
+        f"  index: {'present' if overview['index_exists'] else 'missing'} ({overview['index_path']})",
+        f"  counts: {c['materials']} materials, {c['chunks']} chunks, {c['figures']} figures, {c['annotations']} annotations, {c['wiki_pages']} wiki pages",
+    ]
+    if overview.get("collections"):
+        lines.append("  collections:")
+        for col in overview["collections"]:
+            lines.append(f"    {col['domain']}/{col['collection']}: {col['material_count']}")
+    return "\n".join(lines)
 
 
 @cli.command()
 @click.argument("material_id")
-def figures(material_id: str):
-    """List figures with descriptions for a material."""
-    click.echo("arq figures: not yet implemented")
+@click.option("--page", type=int, help="Return the text for one page.")
+@click.option("--chunk", "chunk_id", help="Return one chunk by id.")
+@click.option("--full", is_flag=True, help="Return the full text.md body (large).")
+@click.option(
+    "--detail",
+    type=click.Choice(["chunks", "figures", "annotations"]),
+    help="Return a compact index of one aspect alongside the card.",
+)
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def read(
+    material_id: str,
+    page: int | None,
+    chunk_id: str | None,
+    full: bool,
+    detail: str | None,
+    human: bool,
+):
+    """Read extracted content for a material. See docs/agent-handbook.md."""
+    from arquimedes.agent_cli import ensure_guard, emit, not_found
+    from arquimedes import read as read_mod
+
+    @ensure_guard
+    def run():
+        selected = [
+            name for name, value in (("--page", page is not None), ("--chunk", bool(chunk_id)), ("--full", full), ("--detail", bool(detail)))
+            if value
+        ]
+        if len(selected) > 1:
+            raise click.UsageError(f"Options are mutually exclusive: {', '.join(selected)}")
+
+        try:
+            if page is not None:
+                payload = read_mod.get_page(material_id, page)
+                emit(payload, human=human, human_formatter=lambda p: p.get("text", ""))
+                return
+            if chunk_id:
+                payload = read_mod.get_chunk_by_id(material_id, chunk_id)
+                emit(payload, human=human, human_formatter=lambda c: c.get("text", ""))
+                return
+            if full:
+                path = read_mod.material_extracted_text_path(material_id)
+                if not path:
+                    raise not_found(f"text.md for material {material_id!r}")
+                emit(path.read_text(encoding="utf-8"), human=human)
+                return
+
+            card = read_mod.build_material_card(material_id)
+            if detail == "chunks":
+                payload = {"card": card, "chunks": read_mod.list_chunks_compact(material_id)}
+                emit(payload, human=human, human_formatter=lambda d: _format_card_human(d["card"]) + "\n\n" + _format_chunk_list_human(d["chunks"]))
+                return
+            if detail == "figures":
+                payload = {"card": card, "figures": read_mod.list_figures_compact(material_id)}
+                emit(payload, human=human, human_formatter=lambda d: _format_card_human(d["card"]) + "\n\n" + _format_figure_list_human(d["figures"]))
+                return
+            if detail == "annotations":
+                payload = {"card": card, "annotations": read_mod.list_annotations(material_id)}
+                emit(payload, human=human, human_formatter=lambda d: _format_card_human(d["card"]) + "\n\n" + _format_annotations_human(d["annotations"]))
+                return
+
+            emit(card, human=human, human_formatter=_format_card_human)
+        except FileNotFoundError as exc:
+            raise not_found(str(exc), hint=f"arq read {material_id}")
+
+    run()
+
+
+@cli.command()
+@click.argument("material_id")
+@click.option("--visual-type", "visual_type", help="Filter by visual_type (e.g. diagram, photograph).")
+@click.option("--figure", "figure_id", help="Return one figure by id.")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def figures(material_id: str, visual_type: str | None, figure_id: str | None, human: bool):
+    """List figures (or one figure) for a material. See docs/agent-handbook.md."""
+    from arquimedes.agent_cli import ensure_guard, emit, not_found
+    from arquimedes import read as read_mod
+
+    @ensure_guard
+    def run():
+        try:
+            if figure_id:
+                payload = read_mod.get_figure(material_id, figure_id)
+                emit(
+                    payload,
+                    human=human,
+                    human_formatter=lambda f: f"{f.get('figure_id','')}  p{f.get('source_page',0)}\n{(f.get('caption') or {}).get('value') if isinstance(f.get('caption'), dict) else (f.get('caption') or '')}",
+                )
+                return
+            rows = read_mod.list_figures_compact(material_id, visual_type=visual_type)
+            emit(rows, human=human, human_formatter=_format_figure_list_human)
+        except FileNotFoundError as exc:
+            raise not_found(str(exc), hint=f"arq read {material_id}")
+
+    run()
+
+
+@cli.command()
+@click.argument("material_id")
+@click.option("--page", type=int, help="Filter by page number.")
+@click.option("--type", "kind", help="Filter by annotation type (highlight, note, underline, strikeout).")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def annotations(material_id: str, page: int | None, kind: str | None, human: bool):
+    """List reader annotations for a material. See docs/agent-handbook.md."""
+    from arquimedes.agent_cli import ensure_guard, emit, not_found
+    from arquimedes import read as read_mod
+
+    @ensure_guard
+    def run():
+        try:
+            rows = read_mod.list_annotations(material_id, page=page, kind=kind)
+        except FileNotFoundError as exc:
+            raise not_found(str(exc), hint=f"arq read {material_id}")
+        emit(rows, human=human, human_formatter=_format_annotations_human)
+
+    run()
+
+
+@cli.command()
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def overview(human: bool):
+    """Corpus-wide snapshot: counts, collections, stamps. See docs/agent-handbook.md."""
+    from arquimedes.agent_cli import ensure_guard, emit
+    from arquimedes import read as read_mod
+
+    @ensure_guard
+    def run():
+        emit(read_mod.build_corpus_overview(), human=human, human_formatter=_format_overview_human)
+
+    run()
+
+
+@cli.command()
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def refresh(human: bool):
+    """Pull (if applicable) and ensure the index + memory are current."""
+    from arquimedes.freshness import update_workspace
+
+    def _format_refresh_human(status: dict) -> str:
+        lines = [
+            f"repo_applicable: {status.get('repo_applicable')}",
+            f"pull_attempted:  {status.get('pull_attempted')}",
+            f"pull_result:     {status.get('pull_result')}",
+            f"index_rebuilt:   {status.get('index_rebuilt')}",
+            f"memory_rebuilt:  {status.get('memory_rebuilt')}",
+        ]
+        return "\n".join(lines)
+
+    try:
+        status = update_workspace()
+    except FileNotFoundError as exc:
+        raise click.ClickException(str(exc))
+
+    from arquimedes.agent_cli import emit
+    emit(status, human=human, human_formatter=_format_refresh_human)
 
 
 @cli.command("cluster")

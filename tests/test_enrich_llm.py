@@ -56,6 +56,20 @@ class TestParseJsonOrRepair:
         user_content = llm_fn.call_args[0][1][0]["content"]
         assert "my schema" in user_content and "not json" in user_content
 
+    def test_repair_accepts_fenced_json(self):
+        llm_fn = _make_llm_fn(['```json\n{"fixed": true}\n```'])
+
+        data = parse_json_or_repair(llm_fn, "not json", "my schema")
+
+        assert data == {"fixed": True}
+
+    def test_repair_accepts_json_prefix_with_trailing_text(self):
+        llm_fn = _make_llm_fn(['{"fixed": true}\n\nDone.'])
+
+        data = parse_json_or_repair(llm_fn, "not json", "my schema")
+
+        assert data == {"fixed": True}
+
     def test_repair_failure_raises(self):
         llm_fn = _make_llm_fn(["still broken"])
         with pytest.raises(EnrichmentError, match="Schema repair failed"):

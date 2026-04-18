@@ -1,6 +1,6 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phases 1-6 complete; Collection Graph implemented; Phase 8 web UI in progress; Phase 7 agent tools specced and planned (2026-04-16)
+> **Status:** Phases 1-7 complete (Phase 7 agent tools landed 2026-04-16); Collection Graph implemented; Phase 8 web UI in progress
 > **Last updated:** 2026-04-16
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
@@ -176,28 +176,28 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 
 Current `arq search` covers material cards, chunks, figures, annotations, per-material concepts, local concept clusters, legacy bridge clusters, and (via LIKE fallback) concept/collection reflection prose. It does **not** cover Step 2 global bridge clusters or their reflection essays (`why_this_bridge_matters` etc.) — those only live in `derived/global_bridge_clusters.jsonl` and compiled markdown. Phase 7 wraps search, so search must reach every reflection layer first.
 
-- [ ] Add `global_bridge_clusters` table to the memory projection (cluster_id, canonical_name, slug, aliases, material_count, wiki_path, why_this_bridge_matters, main_takeaways, main_tensions, open_questions, helpful_new_sources)
-- [ ] Add `global_bridge_clusters_fts` covering name, aliases, and reflection prose
-- [ ] Populate the new tables during `arq compile` / `arq memory rebuild` from `derived/global_bridge_clusters.jsonl`
-- [ ] Add `GlobalBridgeHit` dataclass + `_search_global_bridges` helper in `search.py`; surface as a new `global_bridges` field on `SearchResult`
-- [ ] Keep legacy `concept_clusters_fts` path working during the Step 2 retirement transition
-- [ ] Tests: FTS matches, LIKE fallback over bridge reflection fields, coexistence with legacy layer
+- [x] Add `global_bridge_clusters` table to the memory projection (bridge_id, canonical_name, slug, descriptor, aliases, confidence, material_count, wiki_path, why_this_bridge_matters, bridge_takeaways, bridge_tensions, bridge_open_questions, helpful_new_sources)
+- [x] Add `global_bridge_clusters_fts` covering name, aliases, descriptor, and reflection prose
+- [x] Populate the new tables during `arq compile` / `arq memory rebuild` from `derived/global_bridge_clusters.jsonl`
+- [x] Add `GlobalBridgeHit` dataclass + `_search_global_bridges` helper in `search.py`; surface as a new `global_bridges` field on `SearchResult`
+- [x] Keep legacy `concept_clusters_fts` path working during the Step 2 retirement transition
+- [x] Tests: FTS matches, LIKE fallback over bridge reflection fields, coexistence with legacy layer
 
 ## Phase 7: Agent Tools
 
 Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell-capable agent to investigate the knowledge base token-efficiently without installing or configuring anything beyond the existing `arq` CLI. Agents read; they never maintain. Starts after the Search Coverage prerequisite lands so every reflection layer is one search away. See [Phase 7 spec](superpowers/specs/2026-04-16-phase7-agent-tools-design.md) and [Phase 7 plan](superpowers/plans/2026-04-16-phase7-agent-tools.md).
 
-- [ ] Shared `agent_cli.ensure_guard` decorator + `ARQ_SKIP_FRESHNESS` opt-out powering transparent `ensure_index_and_memory()` on every new agent-facing command
-- [ ] Extend `read.py` with card, chunk-by-id, compact chunk/figure/annotation indexes, and corpus-overview accessors; no new semantic layers
-- [ ] Replace `arq read` stub with layered flags: default card, `--detail <card|chunks|figures|annotations|concepts>`, `--chunk <id>`, `--page N`, `--full` (explicit opt-in, expensive)
-- [ ] Replace `arq figures` stub with compact list by default; `--visual-type`, `--figure <id>` drills
-- [ ] Add `arq annotations <material_id>` with `--page`, `--type` filters
-- [ ] Add `arq overview` returning domain/collection/material/cluster/bridge counts + freshness snapshot from live SQLite + stamps
-- [ ] Add `arq refresh` wrapping Phase 8 `freshness.refresh()` (pull-if-applicable + ensure) as the explicit heavier freshness path
-- [ ] Every new command emits JSON by default with `--human` opt-in and includes `material_id` / `wiki_path` / identifiers for direct next-step lookups
-- [ ] Create `docs/agent-handbook.md` — hard cap ~800 tokens total: mental model (2-3 lines), path tree, investigation recipe, command quick-reference table, one-line maintainer-only warning; no intro prose, no examples. Add pointer from `CLAUDE.md` to this file.
-- [ ] Freshness-on-read contract: transparent `ensure_index_and_memory()` on search/read commands; `arq refresh` for pull-and-ensure; `ARQ_SKIP_FRESHNESS=1` opt-out; no auto-pull on every CLI call
-- [ ] Explicitly out of scope for Phase 7: MCP server, LLM-invoking commands, any mutation of extracted/wiki/memory/index artifacts, daemon behavior
+- [x] Shared `agent_cli.ensure_guard` decorator + `ARQ_SKIP_FRESHNESS` opt-out powering transparent `ensure_index_and_memory()` on every new agent-facing command
+- [x] Extend `read.py` with card, chunk-by-id, compact chunk/figure/annotation indexes, and corpus-overview accessors; no new semantic layers
+- [x] Replace `arq read` stub with layered flags: default card, `--detail <chunks|figures|annotations>`, `--chunk <id>`, `--page N`, `--full` (explicit opt-in, expensive)
+- [x] Replace `arq figures` stub with compact list by default; `--visual-type`, `--figure <id>` drills
+- [x] Add `arq annotations <material_id>` with `--page`, `--type` filters
+- [x] Add `arq overview` returning domain/collection/material/cluster/bridge counts + freshness snapshot from live SQLite + stamps
+- [x] Add `arq refresh` wrapping `freshness.update_workspace()` (pull-if-applicable + ensure) as the explicit heavier freshness path
+- [x] Every new command emits JSON by default with `--human` opt-in and includes `material_id` / `wiki_path` / identifiers for direct next-step lookups
+- [x] Create `docs/agent-handbook.md` — hard cap ~800 tokens total: mental model (2-3 lines), path tree, investigation recipe, command quick-reference table, one-line maintainer-only warning; no intro prose, no examples. Add pointer from `CLAUDE.md` to this file.
+- [x] Freshness-on-read contract: transparent `ensure_index_and_memory()` on search/read commands; `arq refresh` for pull-and-ensure; `ARQ_SKIP_FRESHNESS=1` opt-out; no auto-pull on every CLI call
+- [x] Explicitly out of scope for Phase 7: MCP server, LLM-invoking commands, any mutation of extracted/wiki/memory/index artifacts, daemon behavior
 
 ## Phase 8: Web UI
 
@@ -237,9 +237,11 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 | `src/arquimedes/enrich_prompts.py` | Prompt builders for document, chunk, figure stages |
 | `src/arquimedes/index.py` | SQLite FTS5 index build + query + staleness check |
 | `src/arquimedes/search.py` | Search interface (card → chunk → deep) |
+| `src/arquimedes/read.py` | Deterministic read helpers for wiki/material/figure/chunk/page/annotation/overview accessors |
+| `src/arquimedes/agent_cli.py` | Shared helpers for agent-facing commands: freshness guard, JSON/human dispatch, error formatting |
+| `src/arquimedes/freshness.py` | Collaborator refresh path: optional git pull + `ensure_index_and_memory()` |
 | `src/arquimedes/compile.py` | Wiki generation |
 | `src/arquimedes/lint_global_bridge.py` | Step 2 global bridge artifact generation from local clusters |
-| `src/arquimedes/mcp_server.py` | MCP tool wrapper |
 | `src/arquimedes/serve.py` | Web UI (FastAPI) |
 | `src/arquimedes/watch.py` | File watcher daemon (fsevents/poll + debounce) |
 | `src/arquimedes/sync.py` | Auto-pull daemon + index ensure |
@@ -256,8 +258,8 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 - [ ] Watch: `arq watch` + drop file → auto-pipeline with debounced batch commit
 - [ ] Sync: second device `arq sync` → git pull + `arq index ensure` auto-rebuilds local index and local memory bridge
 - [ ] Web UI: `arq serve` → browse, search, view materials, open figures
-- [ ] Agent CLI: `arq read <id>` returns a card with `wiki_path`; `--chunk`, `--page`, `--full`, `--detail` drill layers behave per spec
-- [ ] Agent CLI: `arq figures <id>`, `arq annotations <id>`, `arq overview`, `arq refresh` return documented JSON shapes and respect `--human`
-- [ ] Agent CLI: `ARQ_SKIP_FRESHNESS=1` bypasses `ensure_index_and_memory()` on agent-facing commands
-- [ ] Agent handbook: `docs/agent-handbook.md` exists; referenced wiki paths and command names resolve; under ~2k tokens of body prose
+- [x] Agent CLI: `arq read <id>` returns a card with `wiki_path`; `--chunk`, `--page`, `--full`, `--detail` drill layers behave per spec
+- [x] Agent CLI: `arq figures <id>`, `arq annotations <id>`, `arq overview`, `arq refresh` return documented JSON shapes and respect `--human`
+- [x] Agent CLI: `ARQ_SKIP_FRESHNESS=1` bypasses `ensure_index_and_memory()` on agent-facing commands
+- [x] Agent handbook: `docs/agent-handbook.md` exists; referenced wiki paths and command names resolve; under ~800-token body
 - [ ] Lint: `arq lint` → catches broken links, missing metadata

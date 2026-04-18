@@ -114,6 +114,37 @@ CREATE TABLE IF NOT EXISTS global_bridge_members (
     PRIMARY KEY (bridge_cluster_id, local_cluster_id)
 );
 
+CREATE TABLE IF NOT EXISTS global_bridge_clusters (
+    bridge_id               TEXT PRIMARY KEY,
+    canonical_name          TEXT NOT NULL DEFAULT '',
+    slug                    TEXT NOT NULL DEFAULT '',
+    descriptor              TEXT NOT NULL DEFAULT '',
+    aliases                 TEXT NOT NULL DEFAULT '[]',
+    confidence              REAL NOT NULL DEFAULT 0.0,
+    wiki_path               TEXT NOT NULL DEFAULT '',
+    material_count          INTEGER NOT NULL DEFAULT 0,
+    bridge_takeaways        TEXT NOT NULL DEFAULT '[]',
+    bridge_tensions         TEXT NOT NULL DEFAULT '[]',
+    bridge_open_questions   TEXT NOT NULL DEFAULT '[]',
+    helpful_new_sources     TEXT NOT NULL DEFAULT '[]',
+    why_this_bridge_matters TEXT NOT NULL DEFAULT ''
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS global_bridge_clusters_fts USING fts5(
+    bridge_id UNINDEXED,
+    canonical_name,
+    aliases,
+    descriptor,
+    bridge_takeaways,
+    bridge_tensions,
+    bridge_open_questions,
+    helpful_new_sources,
+    why_this_bridge_matters,
+    content='global_bridge_clusters',
+    content_rowid='rowid',
+    tokenize='porter unicode61'
+);
+
 CREATE TABLE IF NOT EXISTS local_concept_clusters (
     cluster_id     TEXT PRIMARY KEY,
     domain         TEXT NOT NULL DEFAULT '',
@@ -290,6 +321,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
     con.execute("DELETE FROM cluster_relations")
     con.execute("DELETE FROM local_cluster_relations")
     con.execute("DELETE FROM global_bridge_members")
+    con.execute("DELETE FROM global_bridge_clusters")
     con.execute("DELETE FROM concept_clusters")
     con.execute("DELETE FROM local_concept_clusters")
     con.execute("DELETE FROM cluster_reviews")
@@ -299,6 +331,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
     # Rebuild FTS
     con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('delete-all')")
     con.execute("INSERT INTO local_concept_clusters_fts(local_concept_clusters_fts) VALUES ('delete-all')")
+    con.execute("INSERT INTO global_bridge_clusters_fts(global_bridge_clusters_fts) VALUES ('delete-all')")
 
     n_aliases = 0
     n_concept_pages = 0
@@ -307,6 +340,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
     n_cluster_material_links = 0
     n_cluster_relations = 0
     n_global_bridge_members = 0
+    n_global_bridge_clusters = 0
     n_local_aliases = 0
     n_local_cluster_material_links = 0
     n_local_cluster_relations = 0
@@ -445,6 +479,51 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
             )
             n_global_bridge_members += 1
 
+        # Populate global_bridge_clusters (Step 2 bridges) with reflection fields,
+        # so agents can FTS over bridge prose (why_this_bridge_matters, takeaways, tensions, etc.)
+        # and coexist with the legacy concept_clusters table for backwards compatibility.
+        bridge_id = str(c.get("bridge_id", "")).strip()
+        has_bridge_reflection = any(
+            key in c
+            for key in (
+                "bridge_takeaways",
+                "bridge_tensions",
+                "bridge_open_questions",
+                "why_this_bridge_matters",
+                "helpful_new_sources",
+            )
+        )
+        if bridge_id and has_bridge_reflection:
+            descriptor = str(c.get("descriptor", "")).strip()
+            bridge_takeaways = list(c.get("bridge_takeaways") or [])
+            bridge_tensions = list(c.get("bridge_tensions") or [])
+            bridge_open_questions = list(c.get("bridge_open_questions") or [])
+            helpful_new_sources = list(c.get("helpful_new_sources") or [])
+            why_this_bridge_matters = str(c.get("why_this_bridge_matters", "")).strip()
+            con.execute(
+                """INSERT OR REPLACE INTO global_bridge_clusters
+                   (bridge_id, canonical_name, slug, descriptor, aliases, confidence,
+                    wiki_path, material_count, bridge_takeaways, bridge_tensions,
+                    bridge_open_questions, helpful_new_sources, why_this_bridge_matters)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    bridge_id,
+                    canonical_name,
+                    slug,
+                    descriptor,
+                    json.dumps(aliases, ensure_ascii=False),
+                    confidence,
+                    wiki_path,
+                    material_count,
+                    json.dumps(bridge_takeaways, ensure_ascii=False),
+                    json.dumps(bridge_tensions, ensure_ascii=False),
+                    json.dumps(bridge_open_questions, ensure_ascii=False),
+                    json.dumps(helpful_new_sources, ensure_ascii=False),
+                    why_this_bridge_matters,
+                ),
+            )
+            n_global_bridge_clusters += 1
+
     for c in local_clusters:
         cluster_id = c.get("cluster_id", "")
         if not cluster_id:
@@ -567,6 +646,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
     # Rebuild FTS after inserting cluster data
     con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('rebuild')")
     con.execute("INSERT INTO local_concept_clusters_fts(local_concept_clusters_fts) VALUES ('rebuild')")
+    con.execute("INSERT INTO global_bridge_clusters_fts(global_bridge_clusters_fts) VALUES ('rebuild')")
 
     # Material wiki pages
     for mid, info in mat_info.items():
@@ -726,6 +806,7 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
         "cluster_material_links": n_cluster_material_links,
         "cluster_relations": n_cluster_relations,
         "global_bridge_members": n_global_bridge_members,
+        "global_bridge_clusters": n_global_bridge_clusters,
         "local_clusters": len(local_clusters),
         "local_aliases": n_local_aliases,
         "local_cluster_material_links": n_local_cluster_material_links,

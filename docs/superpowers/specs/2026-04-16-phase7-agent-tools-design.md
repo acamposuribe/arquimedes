@@ -48,36 +48,31 @@ Phase 7 explicitly excludes:
 - any LLM-invoking command (enrich, cluster, compile reflections, lint reflective passes)
 - any background daemon behavior — that belongs to Phase 9
 
-## Prerequisite: Search Must Cover All Reflection Layers
+## Prerequisite: Search Must Cover All Reflection Layers — ✅ landed 2026-04-16
 
-Phase 7 assumes `arq search` can reach every reflection layer the corpus currently synthesizes. Today it cannot, and this gap should close **before** Phase 7 implementation begins.
+Phase 7 assumes `arq search` can reach every reflection layer the corpus synthesizes. The gap is now closed.
 
-### What is searchable today
+### What is searchable now
 
 - material cards, chunks, figures, annotations, per-material concepts (all FTS)
 - **local concept clusters** (Step 1) — FTS on `local_concept_clusters_fts`
-- **legacy bridge concept clusters** — FTS on `concept_clusters_fts` (currently being retired per Collection Graph Step 2)
-- concept reflection prose (takeaways / tensions / open questions / why_this_concept_matters / helpful_new_sources) — LIKE-fallback only
-- collection reflection prose (same fields plus why_this_collection_matters, title) — LIKE-fallback only
+- **legacy bridge concept clusters** — FTS on `concept_clusters_fts` (retained during Step 2 retirement transition)
+- **Step 2 global bridge clusters** — FTS on `global_bridge_clusters_fts` indexing `canonical_name`, `aliases`, `descriptor`, `bridge_takeaways`, `bridge_tensions`, `bridge_open_questions`, `helpful_new_sources`, `why_this_bridge_matters`; LIKE fallback over the same reflection columns. Surfaced as `SearchResult.global_bridges: list[GlobalBridgeHit]`.
+- concept reflection prose — local cluster FTS + LIKE fallback
+- collection reflection prose — LIKE fallback
 
-### What is NOT searchable today
+### What landed
 
-- **Step 2 global bridge clusters** — no dedicated SQLite table, no FTS, not in `SearchResult`. Reachable only via traversal from a local cluster (`get_cluster_global_bridges`).
-- **Bridge reflection prose (`why_this_bridge_matters`, bridge takeaways, tensions, open questions, helpful_new_sources)** — lives only in `derived/global_bridge_clusters.jsonl` and compiled `wiki/shared/concepts/*.md`. No SQLite row. An agent asking "what connects thermal mass research across Mediterranean and continental climates" will not find the bridge page that synthesizes exactly that.
+1. New `global_bridge_clusters` table in `memory.py` with `bridge_id`, `canonical_name`, `slug`, `descriptor`, `aliases`, `confidence`, `wiki_path`, `material_count`, `bridge_takeaways`, `bridge_tensions`, `bridge_open_questions`, `helpful_new_sources`, `why_this_bridge_matters`.
+2. New `global_bridge_clusters_fts` covering name, aliases, descriptor, and all reflection prose.
+3. `_build_bridge` populates both on every `arq memory rebuild` from `derived/global_bridge_clusters.jsonl`.
+4. New `GlobalBridgeHit` dataclass and `_search_global_bridges` helper in `search.py` with FTS-then-LIKE pattern mirroring `_search_canonical_clusters`.
+5. New `global_bridges` field on `SearchResult`; `format_human` renders a "Global bridges:" section.
+6. Legacy `concept_clusters_fts` path unchanged — two layers coexist during the Step 2 retirement transition.
 
-### Required closure before Phase 7
+### Why it mattered for Phase 7
 
-A small precursor task (tracked in `PLAN.md` as a "Search Coverage" item, not part of Phase 7 itself) must:
-
-1. Add a `global_bridge_clusters` table to the memory bridge projection, with `cluster_id`, `canonical_name`, `slug`, `aliases`, `material_count`, `wiki_path`, plus the bridge reflection fields (`why_this_bridge_matters`, `main_takeaways`, `main_tensions`, `open_questions`, `helpful_new_sources`).
-2. Add `global_bridge_clusters_fts` covering name, aliases, and reflection prose.
-3. Extend `SearchResult` with a `global_bridges: list[GlobalBridgeHit]` field populated by a new `_search_global_bridges` helper that combines FTS matches with the same LIKE-fallback pattern used for concept/collection reflections.
-4. Have `arq compile` / `arq memory rebuild` populate the new table from `derived/global_bridge_clusters.jsonl`.
-5. Keep the legacy `concept_clusters_fts` path working until the retirement item in Collection Graph Step 2 lands — the two layers must coexist during the transition.
-
-### Why it matters for Phase 7
-
-Phase 7 commands are thin wrappers around `search.py`. If search does not find a layer, neither will the agent. The handbook would then have to teach fallback patterns (grep the filesystem for bridge essays), which violates the token-efficiency goal. Closing this gap before implementation means the handbook can stay minimal and the agent surface stays uniform: every synthesized layer is one search away.
+Phase 7 commands are thin wrappers around `search.py`. With this gap closed, every synthesized layer is one search away, the handbook can stay minimal, and the agent surface is uniform across material, local-cluster, bridge, and collection reflections.
 
 ### What stays out of this prerequisite
 

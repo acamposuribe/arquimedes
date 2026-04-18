@@ -81,6 +81,56 @@ def _cluster_audit_input_paths(root: Path) -> tuple[Path, Path]:
     )
 
 
+def _cluster_audit_lock_pid(gate_path: Path) -> int | None:
+    try:
+        raw = gate_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not raw:
+        return None
+    try:
+        pid = int(raw)
+    except ValueError:
+        return None
+    return pid if pid > 0 else None
+
+
+def _cluster_audit_pid_is_running(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+    return True
+
+
+def _acquire_cluster_audit_gate(gate_path: Path) -> bool:
+    while True:
+        try:
+            gate_fd = os.open(gate_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        except FileExistsError:
+            pid = _cluster_audit_lock_pid(gate_path)
+            if pid is not None and _cluster_audit_pid_is_running(pid):
+                return False
+            try:
+                gate_path.unlink()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return False
+            continue
+        try:
+            os.write(gate_fd, f"{os.getpid()}\n".encode())
+        finally:
+            os.close(gate_fd)
+        return True
+
+
 def _cluster_audit_cluster_snapshot(cluster: dict) -> dict:
     deps = _deps()
     return {
@@ -1052,10 +1102,8 @@ def _run_local_cluster_audit_impl(
             row for row in existing_rows
             if str(row.get("cluster_id", "")).strip() in scope_cluster_ids
         ]
-        if gate_path.exists():
+        if not _acquire_cluster_audit_gate(gate_path):
             return scope_existing_rows, 0
-
-        gate_path.write_text(str(os.getpid()), encoding="utf-8")
         try:
             scope_root = deps.local_cluster_dir(root, domain, collection)
             local_rows, material_rows = deps._local_rows_in_scope_not_in_clusters(root, domain, collection, scope_clusters, material_info)

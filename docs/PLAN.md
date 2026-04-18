@@ -160,6 +160,7 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 - [x] Materialize `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json`
 - [x] Define bridge members in terms of contributing local clusters rather than raw material-level concepts
 - [x] Run the first Step 2 bridge layer as `arq lint --stage global-bridge` and include it in `arq lint --full`
+- [x] Keep graph-maintenance available as an explicit lint stage without running it in the default `arq lint --full` path
 - [x] Keep Step 2 global bridging owned by lint rather than adding a separate `arq bridge-global` command
 - [x] Make global-bridge stale detection depend only on new or changed promoted local clusters that are not yet covered by the bridge layer
 - [x] Keep the saved global-bridge input fingerprint scoped to that pending local-cluster delta rather than collection-reflection churn or bridge-memory drift

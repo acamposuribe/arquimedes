@@ -177,6 +177,12 @@ LINT_REFLECTIVE_STAGES = (
     "global-bridge",
     "graph-maintenance",
 )
+DEFAULT_LINT_FULL_STAGES = (
+    "cluster-audit",
+    "concept-reflection",
+    "collection-reflection",
+    "global-bridge",
+)
 _CLUSTER_AUDIT_DELTA_SCHEMA = '{"bridge_updates":[{"cluster_id":"existing bridge id","new_name":"string","new_aliases":["strings"],"new_source_concepts":[{"material_id":"string","concept_name":"string"}],"new_materials":["material ids"],"removed_materials":["material ids"]}],"new_bridges":[{"bridge_ref":"temporary id","canonical_name":"string","aliases":["strings"],"material_ids":["material ids"],"source_concepts":[{"material_id":"string","concept_name":"string"}]}],"review_updates":[{"cluster_id":"existing bridge id","finding_type":"string","severity":"low|medium|high","status":"open|validated","note":"string","recommendation":"string"}],"new_reviews":[{"cluster_ref":"existing bridge id or exact new_bridges.bridge_ref","bridge_ref":"optional alias for cluster_ref on new bridges","finding_type":"string","severity":"low|medium|high","status":"open|validated","note":"string","recommendation":"string"}],"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
 _CONCEPT_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"open_questions":["strings"]|null,"helpful_new_sources":["strings"]|null,"why_this_concept_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
 _COLLECTION_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"important_material_ids":["material ids"]|null,"important_cluster_ids":["cluster ids"]|null,"open_questions":["strings"]|null,"helpful_new_sources":["strings"]|null,"why_this_collection_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
@@ -2323,7 +2329,7 @@ def run_reflective_lint(
 ) -> dict:
     """Run the reflective LLM passes and project outputs to disk."""
     root = get_project_root()
-    selected_stages = _normalize_lint_stages(stages) or list(LINT_REFLECTIVE_STAGES)
+    selected_stages = _normalize_lint_stages(stages) or list(DEFAULT_LINT_FULL_STAGES)
     manifest_records = _load_manifest(root)
     metas = _load_all_metas(root, manifest_records)
     material_info = _build_material_info(root, manifest_records)

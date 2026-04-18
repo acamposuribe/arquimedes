@@ -47,13 +47,14 @@ Phase 6 stays disciplined:
 - refresh SQL / wiki state
 - collection reflections
 - refresh SQL / wiki state
-- graph maintenance
+- global bridge
 - final SQL / wiki projection
+- graph maintenance is opt-in via `arq lint --stage graph-maintenance`
 
 `arq lint --stage <stage>`
 - deterministic lint first
 - run only the requested reflective stage(s)
-- allowed stage values: `cluster-audit`, `concept-reflection`, `collection-reflection`, `graph-maintenance`
+- allowed stage values: `cluster-audit`, `concept-reflection`, `collection-reflection`, `global-bridge`, `graph-maintenance`
 - stage flags are repeatable when a targeted run needs more than one reflective stage
 
 Terminal progress:
@@ -97,6 +98,8 @@ CLI exit codes:
 ## 1. Cluster Audit
 
 Cluster audit reviews the current bridge graph against targeted bridge changes and uncovered local concepts.
+
+Collection-local audit gates are PID-aware: if a `.audit.lock` file exists and its recorded PID is no longer running, lint removes the stale lock and proceeds with the audit instead of skipping that collection indefinitely.
 
 It is incremental:
 - it only re-audits existing bridge clusters that changed since their last audit, have no canonical review row, or still have an `open` review

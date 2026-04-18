@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from pathlib import Path
 from datetime import datetime, timezone
@@ -690,6 +691,8 @@ def test_local_cluster_audit_writes_collection_scoped_findings(tmp_path, monkeyp
 
 
 def test_local_cluster_audit_skips_busy_collection_scope(tmp_path, monkeypatch):
+    import arquimedes.lint_cluster_audit as audit_mod
+
     root, _config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
     cluster = {
@@ -727,7 +730,8 @@ def test_local_cluster_audit_skips_busy_collection_scope(tmp_path, monkeypatch):
     )
     gate_path = root / "derived" / "collections" / "research__papers" / ".audit.lock"
     gate_path.parent.mkdir(parents=True, exist_ok=True)
-    gate_path.write_text("busy\n", encoding="utf-8")
+    gate_path.write_text(f"{os.getpid()}\n", encoding="utf-8")
+    monkeypatch.setattr(audit_mod, "_cluster_audit_pid_is_running", lambda pid: pid == os.getpid())
 
     material_info = _build_material_info(root, [{"material_id": "mat_001"}])
     reviews, discovery = _run_cluster_audit(
@@ -741,6 +745,68 @@ def test_local_cluster_audit_skips_busy_collection_scope(tmp_path, monkeypatch):
     assert discovery == 0
     assert [row["cluster_id"] for row in reviews] == ["research__papers__local_0001"]
     assert not (root / "derived" / "collections" / "research__papers" / "local_audit_stamp.json").exists()
+
+
+def test_local_cluster_audit_removes_stale_collection_scope_lock(tmp_path, monkeypatch):
+    import arquimedes.lint_cluster_audit as audit_mod
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive and Space",
+        "slug": "archive-and-space",
+        "material_ids": ["mat_001"],
+        "source_concepts": [
+            {
+                "material_id": "mat_001",
+                "concept_name": "archive and space",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["archive and space"],
+                "confidence": 0.9,
+            }
+        ],
+        "wiki_path": "wiki/research/papers/concepts/archive-and-space.md",
+    }
+    gate_path = root / "derived" / "collections" / "research__papers" / ".audit.lock"
+    gate_path.parent.mkdir(parents=True, exist_ok=True)
+    gate_path.write_text("999999\n", encoding="utf-8")
+    monkeypatch.setattr(audit_mod, "_cluster_audit_pid_is_running", lambda _pid: False)
+
+    calls: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            calls.append(stage)
+            return json.dumps({
+                "bridge_updates": [],
+                "new_bridges": [],
+                "review_updates": [],
+                "new_reviews": [
+                    {
+                        "cluster_ref": "research__papers__local_0001",
+                        "finding_type": "validated",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "This local cluster still looks coherent inside the collection.",
+                        "recommendation": "Keep it as-is.",
+                    }
+                ],
+                "_finished": True,
+            })
+
+        return fn
+
+    material_info = _build_material_info(root, [{"material_id": "mat_001"}])
+    reviews, discovery = _run_cluster_audit(root, [cluster], material_info, "test-route", llm_factory)
+
+    assert calls == ["lint"]
+    assert discovery == 0
+    assert [row["cluster_id"] for row in reviews] == ["research__papers__local_0001"]
+    assert not gate_path.exists()
 
 
 def test_local_cluster_audit_skips_invalid_bridge_update_and_applies_other_changes(tmp_path, monkeypatch):
@@ -2806,6 +2872,74 @@ def test_run_reflective_lint_only_runs_requested_stage(tmp_path, monkeypatch):
     assert result["graph_maintenance"] == 0
     assert result["stages"] == ["cluster-audit"]
     assert result["global_bridge_skip_reason"] == "stage not selected"
+    assert result["graph_skip_reason"] == "stage not selected"
+
+
+def test_run_reflective_lint_default_full_stages_skip_graph_maintenance(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    (root / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+    calls: list[str] = []
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            self.root = _root
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def fake_cluster_audit(*_args, **_kwargs):
+        calls.append("cluster-audit")
+        return ([{"cluster_id": "bridge_0001"}], 1)
+
+    def fake_concept_reflections(*_args, **_kwargs):
+        calls.append("concept-reflection")
+        return [{"cluster_id": "bridge_0001"}]
+
+    def fake_collection_reflections(*_args, **_kwargs):
+        calls.append("collection-reflection")
+        return [{"collection_key": "research/papers"}]
+
+    def fake_global_bridges(*_args, **_kwargs):
+        calls.append("global-bridge")
+        return {"global_bridges": 1, "global_bridge_skipped": False, "global_bridge_skip_reason": ""}
+
+    def fail_graph_reflection(*_args, **_kwargs):
+        raise AssertionError("graph maintenance should not run in default full lint")
+
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "_cluster_audit_due", lambda *_args, **_kwargs: (True, "cluster audit due"))
+    monkeypatch.setattr(lint_mod, "_concept_reflection_due", lambda *_args, **_kwargs: (True, "concept reflection due"))
+    monkeypatch.setattr(lint_mod, "_collection_reflection_due", lambda *_args, **_kwargs: (True, "collection reflection due"))
+    monkeypatch.setattr(lint_mod, "_global_bridge_due", lambda *_args, **_kwargs: (True, "global bridge due"))
+    monkeypatch.setattr(lint_mod, "_run_cluster_audit", fake_cluster_audit)
+    monkeypatch.setattr(lint_mod, "_run_concept_reflections", fake_concept_reflections)
+    monkeypatch.setattr(lint_mod, "_run_collection_reflections", fake_collection_reflections)
+    monkeypatch.setattr(lint_mod, "_run_global_bridges", fake_global_bridges)
+    monkeypatch.setattr(lint_mod, "_run_graph_reflection", fail_graph_reflection)
+    monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+    monkeypatch.setattr(lint_mod, "load_bridge_clusters", lambda _root: [])
+    monkeypatch.setattr(lint_mod, "load_local_clusters", lambda _root: [])
+
+    result = lint_mod.run_reflective_lint(
+        config,
+        {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}, "issues": []},
+    )
+
+    assert calls == ["cluster-audit", "concept-reflection", "collection-reflection", "global-bridge"]
+    assert result["stages"] == [
+        "cluster-audit",
+        "concept-reflection",
+        "collection-reflection",
+        "global-bridge",
+    ]
+    assert result["graph_maintenance"] == 0
     assert result["graph_skip_reason"] == "stage not selected"
 
 

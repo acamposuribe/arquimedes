@@ -46,7 +46,7 @@ It:
 - clusters concepts within collection scope
 - compiles the wiki
 - runs `arq lint --quick` after each compile
-- runs `arq lint --full` on a schedule, with refreshes between reflective stages
+- runs `arq lint --full` on a schedule, with refreshes between reflective stages and without the optional graph-maintenance backlog pass
 - rebuilds the memory bridge
 - commits and pushes the published result
 

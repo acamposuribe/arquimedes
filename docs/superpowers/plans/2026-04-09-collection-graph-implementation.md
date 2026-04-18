@@ -134,6 +134,7 @@ Notes:
 - [x] Test local graph projection into SQLite
 - [x] Test multi-collection scheduling with one internal gate per collection
 - [x] Test collection-local audit scheduling and collection-scoped findings
+- [x] Make collection-local audit gates self-heal by dropping stale `.audit.lock` files whose recorded PID is no longer running
 
 ### Step 1 exit criteria
 

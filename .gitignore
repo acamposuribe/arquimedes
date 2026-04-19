@@ -41,3 +41,8 @@ $TMPDIR/
 
 # Lint reports (regenerated)
 wiki/_lint_report.md
+# Added by code-review-graph
+.code-review-graph/
+.kiro/
+.pytest_cache/
+.ruff_cache/

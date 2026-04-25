@@ -29,24 +29,24 @@ They do **not**:
 
 They may:
 - drop files into the shared library root
-- pull the repo
-- run `arq index ensure`
+- run `arq refresh`
+- run `arq index ensure` when explicitly verifying local readiness
 - search the system via CLI, web UI, or their own agents
 
-In practice, collaborator search assumes `arq index ensure` has run after the latest pull. This step is deterministic and LLM-free, so it is the normal lazy readiness step that keeps the local search index and local memory bridge current before use.
+In practice, collaborator search runs the freshness path first: restore the canonical repo state, then ensure the local SQLite index and memory bridge. This step is deterministic and LLM-free.
 
 ### Server maintainer
 
 The server maintainer is the only semantic publisher.
 
 It:
-- watches the shared library root for changes
+- scans the shared library root every 30 minutes for new, changed, moved, or deleted materials
 - ingests new materials
 - extracts and enriches them
 - clusters concepts within collection scope
 - compiles the wiki
 - runs `arq lint --quick` after each compile
-- runs `arq lint --full` on a schedule, with refreshes between reflective stages and without the optional graph-maintenance backlog pass
+- runs `arq lint --full` daily at 02:00, with refreshes between reflective stages and without the optional graph-maintenance backlog pass
 - rebuilds the memory bridge
 - commits and pushes the published result
 
@@ -54,9 +54,9 @@ It:
 
 When a collaborator adds a file to the shared library root:
 
-1. **Watcher detects change**
-- The server daemon watches the shared library root
-- It debounces and batches incoming file events
+1. **Scheduled scan detects change**
+- The server daemon scans the shared library root every 30 minutes
+- It computes one batch from the durable library/repo delta
 - No LLM
 
 2. **`arq ingest`**
@@ -139,9 +139,9 @@ When a collaborator adds a file to the shared library root:
 
 ## Collaborator Recovery Pipeline
 
-After collaborators pull the repo:
+After collaborators sync the repo:
 
-1. `git pull`
+1. `git fetch && git reset --hard @{upstream} && git clean -fd`
 2. `arq index ensure`
 
 `arq index ensure` also ensures the local memory bridge is current.
@@ -158,9 +158,15 @@ without any LLM access and without re-running clustering or compile.
 
 ## Current Publication Rule
 
-Semantic publication belongs only to the server-maintainer path:
+Semantic publication belongs only to the server-maintainer path.
 
-`ingest -> extract -> index rebuild -> cluster -> lint(global-bridge and other reflective stages) -> compile -> memory rebuild -> commit/push`
+Daytime publication:
+
+`ingest -> extract -> index rebuild -> cluster -> compile -> memory rebuild -> commit/push`
+
+Nightly maintenance:
+
+`lint --full (including global-bridge) -> compile / memory refresh as needed -> commit/push`
 
 Collaborators only rebuild deterministic local projections:
 
@@ -171,23 +177,17 @@ Collaborators only rebuild deterministic local projections:
 - `extract` = parse and understand the source
 - `index rebuild` = make evidence searchable
 - `cluster` = form collection-local clusters
-- `lint(global-bridge)` = reconnect collection-local homes into shared bridge pages and bridge-level synthesis
+- `lint --full` = nightly reflective maintenance, including `global-bridge`
 - `compile` = publish the collection-first wiki plus shared bridge layer
 - `memory rebuild` = make the published local+global graph queryable by agents
 
-Legacy bridge artifacts may still exist during the Step 1 transition and can continue to provide some continuity for cross-collection relatedness, but they are no longer the primary semantic publication layer. Step 2 adds a distinct global bridge graph built from local semantic outputs.
+Legacy raw-material bridge artifacts are retired. The canonical bridge graph is the Step 2 global bridge graph built from local semantic outputs.
 
-The core Step 2 semantic publication slice is now:
+The core Step 2 bridge publication slice is now:
 
 `cluster -> lint(global-bridge) -> compile -> memory rebuild`
 
 That bridge stage is incremental, operates on collection-local clusters plus compact collection context, and skips entirely when fewer than two collections are in scope.
-
-For existing bridge-era repos that need to move into Step 1 without recomputing current semantics, run the one-time migration script:
-
-`./.venv/bin/python scripts/migrate_step1_local_graph.py`
-
-If the repo contains more than one collection scope, pass `--domain` and `--collection` explicitly. The script is a one-shot bootstrap for current data: it seeds local clusters from existing bridge clusters, remaps local audit continuity where possible, rewrites concept and collection reflections onto local ids and local-cluster fingerprints, and then runs deterministic compile plus memory rebuild without re-enrichment, re-clustering, or re-reflection.
 
 This is how Arquimedes stays both:
 - a readable wiki for humans

@@ -10,6 +10,7 @@ import yaml
 
 # Environment variable to explicitly set the project root
 _ENV_VAR = "ARQUIMEDES_ROOT"
+_CONFIG_ENV_VAR = "ARQUIMEDES_CONFIG"
 
 
 def _find_project_root() -> Path:
@@ -29,6 +30,15 @@ def _find_project_root() -> Path:
         raise FileNotFoundError(
             f"{_ENV_VAR}={env_root} does not contain config/config.yaml"
         )
+
+    env_config = os.environ.get(_CONFIG_ENV_VAR)
+    if env_config:
+        config_path = Path(env_config).expanduser()
+        if config_path.exists():
+            if config_path.parent.name == "config":
+                return config_path.parent.parent
+            return config_path.parent
+        raise FileNotFoundError(f"{_CONFIG_ENV_VAR}={env_config} does not exist")
 
     # 2. Walk up from CWD
     current = Path.cwd()
@@ -59,19 +69,62 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def load_config() -> dict[str, Any]:
-    """Load config.yaml with config.local.yaml overrides."""
+def _resolve_config_path(config_path: str | Path) -> Path:
+    selected = Path(config_path).expanduser()
+    if not selected.is_absolute():
+        selected = (_find_project_root() / selected).resolve()
+    return selected
+
+
+def _config_stack(config_path: str | Path | None = None) -> list[Path]:
+    if config_path is None:
+        env_config = os.environ.get(_CONFIG_ENV_VAR)
+        if env_config:
+            config_path = env_config
+
     root = _find_project_root()
-    config_dir = root / "config"
+    shared = root / "config" / "config.yaml"
+    if config_path is not None:
+        selected = _resolve_config_path(config_path)
+        stack = [shared]
+        if selected != shared:
+            stack.append(selected)
+        if selected.name != "config.local.yaml":
+            local = selected.parent / "config.local.yaml"
+            if local.exists():
+                stack.append(local)
+        return stack
 
-    with open(config_dir / "config.yaml") as f:
-        config = yaml.safe_load(f) or {}
+    stack = [shared]
+    collaborator_local = root / "config" / "collaborator" / "config.local.yaml"
+    maintainer_profile = root / "config" / "maintainer" / "config.yaml"
+    maintainer_local = root / "config" / "maintainer" / "config.local.yaml"
+    legacy_local = root / "config" / "config.local.yaml"
 
-    local_path = config_dir / "config.local.yaml"
-    if local_path.exists():
-        with open(local_path) as f:
-            local = yaml.safe_load(f) or {}
-        config = _deep_merge(config, local)
+    if collaborator_local.exists():
+        stack.append(collaborator_local)
+    elif maintainer_profile.exists():
+        stack.append(maintainer_profile)
+        if maintainer_local.exists():
+            stack.append(maintainer_local)
+    elif legacy_local.exists():
+        stack.append(legacy_local)
+    return stack
+
+
+def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
+    """Load shared config with role-specific local overrides."""
+    paths = _config_stack(config_path)
+
+    config: dict[str, Any] = {}
+    for path in paths:
+        if not path.exists():
+            if path == paths[0]:
+                raise FileNotFoundError(f"Config file not found: {path}")
+            continue
+        with open(path) as f:
+            fragment = yaml.safe_load(f) or {}
+        config = _deep_merge(config, fragment)
 
     # Expand ~ in library_root
     if "library_root" in config:

@@ -40,9 +40,6 @@ from arquimedes.cluster import (
     _resolve_concept_reference,
     _split_concept_row,
     _stage_bridge_packet_input,
-    is_bridge_clustering_stale,
-    bridge_cluster_fingerprint,
-    load_bridge_clusters,
     load_local_clusters,
     local_cluster_dir,
     local_cluster_fingerprint,
@@ -69,7 +66,7 @@ from arquimedes.index import (
     _read_manifest_ids,
     get_index_path,
 )
-from arquimedes.memory import _cluster_fingerprint, _fingerprint_file, memory_rebuild
+from arquimedes.memory import _cluster_fingerprint, _fingerprint_file, memory_rebuild, read_memory_bridge_stamp
 from arquimedes.lint_cluster_audit import (
     _assign_new_bridge_ids,
     _audit_optional_text,
@@ -797,31 +794,6 @@ class ReflectionIndexTool:
                     "material_count": row["material_count"] or 0,
                     "wiki_path": row["wiki_path"] or "",
                 })
-            try:
-                rows = self.con.execute(
-                    """
-                    SELECT cc.cluster_id, cc.canonical_name, cc.slug, cc.aliases, cc.material_count,
-                           cc.wiki_path
-                    FROM concept_clusters_fts
-                    JOIN concept_clusters cc ON concept_clusters_fts.rowid = cc.rowid
-                    WHERE concept_clusters_fts MATCH ?
-                    ORDER BY concept_clusters_fts.rank
-                    LIMIT ?
-                    """,
-                    [query, limit],
-                ).fetchall()
-            except sqlite3.OperationalError:
-                rows = []
-            for row in rows:
-                clusters.append({
-                    "kind": "cluster",
-                    "cluster_id": row["cluster_id"],
-                    "canonical_name": row["canonical_name"],
-                    "slug": row["slug"],
-                    "aliases": _parse_json_list(row["aliases"]),
-                    "material_count": row["material_count"] or 0,
-                    "wiki_path": row["wiki_path"] or "",
-                })
             concepts = []
             for row in self.con.execute(
                 """
@@ -1018,76 +990,7 @@ class ReflectionIndexTool:
                             ),
                         ) if reflection else {},
                     }
-                row = self.con.execute(
-                """
-                SELECT cluster_id, canonical_name, slug, aliases, confidence, wiki_path, material_count
-                FROM concept_clusters
-                WHERE cluster_id = ?
-                """,
-                [record_id],
-                ).fetchone()
-                if row is None:
-                    return None
-                reflection = self._select_optional_row(
-                    "concept_reflections",
-                    (
-                        "cluster_id",
-                        "slug",
-                        "canonical_name",
-                        "main_takeaways",
-                        "main_tensions",
-                        "open_questions",
-                        "helpful_new_sources",
-                        "why_this_concept_matters",
-                        "supporting_material_ids",
-                        "supporting_evidence",
-                        "input_fingerprint",
-                        "wiki_path",
-                    ),
-                    "cluster_id = ?",
-                    [record_id],
-                )
-                material_rows = self.con.execute(
-                """
-                SELECT material_id, relevance, source_pages, evidence_spans, confidence
-                FROM cluster_materials
-                WHERE cluster_id = ?
-                ORDER BY confidence DESC, material_id
-                """,
-                [record_id],
-                ).fetchall()
-                aliases = _parse_json_list(row["aliases"])
-                return {
-                    "kind": "concept",
-                    "cluster_id": row["cluster_id"],
-                    "canonical_name": row["canonical_name"],
-                    "slug": row["slug"],
-                    "aliases": aliases,
-                    "confidence": row["confidence"],
-                    "wiki_path": row["wiki_path"],
-                    "material_count": row["material_count"],
-                    "cluster_materials": [
-                        {
-                            "material_id": r["material_id"],
-                            "relevance": r["relevance"],
-                            "source_pages": _parse_json_list(r["source_pages"]),
-                            "evidence_spans": _parse_json_list(r["evidence_spans"]),
-                            "confidence": r["confidence"],
-                        }
-                        for r in material_rows
-                    ],
-                    "reflection": self._row_to_dict(
-                        reflection,
-                        (
-                            "main_takeaways",
-                            "main_tensions",
-                            "open_questions",
-                            "helpful_new_sources",
-                            "supporting_material_ids",
-                            "supporting_evidence",
-                        ),
-                    ) if reflection else {},
-                }
+                return None
             if kind == "collection":
                 domain, _, collection = record_id.partition("/")
                 domain = domain or "practice"
@@ -1369,7 +1272,7 @@ def _material_titles_from_metas(metas: dict[str, dict]) -> dict[str, str]:
 
 
 def _current_concepts(root: Path) -> list[dict]:
-    return load_local_clusters(root) or load_bridge_clusters(root)
+    return load_local_clusters(root)
 
 
 def _concept_reflection_targets(root: Path, clusters: list[dict]) -> list[dict]:
@@ -1583,11 +1486,10 @@ def _index_state_stale(root: Path) -> tuple[bool, str]:
 
 
 def _memory_state_stale(root: Path) -> tuple[bool, str]:
-    stamp_path = root / "derived" / "memory_bridge_stamp.json"
-    if not stamp_path.exists():
+    stamp = read_memory_bridge_stamp(project_root=root)
+    if not stamp:
         return True, "memory stamp missing"
 
-    stamp = _load_json(stamp_path, {}) or {}
     clusters_fp = _cluster_fingerprint(root)
     manifest_fp = _fingerprint_file(root / "manifests" / "materials.jsonl")
     if stamp.get("clusters_fingerprint") != clusters_fp:
@@ -1786,7 +1688,7 @@ def _detect_missing_compiled_pages(
     clusters: list[dict],
 ) -> list[dict]:
     issues: list[dict] = []
-    bridge_clusters = load_bridge_clusters(root)
+    bridge_clusters = load_global_bridge_clusters(root)
 
     # Material pages
     for rec in manifest_records:
@@ -1894,7 +1796,7 @@ def _expected_pages(
     clusters: list[dict],
 ) -> set[Path]:
     expected: set[Path] = set()
-    bridge_clusters = load_bridge_clusters(root)
+    bridge_clusters = load_global_bridge_clusters(root)
     # Material pages
     for meta in metas.values():
         expected.add(root / _material_wiki_path(meta))
@@ -2031,7 +1933,7 @@ def render_lint_report(report: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _compile_is_safe(root: Path) -> bool:
-    return not is_bridge_clustering_stale(None)
+    return True
 
 
 def _apply_deterministic_fixes(report: dict, config: dict) -> dict:
@@ -2081,10 +1983,10 @@ def _current_clustered_at(root: Path) -> str:
     local_clustered_at = _latest_local_clustered_at(root)
     if local_clustered_at:
         return local_clustered_at
-    stamp = _read_stamp(root / "derived" / "bridge_cluster_stamp.json")
+    stamp = _read_stamp(_global_bridge_stamp_path(root))
     if not stamp:
         return ""
-    return str(stamp.get("clustered_at", "") or "")
+    return str(stamp.get("bridged_at", "") or stamp.get("clustered_at", "") or "")
 
 
 def _lint_stage_stamp(root: Path) -> dict:
@@ -2334,7 +2236,7 @@ def run_reflective_lint(
     metas = _load_all_metas(root, manifest_records)
     material_info = _build_material_info(root, manifest_records)
     clusters = _current_concepts(root)
-    bridge_clusters = load_bridge_clusters(root)
+    bridge_clusters = load_global_bridge_clusters(root)
     groups = _group_materials_by_collection(metas)
 
     if not get_index_path().exists():
@@ -2403,7 +2305,7 @@ def run_reflective_lint(
                 cluster_review_count = len(cluster_reviews)
                 _refresh_sql_and_wiki()
                 clusters = _current_concepts(root)
-                bridge_clusters = load_bridge_clusters(root)
+                bridge_clusters = load_global_bridge_clusters(root)
                 _reflective_stage_finished("cluster-audit")
                 skipped = False
             else:
@@ -2426,7 +2328,7 @@ def run_reflective_lint(
                 concept_reflection_count = len(concept_refs)
                 _refresh_sql_and_wiki()
                 clusters = _current_concepts(root)
-                bridge_clusters = load_bridge_clusters(root)
+                bridge_clusters = load_global_bridge_clusters(root)
                 _reflective_stage_finished("concept-reflection")
                 skipped = False
             else:
@@ -2442,7 +2344,7 @@ def run_reflective_lint(
                 collection_reflection_count = len(collection_refs)
                 _refresh_sql_and_wiki()
                 clusters = _current_concepts(root)
-                bridge_clusters = load_bridge_clusters(root)
+                bridge_clusters = load_global_bridge_clusters(root)
                 _reflective_stage_finished("collection-reflection")
                 skipped = False
             else:

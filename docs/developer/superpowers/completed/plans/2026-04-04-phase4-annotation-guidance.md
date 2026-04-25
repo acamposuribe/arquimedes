@@ -17,8 +17,8 @@ The goal is not only "show matching annotations," but also:
 Use these existing artifacts:
 - `extracted/<material_id>/annotations.jsonl`
 - `extracted/<material_id>/chunks.jsonl`
-- `docs/superpowers/completed/specs/2026-04-04-phase4-search-index-design.md`
-- `docs/superpowers/completed/plans/2026-04-04-phase4-search-index.md`
+- `docs/developer/superpowers/completed/specs/2026-04-04-phase4-search-index-design.md`
+- `docs/developer/superpowers/completed/plans/2026-04-04-phase4-search-index.md`
 
 Important existing signals:
 - annotations contain `annotation_id`, `type`, `page`, `quoted_text`, `comment`

@@ -56,7 +56,7 @@ Phase 7 assumes `arq search` can reach every reflection layer the corpus synthes
 
 - material cards, chunks, figures, annotations, per-material concepts (all FTS)
 - **local concept clusters** (Step 1) — FTS on `local_concept_clusters_fts`
-- **legacy bridge concept clusters** — FTS on `concept_clusters_fts` (retained during Step 2 retirement transition)
+- **global bridge clusters** — FTS on `global_bridge_clusters_fts`
 - **Step 2 global bridge clusters** — FTS on `global_bridge_clusters_fts` indexing `canonical_name`, `aliases`, `descriptor`, `bridge_takeaways`, `bridge_tensions`, `bridge_open_questions`, `helpful_new_sources`, `why_this_bridge_matters`; LIKE fallback over the same reflection columns. Surfaced as `SearchResult.global_bridges: list[GlobalBridgeHit]`.
 - concept reflection prose — local cluster FTS + LIKE fallback
 - collection reflection prose — LIKE fallback
@@ -68,7 +68,7 @@ Phase 7 assumes `arq search` can reach every reflection layer the corpus synthes
 3. `_build_bridge` populates both on every `arq memory rebuild` from `derived/global_bridge_clusters.jsonl`.
 4. New `GlobalBridgeHit` dataclass and `_search_global_bridges` helper in `search.py` with FTS-then-LIKE pattern mirroring `_search_canonical_clusters`.
 5. New `global_bridges` field on `SearchResult`; `format_human` renders a "Global bridges:" section.
-6. Legacy `concept_clusters_fts` path unchanged — two layers coexist during the Step 2 retirement transition.
+6. Retired legacy `concept_clusters_fts` path removed from active search coverage.
 
 ### Why it mattered for Phase 7
 
@@ -346,7 +346,7 @@ What is explicitly cut from the handbook:
 ### Discoverability
 
 - `CLAUDE.md` gets a pointer section telling agents working on this repo that end-user investigation uses the handbook, not the build-system docs
-- `docs/PLAN.md` lists the handbook in its supporting-docs table
+- `docs/developer/PLAN.md` lists the handbook in its supporting-docs table
 - A collaborator pointing an agent at the repo for investigation can simply say "read `docs/agent-handbook.md` first"
 - `arq overview` output references the handbook path
 
@@ -413,5 +413,5 @@ Minimum Phase 7 checks:
 - every new command runs `ensure_index_and_memory()` by default and is skipped by `ARQ_SKIP_FRESHNESS=1`
 - every new command emits JSON by default and a legible human form under `--human`
 - `docs/agent-handbook.md` exists, passes a markdown link check against current wiki paths and command names, and stays under ~2k tokens of body prose
-- `CLAUDE.md` and `docs/PLAN.md` reference the handbook
+- `CLAUDE.md` and `docs/developer/PLAN.md` reference the handbook
 - no new command mutates extracted, wiki, memory, or index data

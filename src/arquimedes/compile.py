@@ -38,6 +38,18 @@ def _load_jsonl(path: Path) -> list[dict]:
     return records
 
 
+def _safe_list(value) -> list:
+    if isinstance(value, list):
+        return value
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            return [value] if value else []
+        return parsed if isinstance(parsed, list) else []
+    return []
+
+
 def _load_json(path: Path, default=None):
     if not path.exists():
         return default
@@ -324,12 +336,9 @@ def _write_compile_stamp(
 def _cluster_file_stamp(project_root: Path) -> str:
     local_paths = sorted((project_root / "derived" / "collections").glob("*/local_concept_clusters.jsonl"))
     global_bridge_path = project_root / "derived" / "global_bridge_clusters.jsonl"
-    if local_paths or global_bridge_path.exists():
-        parts = [path.read_text(encoding="utf-8") for path in local_paths]
-        parts.append(global_bridge_path.read_text(encoding="utf-8") if global_bridge_path.exists() else "")
-        return enrich_stamps.canonical_hash(*parts)
-    bridge_path = project_root / "derived" / "bridge_concept_clusters.jsonl"
-    return enrich_stamps.canonical_hash(bridge_path.read_text(encoding="utf-8") if bridge_path.exists() else "")
+    parts = [path.read_text(encoding="utf-8") for path in local_paths]
+    parts.append(global_bridge_path.read_text(encoding="utf-8") if global_bridge_path.exists() else "")
+    return enrich_stamps.canonical_hash(*parts)
 
 
 # ---------------------------------------------------------------------------
@@ -544,32 +553,24 @@ def compile_wiki(
     if skip_cluster:
         bridge_cluster_summary = {"skipped": True, "skip_reason": "cluster skipped for refresh"}
         local_cluster_summary = {"skipped": True, "skip_reason": "cluster skipped for refresh"} if existing_local_clusters else None
-    elif existing_local_clusters or force_cluster:
+    elif recompile_pages:
+        bridge_cluster_summary = {"skipped": True, "skip_reason": "recompile pages requested"}
+        local_cluster_summary = {"skipped": True, "skip_reason": "recompile pages requested"} if existing_local_clusters else None
+    else:
         local_cluster_summary = cluster_mod.cluster_concepts(
             config, llm_fn=llm_fn, force=force or force_cluster
         )
-        bridge_cluster_summary = {"skipped": True, "skip_reason": "using local collection clusters"}
-    else:
-        bridge_cluster_summary = cluster_mod.cluster_bridge_concepts(
-            config, llm_fn=llm_fn, force=force or force_cluster
-        )
+        bridge_cluster_summary = {
+            "skipped": True,
+            "skip_reason": "legacy raw-material bridge clustering retired; using local collection clusters",
+        }
 
     # 3. Load clusters
     local_clusters = cluster_mod.load_local_clusters(root)
-    bridge_clusters = cluster_mod.load_bridge_clusters(root)
     global_bridge_clusters = load_global_bridge_clusters(root)
-    page_clusters = local_clusters or bridge_clusters
-    concept_page_clusters = local_clusters or [
-        c for c in bridge_clusters
-        if len(dict.fromkeys(c.get("material_ids", []))) > 1
-    ]
-    if local_clusters:
-        bridge_page_clusters = global_bridge_clusters
-    else:
-        bridge_page_clusters = global_bridge_clusters or [
-            c for c in bridge_clusters
-            if len(dict.fromkeys(c.get("material_ids", []))) > 1
-        ]
+    page_clusters = local_clusters
+    concept_page_clusters = local_clusters
+    bridge_page_clusters = global_bridge_clusters
     material_titles: dict[str, str] = {}
     if db_path.exists():
         con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)

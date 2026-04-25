@@ -3,10 +3,29 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
 
 import click
 
 from arquimedes import __version__
+
+
+def _commit_and_push_if_changed(message: str) -> dict:
+    from arquimedes.config import get_project_root
+
+    root = get_project_root()
+    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, text=True, check=False)
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False)
+    if not status.stdout.strip():
+        return {"committed": False, "pushed": False}
+    commit = subprocess.run(["git", "commit", "-m", message], cwd=root, capture_output=True, text=True, check=False)
+    if commit.returncode != 0:
+        raise click.ClickException((commit.stderr or commit.stdout or "git commit failed").strip())
+    push = subprocess.run(["git", "push"], cwd=root, capture_output=True, text=True, check=False)
+    if push.returncode != 0:
+        raise click.ClickException((push.stderr or push.stdout or "git push failed").strip())
+    return {"committed": True, "pushed": True}
 
 
 @click.group()
@@ -393,7 +412,7 @@ def read(
     detail: str | None,
     human: bool,
 ):
-    """Read extracted content for a material. See docs/agent-handbook.md."""
+    """Read extracted content for a material. See docs/collaborator/agent-handbook.md."""
     from arquimedes.agent_cli import ensure_guard, emit, not_found
     from arquimedes import read as read_mod
 
@@ -449,7 +468,7 @@ def read(
 @click.option("--figure", "figure_id", help="Return one figure by id.")
 @click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
 def figures(material_id: str, visual_type: str | None, figure_id: str | None, human: bool):
-    """List figures (or one figure) for a material. See docs/agent-handbook.md."""
+    """List figures (or one figure) for a material. See docs/collaborator/agent-handbook.md."""
     from arquimedes.agent_cli import ensure_guard, emit, not_found
     from arquimedes import read as read_mod
 
@@ -478,7 +497,7 @@ def figures(material_id: str, visual_type: str | None, figure_id: str | None, hu
 @click.option("--type", "kind", help="Filter by annotation type (highlight, note, underline, strikeout).")
 @click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
 def annotations(material_id: str, page: int | None, kind: str | None, human: bool):
-    """List reader annotations for a material. See docs/agent-handbook.md."""
+    """List reader annotations for a material. See docs/collaborator/agent-handbook.md."""
     from arquimedes.agent_cli import ensure_guard, emit, not_found
     from arquimedes import read as read_mod
 
@@ -496,7 +515,7 @@ def annotations(material_id: str, page: int | None, kind: str | None, human: boo
 @cli.command()
 @click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
 def overview(human: bool):
-    """Corpus-wide snapshot: counts, collections, stamps. See docs/agent-handbook.md."""
+    """Corpus-wide snapshot: counts, collections, stamps. See docs/collaborator/agent-handbook.md."""
     from arquimedes.agent_cli import ensure_guard, emit
     from arquimedes import read as read_mod
 
@@ -518,6 +537,8 @@ def refresh(human: bool):
             f"repo_applicable: {status.get('repo_applicable')}",
             f"pull_attempted:  {status.get('pull_attempted')}",
             f"pull_result:     {status.get('pull_result')}",
+            f"reset_result:    {status.get('reset_result')}",
+            f"clean_result:    {status.get('clean_result')}",
             f"index_rebuilt:   {status.get('index_rebuilt')}",
             f"memory_rebuilt:  {status.get('memory_rebuilt')}",
         ]
@@ -624,10 +645,32 @@ def compile(full: bool, force_cluster: bool, recompile_pages: bool):
 @click.option("--report", is_flag=True, help="Write report to wiki/_lint_report.md")
 @click.option("--fix", is_flag=True, help="Auto-fix deterministic issues, queue LLM suggestions")
 @click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON")
-def lint(quick: bool, full: bool, stages: tuple[str, ...], report: bool, fix: bool, as_json: bool):
+@click.option("--install-full", is_flag=True, help="Install daily launchd job for arq lint --full")
+@click.option("--commit-push", is_flag=True, help="Commit and push changed artifacts after lint succeeds.")
+def lint(quick: bool, full: bool, stages: tuple[str, ...], report: bool, fix: bool, as_json: bool, install_full: bool, commit_push: bool):
     """Run health checks on the knowledge base."""
     from arquimedes.config import load_config
     from arquimedes.lint import lint_exit_code, run_lint
+
+    if install_full:
+        from arquimedes.config import get_project_root
+        from arquimedes.launchd import install, render_plist
+
+        config = load_config()
+        cron = str(config.get("lint_full", {}).get("schedule_cron", "0 2 * * *"))
+        minute, hour, *_ = cron.split()
+        plist = render_plist(
+            "com.arquimedes.lint-full",
+            [sys.executable, "-m", "arquimedes.cli", "lint", "--full", "--commit-push"],
+            working_directory=str(get_project_root()),
+            start_calendar_interval={"Hour": int(hour), "Minute": int(minute)},
+        )
+        try:
+            result = install("com.arquimedes.lint-full", plist)
+        except RuntimeError as e:
+            raise click.ClickException(str(e))
+        click.echo(json.dumps(result, indent=2))
+        return
 
     try:
         result = run_lint(load_config(), quick=quick, full=full, report=report, fix=fix, stages=list(stages) if stages else None)
@@ -663,6 +706,13 @@ def lint(quick: bool, full: bool, stages: tuple[str, ...], report: bool, fix: bo
             click.echo(f"  graph maintenance:    {reflection.get('graph_maintenance', 0)}")
 
         click.echo(f"Lint report: {result.get('report_path')}")
+
+    if commit_push:
+        publish = _commit_and_push_if_changed("auto: nightly lint --full")
+        if as_json:
+            click.echo(json.dumps({"publish": publish}, ensure_ascii=False, indent=2))
+        else:
+            click.echo(f"Publish: committed={publish['committed']} pushed={publish['pushed']}")
 
     raise SystemExit(lint_exit_code(result))
 
@@ -724,9 +774,53 @@ def index_ensure():
 
 
 @cli.command()
-def watch():
-    """Start file watcher daemon (server mode)."""
-    click.echo("arq watch: not yet implemented")
+@click.option("--config", "config_path", help="Path to a role config file, e.g. config/maintainer/config.yaml.")
+@click.option("--install", is_flag=True, help="Install launchd scheduled scan job.")
+@click.option("--uninstall", is_flag=True, help="Uninstall launchd scheduled scan job.")
+@click.option("--status", "show_status", is_flag=True, help="Show launchd job status.")
+@click.option("--once", is_flag=True, help="Run one scan/publish cycle and exit.")
+def watch(config_path: str | None, install: bool, uninstall: bool, show_status: bool, once: bool):
+    """Run the scheduled scan publisher (server mode)."""
+    from arquimedes.config import get_project_root, load_config
+
+    label = "com.arquimedes.watch"
+    if install or uninstall or show_status:
+        from arquimedes.launchd import install as install_plist, render_plist, status as launchd_status, uninstall as uninstall_plist
+
+        try:
+            if uninstall:
+                click.echo(json.dumps(uninstall_plist(label), indent=2))
+                return
+            if show_status:
+                click.echo(json.dumps(launchd_status(label), indent=2))
+                return
+            config = load_config(config_path)
+            interval = int(config.get("watch", {}).get("scan_interval_minutes", 30) or 30) * 60
+            args = [sys.executable, "-m", "arquimedes.cli", "watch", "--once"]
+            if config_path:
+                args.extend(["--config", config_path])
+            plist = render_plist(
+                label,
+                args,
+                working_directory=str(get_project_root()),
+                start_interval=interval,
+                run_at_load=True,
+            )
+            click.echo(json.dumps(install_plist(label, plist), indent=2))
+            return
+        except RuntimeError as e:
+            raise click.ClickException(str(e))
+
+    from arquimedes.watch import WatchDaemon
+
+    daemon = WatchDaemon(config_path=config_path)
+    try:
+        if once:
+            click.echo(json.dumps(daemon.run_once(), ensure_ascii=False, indent=2))
+        else:
+            daemon.start()
+    except (FileNotFoundError, RuntimeError) as e:
+        raise click.ClickException(str(e))
 
 
 @cli.group()
@@ -777,10 +871,48 @@ def memory_ensure_cmd():
 
 
 @cli.command()
-@click.option("--install", is_flag=True, help="Install launchd service for auto-pull")
-def sync(install: bool):
-    """Start auto-pull daemon (collaborator mode)."""
-    click.echo("arq sync: not yet implemented")
+@click.option("--install", is_flag=True, help="Install launchd service for auto-sync.")
+@click.option("--uninstall", is_flag=True, help="Uninstall launchd service for auto-sync.")
+@click.option("--status", "show_status", is_flag=True, help="Show launchd service status.")
+@click.option("--once", is_flag=True, help="Run one sync cycle and exit.")
+def sync(install: bool, uninstall: bool, show_status: bool, once: bool):
+    """Run collaborator auto-sync and local ensure."""
+    label = "com.arquimedes.sync"
+    if install or uninstall or show_status:
+        from arquimedes.config import get_project_root, load_config
+        from arquimedes.launchd import install as install_plist, render_plist, status as launchd_status, uninstall as uninstall_plist
+
+        try:
+            if uninstall:
+                click.echo(json.dumps(uninstall_plist(label), indent=2))
+                return
+            if show_status:
+                click.echo(json.dumps(launchd_status(label), indent=2))
+                return
+            config = load_config()
+            interval = int(config.get("sync", {}).get("pull_interval", 300) or 300)
+            plist = render_plist(
+                label,
+                [sys.executable, "-m", "arquimedes.cli", "sync", "--once"],
+                working_directory=str(get_project_root()),
+                start_interval=interval,
+                run_at_load=True,
+            )
+            click.echo(json.dumps(install_plist(label, plist), indent=2))
+            return
+        except RuntimeError as e:
+            raise click.ClickException(str(e))
+
+    from arquimedes.sync import SyncDaemon
+
+    daemon = SyncDaemon()
+    try:
+        if once:
+            click.echo(json.dumps(daemon.run_once(), ensure_ascii=False, indent=2))
+        else:
+            daemon.start()
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
 
 
 @cli.command()

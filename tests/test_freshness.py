@@ -27,13 +27,19 @@ def test_freshness_dirty_repo(tmp_path, monkeypatch):
         ("status", "--porcelain"): _proc(stdout=" M file.py\n"),
         ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"): _proc(stdout="origin/main\n"),
         ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"): _proc(stdout="0 1\n"),
+        ("fetch", "--prune"): _proc(stdout="fetch ok\n"),
+        ("reset", "--hard", "@{upstream}"): _proc(stdout="HEAD is now upstream\n"),
+        ("clean", "-fd"): _proc(stdout="Removing scratch.md\n"),
     }
     monkeypatch.setattr(freshness_mod, "_git", lambda root, *args: responses[args])
     monkeypatch.setattr(freshness_mod, "ensure_index_and_memory", lambda: (False, None, False, {}))
     status = freshness_mod.update_workspace()
-    assert status["repo_dirty"] is True
-    assert status["pull_attempted"] is False
-    assert status["pull_result"] == "blocked"
+    assert status["repo_dirty"] is False
+    assert status["pull_attempted"] is True
+    assert status["pull_result"] == "ok"
+    assert status["reset_attempted"] is True
+    assert status["reset_result"] == "ok"
+    assert status["clean_result"] == "ok"
 
 
 def test_freshness_clean_repo(tmp_path, monkeypatch):
@@ -43,13 +49,17 @@ def test_freshness_clean_repo(tmp_path, monkeypatch):
         ("status", "--porcelain"): _proc(),
         ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"): _proc(stdout="origin/main\n"),
         ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"): _proc(stdout="0 1\n"),
-        ("pull", "--ff-only"): _proc(stdout="Fast-forward\n"),
+        ("fetch", "--prune"): _proc(stdout="fetch ok\n"),
+        ("reset", "--hard", "@{upstream}"): _proc(stdout="HEAD is now upstream\n"),
+        ("clean", "-fd"): _proc(),
     }
     monkeypatch.setattr(freshness_mod, "_git", lambda root, *args: responses[args])
     monkeypatch.setattr(freshness_mod, "ensure_index_and_memory", lambda: (True, None, True, {}))
     status = freshness_mod.update_workspace()
     assert status["pull_attempted"] is True
     assert status["pull_result"] == "ok"
+    assert status["reset_result"] == "ok"
+    assert status["clean_result"] == "ok"
     assert status["index_rebuilt"] is True
     assert status["memory_rebuilt"] is True
 
@@ -61,11 +71,12 @@ def test_update_always_runs_index_ensure(tmp_path, monkeypatch):
         ("status", "--porcelain"): _proc(),
         ("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"): _proc(stdout="origin/main\n"),
         ("rev-list", "--left-right", "--count", "HEAD...@{upstream}"): _proc(stdout="0 1\n"),
-        ("pull", "--ff-only"): _proc(returncode=1, stderr="pull failed"),
+        ("fetch", "--prune"): _proc(returncode=1, stderr="fetch failed"),
     }
     monkeypatch.setattr(freshness_mod, "_git", lambda root, *args: responses[args])
     called = {}
     monkeypatch.setattr(freshness_mod, "ensure_index_and_memory", lambda: called.setdefault("value", (False, None, False, {})))
     status = freshness_mod.update_workspace()
     assert status["pull_result"] == "error"
+    assert status["reset_attempted"] is False
     assert "value" in called

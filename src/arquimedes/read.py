@@ -224,9 +224,9 @@ def wiki_page_record(path: Path) -> dict | None:
             return dict(rows[0])
         rows = _index_rows(
             """
-            SELECT 'concept' AS page_type, cluster_id AS page_id, canonical_name AS title,
+            SELECT 'global_bridge' AS page_type, bridge_id AS page_id, canonical_name AS title,
                    wiki_path AS path, 'shared' AS domain, 'bridge-concepts' AS collection
-            FROM concept_clusters
+            FROM global_bridge_clusters
             WHERE wiki_path = ?
             LIMIT 1
             """,
@@ -242,14 +242,11 @@ def materials_for_concept(cluster_id: str) -> list[dict]:
         """
         SELECT DISTINCT m.material_id, m.title
         FROM materials m
-        JOIN (
-            SELECT material_id FROM local_cluster_materials WHERE cluster_id = ?
-            UNION
-            SELECT material_id FROM cluster_materials WHERE cluster_id = ?
-        ) scoped ON scoped.material_id = m.material_id
+        JOIN local_cluster_materials scoped ON scoped.material_id = m.material_id
+        WHERE scoped.cluster_id = ?
         ORDER BY m.title
         """,
-        (cluster_id, cluster_id),
+        (cluster_id,),
     )
     return [dict(row) for row in rows]
 
@@ -542,9 +539,15 @@ def build_corpus_overview() -> dict:
 
     stamps = {
         "compile": _read_json_if_exists(derived_dir / "compile_stamp.json"),
-        "memory_bridge": _read_json_if_exists(derived_dir / "memory_bridge_stamp.json"),
+        "memory_bridge": None,
         "global_bridge": _read_json_if_exists(derived_dir / "global_bridge_stamp.json"),
     }
+    try:
+        from arquimedes.memory import read_memory_bridge_stamp
+
+        stamps["memory_bridge"] = read_memory_bridge_stamp(project_root=project_root) or None
+    except Exception:
+        stamps["memory_bridge"] = None
 
     return {
         "project_root": str(project_root),

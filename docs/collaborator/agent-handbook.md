@@ -2,6 +2,8 @@
 
 You are investigating a knowledge base you did **not** build. Your job is to answer questions using the `arq` CLI; never edit the index, wiki, or `derived/` artifacts.
 
+If you are helping a Windows collaborator set up Arquimedes, read `docs/collaborator/setup.md` first.
+
 ## Mental model
 
 Three layers, all derived from PDFs in `Library/`:
@@ -23,7 +25,7 @@ A `material_id` is a 12-char sha256 prefix. Domains are `research` and `practice
    - `arq read <id> --page <N>` — one page's text
    - `arq read <id> --full` — full `text.md` (heavy)
 5. **Traverse.** `arq related <id>`, `arq material-clusters <id>`, `arq collection-clusters <domain> <collection>`, `arq concepts`.
-6. **Refresh.** `arq refresh` — pulls (if applicable) and ensures index + memory are current. Other agent commands already run a cheap freshness check first; set `ARQ_SKIP_FRESHNESS=1` to opt out.
+6. **Refresh.** `arq refresh` — fetches upstream, restores tracked files to the canonical repo state, removes untracked non-ignored scratch files, and ensures index + memory are current. Other agent commands already run the same freshness path first; set `ARQ_SKIP_FRESHNESS=1` to opt out.
 
 ## Command quick reference (read-only)
 
@@ -38,7 +40,7 @@ A `material_id` is a 12-char sha256 prefix. Domains are `research` and `practice
 | `arq material-clusters <id>` | Local clusters this material belongs to |
 | `arq collection-clusters <domain> <collection>` | Local clusters in a collection |
 | `arq concepts` | Concept candidates across the corpus |
-| `arq refresh` | Pull + ensure index/memory |
+| `arq refresh` | Restore canonical repo state + ensure index/memory |
 
 Every command emits JSON by default; add `--human` for short human-readable text. Exit code is non-zero on unambiguous error (missing id, bad flag combo) and zero with an empty-but-valid result when a query matches nothing.
 
@@ -48,6 +50,6 @@ Every command emits JSON by default; add `--human` for short human-readable text
 - `arq search` already returns compact snippets — you rarely need `--full`.
 - Filter figures with `--visual-type` and annotations with `--page`/`--type`.
 
-## Maintainer-only commands — do not call
+## Maintainer-only commands — do not call - out of bounds!
 
 `arq ingest`, `arq extract`, `arq extract-raw`, `arq enrich`, `arq cluster`, `arq compile`, `arq memory`, `arq lint`, `arq index`, `arq watch`, `arq sync`, `arq serve`. These mutate artifacts or kick off long-running pipelines. If you think one is needed, ask the human maintainer.

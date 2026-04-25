@@ -66,44 +66,6 @@ def _load_jsonl(path: Path) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 _BRIDGE_TABLE_DDL = """
-CREATE TABLE IF NOT EXISTS concept_clusters (
-    cluster_id     TEXT PRIMARY KEY,
-    canonical_name TEXT NOT NULL DEFAULT '',
-    slug           TEXT NOT NULL DEFAULT '',
-    aliases        TEXT NOT NULL DEFAULT '[]',
-    confidence     REAL NOT NULL DEFAULT 0.0,
-    wiki_path      TEXT NOT NULL DEFAULT '',
-    material_count INTEGER NOT NULL DEFAULT 0
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS concept_clusters_fts USING fts5(
-    cluster_id UNINDEXED,
-    canonical_name,
-    aliases,
-    content='concept_clusters',
-    content_rowid='rowid',
-    tokenize='porter unicode61'
-);
-
-CREATE TABLE IF NOT EXISTS cluster_materials (
-    cluster_id         TEXT NOT NULL,
-    material_id        TEXT NOT NULL,
-    relevance          TEXT NOT NULL DEFAULT '',
-    source_pages       TEXT NOT NULL DEFAULT '[]',
-    evidence_spans     TEXT NOT NULL DEFAULT '[]',
-    confidence         REAL NOT NULL DEFAULT 0.0,
-    material_wiki_path TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (cluster_id, material_id)
-);
-
-CREATE TABLE IF NOT EXISTS cluster_relations (
-    cluster_id            TEXT NOT NULL,
-    related_cluster_id    TEXT NOT NULL,
-    shared_material_count INTEGER NOT NULL DEFAULT 0,
-    shared_material_ids   TEXT NOT NULL DEFAULT '[]',
-    PRIMARY KEY (cluster_id, related_cluster_id)
-);
-
 CREATE TABLE IF NOT EXISTS global_bridge_members (
     bridge_cluster_id TEXT NOT NULL,
     local_cluster_id  TEXT NOT NULL,
@@ -191,12 +153,6 @@ CREATE TABLE IF NOT EXISTS local_concept_cluster_aliases (
     PRIMARY KEY (cluster_id, alias)
 );
 
-CREATE TABLE IF NOT EXISTS concept_cluster_aliases (
-    cluster_id TEXT NOT NULL,
-    alias      TEXT NOT NULL,
-    PRIMARY KEY (cluster_id, alias)
-);
-
 CREATE TABLE IF NOT EXISTS wiki_pages (
     page_type  TEXT NOT NULL,
     page_id    TEXT NOT NULL,
@@ -262,14 +218,17 @@ CREATE TABLE IF NOT EXISTS graph_findings (
     candidate_bridge_links  TEXT NOT NULL DEFAULT '[]',
     input_fingerprint       TEXT NOT NULL DEFAULT ''
 );
+
+CREATE TABLE IF NOT EXISTS memory_bridge_state (
+    id                      INTEGER PRIMARY KEY CHECK (id = 1),
+    built_at                TEXT NOT NULL DEFAULT '',
+    clusters_fingerprint    TEXT NOT NULL DEFAULT '',
+    manifest_fingerprint    TEXT NOT NULL DEFAULT '',
+    counts                  TEXT NOT NULL DEFAULT '{}'
+);
 """
 
 _BRIDGE_COLUMNS: list[tuple[str, str]] = [
-    ("concept_clusters",  "ALTER TABLE concept_clusters ADD COLUMN wiki_path TEXT NOT NULL DEFAULT ''"),
-    ("concept_clusters",  "ALTER TABLE concept_clusters ADD COLUMN material_count INTEGER NOT NULL DEFAULT 0"),
-    ("cluster_materials", "ALTER TABLE cluster_materials ADD COLUMN confidence REAL NOT NULL DEFAULT 0.0"),
-    ("cluster_materials", "ALTER TABLE cluster_materials ADD COLUMN material_wiki_path TEXT NOT NULL DEFAULT ''"),
-    ("cluster_relations", "ALTER TABLE cluster_relations ADD COLUMN shared_material_ids TEXT NOT NULL DEFAULT '[]'"),
     ("concept_reflections", "ALTER TABLE concept_reflections ADD COLUMN helpful_new_sources TEXT NOT NULL DEFAULT '[]'"),
     ("collection_reflections", "ALTER TABLE collection_reflections ADD COLUMN helpful_new_sources TEXT NOT NULL DEFAULT '[]'"),
     ("collection_reflections", "ALTER TABLE collection_reflections ADD COLUMN why_this_collection_matters TEXT NOT NULL DEFAULT ''"),
@@ -293,9 +252,8 @@ def _ensure_bridge_schema(con: sqlite3.Connection) -> None:
 def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters: list[dict], root: Path) -> dict:
     """Populate bridge tables from cluster data and materials table.
 
-    Does a full replacement of concept_clusters, cluster_materials,
-    cluster_relations (with all columns including bridge extras), plus
-    concept_cluster_aliases and wiki_pages.
+    Does a full replacement of local concept, global bridge, reflection, and
+    wiki registry tables.
 
     Returns summary counts.
     """
@@ -313,44 +271,34 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
     }
 
     # Clear all cluster tables + bridge-only tables; repopulate fully below
-    con.execute("DELETE FROM concept_cluster_aliases")
     con.execute("DELETE FROM local_concept_cluster_aliases")
     con.execute("DELETE FROM wiki_pages")
-    con.execute("DELETE FROM cluster_materials")
     con.execute("DELETE FROM local_cluster_materials")
-    con.execute("DELETE FROM cluster_relations")
     con.execute("DELETE FROM local_cluster_relations")
     con.execute("DELETE FROM global_bridge_members")
     con.execute("DELETE FROM global_bridge_clusters")
-    con.execute("DELETE FROM concept_clusters")
     con.execute("DELETE FROM local_concept_clusters")
     con.execute("DELETE FROM cluster_reviews")
     con.execute("DELETE FROM concept_reflections")
     con.execute("DELETE FROM collection_reflections")
     con.execute("DELETE FROM graph_findings")
     # Rebuild FTS
-    con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('delete-all')")
     con.execute("INSERT INTO local_concept_clusters_fts(local_concept_clusters_fts) VALUES ('delete-all')")
     con.execute("INSERT INTO global_bridge_clusters_fts(global_bridge_clusters_fts) VALUES ('delete-all')")
 
-    n_aliases = 0
     n_concept_pages = 0
     n_index_pages = 0
     n_material_pages = 0
-    n_cluster_material_links = 0
-    n_cluster_relations = 0
     n_global_bridge_members = 0
     n_global_bridge_clusters = 0
     n_local_aliases = 0
     n_local_cluster_material_links = 0
     n_local_cluster_relations = 0
 
-    # Build material → [cluster_ids] map for cluster_relations + shared_material_ids
-    mat_to_clusters: dict[str, list[str]] = defaultdict(list)
     local_mat_to_clusters: dict[str, list[str]] = defaultdict(list)
 
     for c in clusters:
-        cluster_id = c.get("cluster_id", "")
+        cluster_id = c.get("cluster_id", "") or c.get("bridge_id", "")
         if not cluster_id:
             continue
 
@@ -377,31 +325,6 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
             _bridge_concept_wiki_path(slug) if material_count > 1 else _concept_wiki_path(slug)
         )
 
-        # Full INSERT: concept_clusters (with bridge columns)
-        con.execute(
-            """INSERT OR REPLACE INTO concept_clusters
-               (cluster_id, canonical_name, slug, aliases, confidence, wiki_path, material_count)
-               VALUES (?,?,?,?,?,?,?)""",
-            (
-                cluster_id,
-                canonical_name,
-                slug,
-                json.dumps(aliases, ensure_ascii=False),
-                confidence,
-                wiki_path,
-                material_count,
-            ),
-        )
-
-        # Aliases
-        for alias in aliases:
-            if alias:
-                con.execute(
-                    "INSERT OR IGNORE INTO concept_cluster_aliases VALUES (?,?)",
-                    (cluster_id, alias),
-                )
-                n_aliases += 1
-
         # Concept wiki page only for bridge clusters (more than one material).
         if material_count > 1:
             con.execute(
@@ -411,46 +334,6 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
                 ("concept", cluster_id, canonical_name, wiki_path, "shared", "bridge-concepts"),
             )
             n_concept_pages += 1
-
-        # cluster_materials rows (with bridge columns confidence + material_wiki_path)
-        cluster_material_rows = source_concepts
-        if not cluster_material_rows and unique_mids:
-            cluster_material_rows = [
-                {
-                    "material_id": mid,
-                    "relevance": "",
-                    "source_pages": [],
-                    "evidence_spans": [],
-                    "confidence": confidence,
-                }
-                for mid in unique_mids
-            ]
-        for sc in cluster_material_rows:
-            mid = sc.get("material_id", "")
-            if not mid:
-                continue
-            sc_confidence = float(sc.get("confidence", 0.0))
-            info = mat_info.get(mid, {})
-            mat_wiki_path = _material_wiki_path(
-                info.get("domain", ""), info.get("collection", ""), mid
-            )
-            con.execute(
-                """INSERT OR IGNORE INTO cluster_materials
-                   (cluster_id, material_id, relevance, source_pages, evidence_spans,
-                    confidence, material_wiki_path)
-                   VALUES (?,?,?,?,?,?,?)""",
-                (
-                    cluster_id,
-                    mid,
-                    sc.get("relevance", ""),
-                    json.dumps(sc.get("source_pages") or [], ensure_ascii=False),
-                    json.dumps(sc.get("evidence_spans") or [], ensure_ascii=False),
-                    sc_confidence,
-                    mat_wiki_path,
-                ),
-            )
-            n_cluster_material_links += 1
-            mat_to_clusters[mid].append(cluster_id)
 
         for member in member_local_clusters:
             local_cluster_id = str(member.get("cluster_id", "")).strip()
@@ -479,21 +362,10 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
             )
             n_global_bridge_members += 1
 
-        # Populate global_bridge_clusters (Step 2 bridges) with reflection fields,
-        # so agents can FTS over bridge prose (why_this_bridge_matters, takeaways, tensions, etc.)
-        # and coexist with the legacy concept_clusters table for backwards compatibility.
+        # Populate global_bridge_clusters with reflection fields so agents can
+        # FTS over bridge prose.
         bridge_id = str(c.get("bridge_id", "")).strip()
-        has_bridge_reflection = any(
-            key in c
-            for key in (
-                "bridge_takeaways",
-                "bridge_tensions",
-                "bridge_open_questions",
-                "why_this_bridge_matters",
-                "helpful_new_sources",
-            )
-        )
-        if bridge_id and has_bridge_reflection:
+        if bridge_id:
             descriptor = str(c.get("descriptor", "")).strip()
             bridge_takeaways = list(c.get("bridge_takeaways") or [])
             bridge_tensions = list(c.get("bridge_tensions") or [])
@@ -608,24 +480,6 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
             n_local_cluster_material_links += 1
             local_mat_to_clusters[mid].append(cluster_id)
 
-    # Derive cluster_relations from shared material membership (with shared_material_ids)
-    pair_mids: dict[tuple[str, str], list[str]] = defaultdict(list)
-    for mid, cluster_ids in mat_to_clusters.items():
-        unique = list(dict.fromkeys(cluster_ids))
-        for i, a in enumerate(unique):
-            for b in unique[i + 1:]:
-                pair_mids[(a, b)].append(mid)
-                pair_mids[(b, a)].append(mid)
-
-    for (a, b), mids in pair_mids.items():
-        con.execute(
-            """INSERT OR REPLACE INTO cluster_relations
-               (cluster_id, related_cluster_id, shared_material_count, shared_material_ids)
-               VALUES (?,?,?,?)""",
-            (a, b, len(mids), json.dumps(mids, ensure_ascii=False)),
-        )
-        n_cluster_relations += 1
-
     local_pair_mids: dict[tuple[str, str], list[str]] = defaultdict(list)
     for mid, cluster_ids in local_mat_to_clusters.items():
         unique = list(dict.fromkeys(cluster_ids))
@@ -644,7 +498,6 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
         n_local_cluster_relations += 1
 
     # Rebuild FTS after inserting cluster data
-    con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('rebuild')")
     con.execute("INSERT INTO local_concept_clusters_fts(local_concept_clusters_fts) VALUES ('rebuild')")
     con.execute("INSERT INTO global_bridge_clusters_fts(global_bridge_clusters_fts) VALUES ('rebuild')")
 
@@ -802,9 +655,9 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
 
     return {
         "clusters": len(clusters),
-        "aliases": n_aliases,
-        "cluster_material_links": n_cluster_material_links,
-        "cluster_relations": n_cluster_relations,
+        "aliases": 0,
+        "cluster_material_links": 0,
+        "cluster_relations": 0,
         "global_bridge_members": n_global_bridge_members,
         "global_bridge_clusters": n_global_bridge_clusters,
         "local_clusters": len(local_clusters),
@@ -828,7 +681,6 @@ def _fingerprint_file(path: Path) -> str:
 
 
 def _cluster_fingerprint(root: Path) -> str:
-    bridge_path = root / "derived" / "bridge_concept_clusters.jsonl"
     global_bridge_path = root / "derived" / "global_bridge_clusters.jsonl"
     local_paths = sorted((root / "derived" / "collections").glob("*/local_concept_clusters.jsonl"))
     lint_dir = root / "derived" / "lint"
@@ -838,47 +690,84 @@ def _cluster_fingerprint(root: Path) -> str:
         lint_dir / "collection_reflections.jsonl",
         lint_dir / "graph_findings.jsonl",
     ]
-    if not bridge_path.exists() and not global_bridge_path.exists() and not local_paths and not any(path.exists() for path in lint_paths):
+    if not global_bridge_path.exists() and not local_paths and not any(path.exists() for path in lint_paths):
         return ""
     hasher = hashlib.sha256()
     for path in local_paths:
         hasher.update(path.read_bytes())
-    if local_paths:
-        if global_bridge_path.exists():
-            hasher.update(global_bridge_path.read_bytes())
-    elif global_bridge_path.exists():
+    if global_bridge_path.exists():
         hasher.update(global_bridge_path.read_bytes())
-    elif bridge_path.exists():
-        hasher.update(bridge_path.read_bytes())
     for path in lint_paths:
         if path.exists():
             hasher.update(path.read_bytes())
     return hasher.hexdigest()[:16]
 
 
-def _read_stamp(stamp_path: Path) -> dict:
-    if not stamp_path.exists():
-        return {}
+def _read_db_stamp(con: sqlite3.Connection) -> dict:
     try:
-        return json.loads(stamp_path.read_text())
-    except (json.JSONDecodeError, OSError):
+        row = con.execute(
+            """
+            SELECT built_at, clusters_fingerprint, manifest_fingerprint, counts
+            FROM memory_bridge_state
+            WHERE id = 1
+            """
+        ).fetchone()
+    except sqlite3.Error:
         return {}
-
-
-def _write_stamp(
-    stamp_path: Path,
-    clusters_fp: str,
-    manifest_fp: str,
-    counts: dict,
-) -> None:
-    stamp = {
-        "built_at": datetime.now(timezone.utc).isoformat(),
+    if row is None:
+        return {}
+    built_at, clusters_fp, manifest_fp, counts_json = row
+    try:
+        counts = json.loads(counts_json or "{}")
+    except json.JSONDecodeError:
+        counts = {}
+    return {
+        "built_at": built_at,
         "clusters_fingerprint": clusters_fp,
         "manifest_fingerprint": manifest_fp,
         "counts": counts,
     }
-    stamp_path.parent.mkdir(parents=True, exist_ok=True)
-    stamp_path.write_text(json.dumps(stamp, separators=(',', ':'), ensure_ascii=False))
+
+
+def _write_db_stamp(
+    con: sqlite3.Connection,
+    clusters_fp: str,
+    manifest_fp: str,
+    counts: dict,
+) -> None:
+    con.execute(
+        """
+        INSERT OR REPLACE INTO memory_bridge_state
+        (id, built_at, clusters_fingerprint, manifest_fingerprint, counts)
+        VALUES (1, ?, ?, ?, ?)
+        """,
+        (
+            datetime.now(timezone.utc).isoformat(),
+            clusters_fp,
+            manifest_fp,
+            json.dumps(counts, separators=(",", ":"), ensure_ascii=False),
+        ),
+    )
+
+
+def read_memory_bridge_stamp(config: dict | None = None, *, project_root: Path | None = None) -> dict:
+    """Read the local SQLite memory bridge stamp, if present.
+
+    The stamp intentionally lives inside the ignored local SQLite DB, not under
+    tracked ``derived/`` artifacts. Collaborator clones can then rebuild local
+    DB state without inheriting a stale tracked readiness marker from Git.
+    """
+    index_path = (project_root or get_project_root()) / "indexes" / "search.sqlite"
+    if not index_path.exists():
+        return {}
+    try:
+        con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+        try:
+            return _read_db_stamp(con)
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return {}
 
 
 # ---------------------------------------------------------------------------
@@ -888,10 +777,8 @@ def _write_stamp(
 def memory_rebuild(config: dict | None = None) -> dict:
     """Rebuild memory bridge tables in search.sqlite.
 
-        Reads local/global cluster JSONL files and the materials table, then:
-    - creates concept_cluster_aliases and wiki_pages rows
-    - updates bridge columns on concept_clusters, cluster_materials,
-      cluster_relations
+    Reads local/global cluster JSONL files and the materials table, then
+    refreshes local concept, global bridge, reflection, and wiki registry rows.
 
     Returns summary counts dict.
     Raises FileNotFoundError if index or cluster file is missing.
@@ -902,10 +789,8 @@ def memory_rebuild(config: dict | None = None) -> dict:
     root = get_project_root()
     index_path = get_index_path(config)
     manifest_path = root / "manifests" / "materials.jsonl"
-    stamp_path = root / "derived" / "memory_bridge_stamp.json"
     cluster_paths = [
         root / "derived" / "global_bridge_clusters.jsonl",
-        root / "derived" / "bridge_concept_clusters.jsonl",
         *sorted((root / "derived" / "collections").glob("*/local_concept_clusters.jsonl")),
     ]
 
@@ -918,27 +803,23 @@ def memory_rebuild(config: dict | None = None) -> dict:
             f"Cluster file not found at {cluster_paths[0]}. Run `arq cluster` first."
         )
 
-    from arquimedes.cluster import load_bridge_clusters, load_local_clusters
+    from arquimedes.cluster import load_local_clusters
     from arquimedes.lint_global_bridge import load_global_bridge_clusters
 
     local_clusters = load_local_clusters(root)
-    if local_clusters:
-        clusters = load_global_bridge_clusters(root)
-    else:
-        clusters = load_global_bridge_clusters(root) or load_bridge_clusters(root)
+    clusters = load_global_bridge_clusters(root)
 
     con = sqlite3.connect(str(index_path))
     con.row_factory = sqlite3.Row
     try:
         _ensure_bridge_schema(con)
         counts = _build_bridge(con, clusters, local_clusters, root)
+        clusters_fp = _cluster_fingerprint(root)
+        manifest_fp = _fingerprint_file(manifest_path)
+        _write_db_stamp(con, clusters_fp, manifest_fp, counts)
         con.commit()
     finally:
         con.close()
-
-    clusters_fp = _cluster_fingerprint(root)
-    manifest_fp = _fingerprint_file(manifest_path)
-    _write_stamp(stamp_path, clusters_fp, manifest_fp, counts)
 
     return counts
 
@@ -955,7 +836,6 @@ def memory_ensure(config: dict | None = None) -> tuple[bool, dict]:
     root = get_project_root()
     index_path = get_index_path(config)
     manifest_path = root / "manifests" / "materials.jsonl"
-    stamp_path = root / "derived" / "memory_bridge_stamp.json"
 
     if not index_path.exists():
         raise FileNotFoundError(
@@ -964,7 +844,7 @@ def memory_ensure(config: dict | None = None) -> tuple[bool, dict]:
 
     clusters_fp = _cluster_fingerprint(root)
     manifest_fp = _fingerprint_file(manifest_path)
-    stamp = _read_stamp(stamp_path)
+    stamp = read_memory_bridge_stamp(config)
 
     if (
         clusters_fp

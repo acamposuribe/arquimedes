@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phases 1-7 complete (Phase 7 agent tools landed 2026-04-16); Collection Graph implemented; Phase 8 web UI in progress
-> **Last updated:** 2026-04-16
+> **Status:** Phases 1-7 complete (Phase 7 agent tools landed 2026-04-16); Collection Graph implemented; Phase 8 web UI in progress; Phase 9 server agent + sync implemented in code/tests (2026-04-25); macOS launchd end-to-end install remains operator verification
+> **Last updated:** 2026-04-25
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
 > **Phase 4 spec:** [Search index design](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md)
@@ -13,11 +13,13 @@
 > **Phase 7 plan:** [Agent tools implementation plan](superpowers/plans/2026-04-16-phase7-agent-tools.md)
 > **Phase 8 spec:** [Web UI design](superpowers/specs/2026-04-11-phase8-web-ui-design.md)
 > **Phase 8 plan:** [Web UI implementation plan](superpowers/plans/2026-04-11-phase8-web-ui.md)
-> **Agent handbook:** [docs/agent-handbook.md](agent-handbook.md) (created by Phase 7)
+> **Phase 9 spec:** [Server agent + sync design](superpowers/specs/2026-04-25-phase9-server-agent-design.md)
+> **Phase 9 plan:** [Server agent + sync implementation plan](superpowers/plans/2026-04-25-phase9-server-agent.md)
+> **Collaborator handbook:** [docs/collaborator/agent-handbook.md](../collaborator/agent-handbook.md) (created by Phase 7)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 > **Pipeline:** [Operational pipeline](PIPELINE.md)
 > **Supporting spec:** [Connection model](superpowers/completed/specs/2026-04-05-connection-model.md)
-> **Completed phase docs:** `docs/superpowers/completed/`
+> **Completed phase docs:** `docs/developer/superpowers/completed/`
 
 ## Context
 
@@ -32,7 +34,7 @@ The long-term operating model is an LLM-maintained wiki. In Arquimedes, the futu
 
 Current docs like `CLAUDE.md` describe how to build Arquimedes itself. A dedicated maintainer instruction file for the server agent belongs with the Phase 9 rollout, once compile/lint behavior is implemented and stable.
 
-Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use this plan and the global spec to understand how Arquimedes adapts that pattern for architecture, provenance, collaboration, and an always-on server maintainer.
+Use `docs/developer/llm-wiki.md` as the conceptual reference for the original pattern. Use this plan and the global spec to understand how Arquimedes adapts that pattern for architecture, provenance, collaboration, and an always-on server maintainer.
 
 ## How to use this plan
 
@@ -40,7 +42,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 - Update the **Status** line at the top when moving to a new phase.
 - Update **Last updated** date on any change.
 - Any LLM agent picking up work should read this file first to understand current state.
-- Then read `docs/llm-wiki.md` if conceptual grounding is needed, especially when working on wiki compile/lint/maintainer behavior.
+- Then read `docs/developer/llm-wiki.md` if conceptual grounding is needed, especially when working on wiki compile/lint/maintainer behavior.
 - The search index (SQLite) is gitignored and rebuilt locally — never committed.
 
 ---
@@ -49,7 +51,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 - [x] Initialize git repo, pyproject.toml, .gitignore
 - [x] Create directory structure (config/, src/, manifests/, extracted/, indexes/, wiki/)
-- [x] Set up config system (config.yaml, config.local.yaml, config.template.yaml)
+- [x] Set up config system (shared config plus role-specific collaborator/maintainer profiles)
 - [x] Create `arq` CLI entrypoint with Click
 - [x] Data models (Material, Chunk, Figure, etc.) with provenance support
 
@@ -104,11 +106,11 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 ## Phase 5: Wiki Compiler
 
-- [x] **(concept clustering)** `arq cluster` — LLM pass over bridge candidate packets and current bridge memory; the model returns a structured JSON delta with `links_to_existing[]`, `new_clusters[]`, and `_finished`, and the pipeline validates that response before deterministically emitting `derived/bridge_concept_clusters.jsonl` with `cluster_id`, `canonical_name`, `slug`, `aliases[]`, `material_ids[]`, `source_concepts[{material_id, concept_name, descriptor, relevance, source_pages, evidence_spans, confidence}]`, `confidence`; canonical names should act as meaningful cross-material umbrella concepts rather than narrow one-material fragments, and incremental runs may merge, split, rename, or replace existing bridge concepts when new packets reveal a better overall structure; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
+- [x] **(concept clustering)** `arq cluster` — LLM pass over collection-local concept packets and current local cluster memory; the model returns a structured JSON delta with `links_to_existing[]`, `new_clusters[]`, and `_finished`, and the pipeline validates that response before deterministically emitting `derived/collections/<domain>__<collection>/local_concept_clusters.jsonl`; canonical names should act as meaningful collection-local concept homes rather than raw per-material fragments
 - [x] `arq compile` — generate material pages, concept pages (one page per cluster), index pages
 - [x] **(collection pages)** Extend `arq compile` so `wiki/{domain}/{collection}/_index.md` becomes a first-class deterministic collection page; see [Phase 5 spec](superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md)
 - [x] Collection pages should include: overview, recent additions, material list, top canonical concepts by recurrence, top facets by frequency
-- [x] Incremental compilation (per-material stamps for material pages; global `bridge_cluster_stamp` — when bridge clusters change, rebuild **all** concept pages)
+- [x] Incremental compilation (per-material stamps for material pages; local/global cluster artifact stamps rebuild affected concept and bridge pages)
 - [x] Cross-referencing with standard markdown links
 - [x] Wiki tree: practice/, research/, shared/concepts/
 - [x] Define the wiki structures the future server maintainer will own and keep current: all generated material pages, concept pages, glossary pages, and directory `_index.md` pages under `wiki/`; later phases may add maintainer-owned reports/logs/filings, but collaborators should treat the generated wiki tree as compiler/server-maintainer-owned
@@ -117,7 +119,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 
 - [x] `arq memory rebuild` — project canonical concept clusters and wiki identities into SQLite
 - [x] `arq memory ensure` — rebuild bridge tables only when cluster/wiki graph inputs change
-- [x] Add canonical-cluster tables (`concept_clusters` extended, `concept_cluster_aliases`, `wiki_pages`) + bridge columns on `cluster_materials`, `cluster_relations`
+- [x] Add canonical local/global cluster tables (`local_concept_clusters`, `global_bridge_clusters`, `global_bridge_members`, `wiki_pages`) with local material and relation projections
 - [x] Make `arq search` query canonical clusters and aliases, not only raw per-material concepts
 - [x] Make `arq related` prefer canonical cluster membership as the strongest signal
 - [x] Ensure the semantic graph is queryable for agents, not only readable in markdown
@@ -131,7 +133,7 @@ Use `docs/llm-wiki.md` as the conceptual reference for the original pattern. Use
 Deterministic lint, reflective passes, memory projection, and lint scheduling are implemented in code and verified by tests. The remaining work is Phase 7+ tooling and any future daemon wiring around these maintained layers.
 
 - [x] Deterministic checks first: broken links, orphaned materials/pages, missing metadata, stale enrichment (document stage by stamp/version drift; other stages by their own input drift rules), stale index, stale memory bridge, duplicates, missing compiled pages
-- [x] **(cluster audit)** LLM review of `derived/bridge_concept_clusters.jsonl`: over-merged concepts to split, missed equivalences to merge, orphaned single-material clusters, poorly named canonicals, missing materials in clusters; deterministically invalid edits are skipped without aborting the rest of the audit run
+- [x] **(cluster audit)** LLM review of collection-local cluster artifacts: over-merged concepts to split, missed equivalences to merge, orphaned weak homes, poorly named canonicals, missing materials in clusters; deterministically invalid edits are skipped without aborting the rest of the audit run
 - [x] **(concept reflection)** improve concept pages with cross-material `main_takeaways`, `main_tensions`, `open_questions`, `helpful_new_sources`, and `why_this_concept_matters`
 - [x] **(collection reflection)** improve collection pages with `main_takeaways`, `main_tensions`, important materials/concepts, `open_questions`, `helpful_new_sources`, and `why_this_collection_matters` grounded in linked materials
 - [x] Persist full collection reflection prose in SQLite as part of the queryable memory layer, including `why_this_collection_matters`
@@ -171,18 +173,18 @@ Deterministic lint, reflective passes, memory projection, and lint scheduling ar
 - [x] Materialize cross-collection synthesis on global bridge rows/pages using collection-reflection signals
 - [x] Feed global-bridge memory with connected local-cluster reflections and collection signals so `why_this_bridge_matters` can be written as a page-grade mini-essay
 - [x] Keep concept reflections focused on local concept homes and move bridge-level synthesis into the global-bridge pass
-- [ ] Retire the legacy raw-material global bridge publication path
+- [x] Retire the legacy raw-material global bridge publication path
 
 ## Search Coverage for Bridge Layer (pre-Phase-7 prerequisite)
 
-Current `arq search` covers material cards, chunks, figures, annotations, per-material concepts, local concept clusters, legacy bridge clusters, and (via LIKE fallback) concept/collection reflection prose. It does **not** cover Step 2 global bridge clusters or their reflection essays (`why_this_bridge_matters` etc.) — those only live in `derived/global_bridge_clusters.jsonl` and compiled markdown. Phase 7 wraps search, so search must reach every reflection layer first.
+Current `arq search` covers material cards, chunks, figures, annotations, per-material concepts, local concept clusters, global bridge clusters, and concept/collection reflection prose.
 
 - [x] Add `global_bridge_clusters` table to the memory projection (bridge_id, canonical_name, slug, descriptor, aliases, confidence, material_count, wiki_path, why_this_bridge_matters, bridge_takeaways, bridge_tensions, bridge_open_questions, helpful_new_sources)
 - [x] Add `global_bridge_clusters_fts` covering name, aliases, descriptor, and reflection prose
 - [x] Populate the new tables during `arq compile` / `arq memory rebuild` from `derived/global_bridge_clusters.jsonl`
 - [x] Add `GlobalBridgeHit` dataclass + `_search_global_bridges` helper in `search.py`; surface as a new `global_bridges` field on `SearchResult`
-- [x] Keep legacy `concept_clusters_fts` path working during the Step 2 retirement transition
-- [x] Tests: FTS matches, LIKE fallback over bridge reflection fields, coexistence with legacy layer
+- [x] Remove the retired legacy `concept_clusters_fts` compatibility path from active search coverage
+- [x] Tests: FTS matches and LIKE fallback over bridge reflection fields
 
 ## Phase 7: Agent Tools
 
@@ -194,10 +196,10 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 - [x] Replace `arq figures` stub with compact list by default; `--visual-type`, `--figure <id>` drills
 - [x] Add `arq annotations <material_id>` with `--page`, `--type` filters
 - [x] Add `arq overview` returning domain/collection/material/cluster/bridge counts + freshness snapshot from live SQLite + stamps
-- [x] Add `arq refresh` wrapping `freshness.update_workspace()` (pull-if-applicable + ensure) as the explicit heavier freshness path
+- [x] Add `arq refresh` wrapping `freshness.update_workspace()` (fetch/reset/clean + ensure) as the explicit heavier freshness path
 - [x] Every new command emits JSON by default with `--human` opt-in and includes `material_id` / `wiki_path` / identifiers for direct next-step lookups
-- [x] Create `docs/agent-handbook.md` — hard cap ~800 tokens total: mental model (2-3 lines), path tree, investigation recipe, command quick-reference table, one-line maintainer-only warning; no intro prose, no examples. Add pointer from `CLAUDE.md` to this file.
-- [x] Freshness-on-read contract: transparent `ensure_index_and_memory()` on search/read commands; `arq refresh` for pull-and-ensure; `ARQ_SKIP_FRESHNESS=1` opt-out; no auto-pull on every CLI call
+- [x] Create `docs/collaborator/agent-handbook.md` — hard cap ~800 tokens total: mental model (2-3 lines), path tree, investigation recipe, command quick-reference table, one-line maintainer-only warning; no intro prose, no examples. Add pointer from `CLAUDE.md` to this file.
+- [x] Freshness-on-read contract: transparent `ensure_index_and_memory()` on search/read commands; `arq refresh` for sync-and-ensure; `ARQ_SKIP_FRESHNESS=1` opt-out
 - [x] Explicitly out of scope for Phase 7: MCP server, LLM-invoking commands, any mutation of extracted/wiki/memory/index artifacts, daemon behavior
 
 ## Phase 8: Web UI
@@ -209,16 +211,17 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 
 ## Phase 9: Server Agent + Sync
 
-- [ ] Introduce a dedicated maintainer instruction file for the server agent (operational schema, not build-system docs)
-- [ ] `arq watch` — file watcher with configurable backend (fsevents | poll)
-- [ ] Debouncing + batching (10s window, single commit per batch)
-- [ ] `arq sync` — auto-pull daemon for collaborators with `arq index ensure` after pull, so local search and memory are always current before use
-- [ ] `arq sync` should inherit the memory bridge automatically via `arq index ensure` → `arq memory ensure`
-- [ ] `arq lint --quick` after each compile, `arq lint --full` on weekly schedule
-- [ ] launchd integration for both watch and sync
-- [ ] Auto-commit + push pipeline
-- [ ] Always-on maintainer flow: ingest → extract → compile → lint/index → commit/push
-- [ ] **Material removal cascade**: when a raw file is deleted from iCloud, the watcher should remove the manifest entry, extracted artifacts, wiki pages, concept cluster references, and rebuild the index. The full pipeline must be reversible.
+- [x] Introduce a dedicated maintainer instruction file for the server agent (operational schema, not build-system docs): `docs/maintainer/MAINTAINER.md`
+- [x] `arq watch` — 30-minute scan daemon for ingest/extract/index/compile publication
+- [x] Single commit per scan cycle when changes are detected
+- [x] `arq sync` — auto-sync daemon for collaborators with `arq index ensure` after canonical reset, so local search and memory are always current before use
+- [x] `arq sync` inherits the memory bridge automatically via `arq index ensure` → `arq memory ensure`
+- [x] `arq lint --quick` after each compile, `arq lint --full` daily at 02:00 via `arq lint --install-full`
+- [x] launchd integration for watch, sync, and lint-full plist installation/status/uninstall
+- [x] Auto-commit + push pipeline
+- [x] Always-on maintainer flow: ingest → extract → index rebuild → compile → commit/push; reflective `global-bridge` remains nightly full-lint only
+- [x] **Material removal cascade**: when a raw file is deleted from iCloud, the watcher removes manifest entries, extracted artifacts, wiki pages, and concept cluster references before rebuild/compile/index publication
+- [ ] Operator verification on the actual macOS maintainer machine: install launchd jobs, run a real iCloud add/update/delete cycle, and confirm push/sync behavior against a separate collaborator clone
 
 ---
 
@@ -240,13 +243,17 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 | `src/arquimedes/search.py` | Search interface (card → chunk → deep) |
 | `src/arquimedes/read.py` | Deterministic read helpers for wiki/material/figure/chunk/page/annotation/overview accessors |
 | `src/arquimedes/agent_cli.py` | Shared helpers for agent-facing commands: freshness guard, JSON/human dispatch, error formatting |
-| `src/arquimedes/freshness.py` | Collaborator refresh path: optional git pull + `ensure_index_and_memory()` |
+| `src/arquimedes/freshness.py` | Collaborator refresh path: fetch/reset/clean + `ensure_index_and_memory()` |
 | `src/arquimedes/compile.py` | Wiki generation |
 | `src/arquimedes/lint_global_bridge.py` | Step 2 global bridge artifact generation from local clusters |
 | `src/arquimedes/serve.py` | Web UI (FastAPI) |
-| `src/arquimedes/watch.py` | File watcher daemon (fsevents/poll + debounce) |
-| `src/arquimedes/sync.py` | Auto-pull daemon + index ensure |
-| `config/config.yaml` | Default configuration |
+| `src/arquimedes/watch.py` | Scheduled scan daemon for publication batches |
+| `src/arquimedes/sync.py` | Auto-sync daemon + index ensure |
+| `src/arquimedes/removal.py` | Material removal cascade for deleted library files |
+| `src/arquimedes/launchd.py` | macOS launchd plist rendering/install/status helpers |
+| `config/config.yaml` | Shared default configuration |
+| `config/collaborator/config.local.example.yaml` | Collaborator local config example |
+| `config/maintainer/config.yaml` | Maintainer LLM/provider and daemon profile |
 
 ## Verification Checklist
 
@@ -256,11 +263,15 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 - [ ] Search: `arq search "thermal mass"` → relevant cards with correct facets
 - [ ] Deep search: `arq search --deep "thermal mass"` → multi-layer drill to chunk text
 - [ ] Compile: `arq compile` → wiki pages with links and cross-references, plus memory bridge rebuilt
-- [ ] Watch: `arq watch` + drop file → auto-pipeline with debounced batch commit
-- [ ] Sync: second device `arq sync` → git pull + `arq index ensure` auto-rebuilds local index and local memory bridge
+- [x] Watch unit behavior: scanner/planner detects add/modify/move/delete and empty cycles
+- [x] Sync unit behavior: `arq sync` fetches, resets, cleans, and runs index/memory ensure
+- [x] Launchd plist rendering: watch interval and lint-full calendar plist payloads render correctly
+- [x] Removal cascade unit behavior: manifest, extracted artifacts, wiki page, and cluster refs are removed idempotently
+- [ ] Watch operator verification: `arq watch` + real iCloud file → next scan runs auto-pipeline with one batch commit and push
+- [ ] Sync operator verification: second device `arq sync` → fetch/reset/clean + `arq index ensure` auto-rebuilds local index and local memory bridge
 - [ ] Web UI: `arq serve` → browse, search, view materials, open figures
 - [x] Agent CLI: `arq read <id>` returns a card with `wiki_path`; `--chunk`, `--page`, `--full`, `--detail` drill layers behave per spec
 - [x] Agent CLI: `arq figures <id>`, `arq annotations <id>`, `arq overview`, `arq refresh` return documented JSON shapes and respect `--human`
 - [x] Agent CLI: `ARQ_SKIP_FRESHNESS=1` bypasses `ensure_index_and_memory()` on agent-facing commands
-- [x] Agent handbook: `docs/agent-handbook.md` exists; referenced wiki paths and command names resolve; under ~800-token body
+- [x] Agent handbook: `docs/collaborator/agent-handbook.md` exists; referenced wiki paths and command names resolve; under ~800-token body
 - [ ] Lint: `arq lint` → catches broken links, missing metadata

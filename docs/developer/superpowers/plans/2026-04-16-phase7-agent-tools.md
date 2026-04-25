@@ -24,7 +24,7 @@ Shipped:
 - `GlobalBridgeHit` dataclass + `_search_global_bridges` helper in `search.py`
 - `global_bridges` field on `SearchResult` populated alongside `collection_pages` and `canonical_clusters`
 - tests in `TestGlobalBridgeSearch` covering FTS name matches and LIKE fallback over bridge reflection prose
-- legacy `concept_clusters_fts` path retained unchanged during the Step 2 retirement transition
+- retired legacy `concept_clusters_fts` path removed from active search coverage
 
 Slice 7.1 can now proceed.
 
@@ -49,7 +49,7 @@ Stubs / missing:
 - no transparent `ensure` guard shared across agent-facing commands
 - no `ARQ_SKIP_FRESHNESS` support
 - no `docs/agent-handbook.md`
-- no pointer from `CLAUDE.md` or `docs/PLAN.md` to a handbook
+- no pointer from `CLAUDE.md` or `docs/developer/PLAN.md` to a handbook
 
 ## File Map
 
@@ -60,7 +60,7 @@ Stubs / missing:
 | 3 | `src/arquimedes/cli.py` | Modify | Replace `arq read` and `arq figures` stubs; add `arq annotations`, `arq overview`, `arq refresh`; wire all five through `ensure_guard` |
 | 4 | `docs/agent-handbook.md` | Create | Collaborator-agent mental model, investigation recipe, token hygiene, freshness guidance, quick-reference table, explicit maintainer-only command list |
 | 5 | `CLAUDE.md` | Modify | Add short pointer section: "If you are investigating the knowledge base, read `docs/agent-handbook.md` first; this file is for agents modifying the Arquimedes code itself" |
-| 6 | `docs/PLAN.md` | Modify | Phase 7 bullet list replaced; agent handbook added to supporting-docs table; Phase 7 verification bullets appended |
+| 6 | `docs/developer/PLAN.md` | Modify | Phase 7 bullet list replaced; agent handbook added to supporting-docs table; Phase 7 verification bullets appended |
 | 7 | `tests/test_agent_cli.py` | Create | Unit tests for `ensure_guard`, JSON/human output, error formatting |
 | 8 | `tests/test_read_command.py` | Create | `arq read` behavior across `--page`, `--chunk`, `--full`, `--detail` |
 | 9 | `tests/test_figures_command.py` | Create | `arq figures` default list, `--visual-type`, `--figure` |
@@ -202,7 +202,7 @@ Ships:
 
 - `docs/agent-handbook.md` containing only: mental model (2-3 lines), path tree, investigation recipe, command quick-reference table, one-line maintainer-only warning. No introduction prose, no examples, no long token-hygiene essay.
 - pointer section in `CLAUDE.md`
-- supporting-docs row in `docs/PLAN.md`
+- supporting-docs row in `docs/developer/PLAN.md`
 - `tests/test_agent_handbook.py` verifying:
   - file exists
   - referenced wiki paths resolve to real directories/globs

@@ -1032,13 +1032,6 @@ class TestFindRelated:
         types = {c.type for c in beta.connections}
         assert "shared_local_cluster" in types
 
-    def test_shared_global_bridge_contributes(self, concepts_repo):
-        related = find_related("mat_alpha")
-        beta = next((r for r in related if r.material_id == "mat_beta"), None)
-        assert beta is not None
-        types = {c.type for c in beta.connections}
-        assert "shared_global_cluster" in types
-
     def test_shared_author_contributes(self, concepts_repo):
         related = find_related("mat_alpha")
         beta = next((r for r in related if r.material_id == "mat_beta"), None)
@@ -1079,7 +1072,6 @@ class TestFindRelated:
         out = format_related_human("mat_alpha", related)
         assert "mat_beta" in out
         assert "shared local home:" in out
-        assert "shared bridge:" in out
 
     def test_no_related_empty_collection(self, tmp_path, monkeypatch):
         """Single-material collection → no related results."""

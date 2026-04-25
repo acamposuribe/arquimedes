@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.arquimedes.lint-full</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{ARQ}}</string>
+    <string>lint</string>
+    <string>--full</string>
+    <string>--commit-push</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{REPO_ROOT}}</string>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key>
+    <integer>{{HOUR}}</integer>
+    <key>Minute</key>
+    <integer>{{MINUTE}}</integer>
+  </dict>
+  <key>KeepAlive</key>
+  <false/>
+</dict>
+</plist>

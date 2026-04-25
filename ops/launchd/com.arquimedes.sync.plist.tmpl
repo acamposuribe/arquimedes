@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.arquimedes.sync</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>{{ARQ}}</string>
+    <string>sync</string>
+    <string>--once</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>{{REPO_ROOT}}</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StartInterval</key>
+  <integer>{{PULL_INTERVAL_SECONDS}}</integer>
+  <key>KeepAlive</key>
+  <false/>
+</dict>
+</plist>

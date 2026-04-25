@@ -230,8 +230,8 @@ Notes:
 ### Docs
 
 - [x] Update the main system spec when Step 1 ships
-- [x] Update `docs/PIPELINE.md` with the new semantic publication order
-- [x] Update `docs/PLAN.md` as milestones land
+- [x] Update `docs/developer/PIPELINE.md` with the new semantic publication order
+- [x] Update `docs/developer/PLAN.md` as milestones land
 
 ### Migration
 

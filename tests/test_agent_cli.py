@@ -13,13 +13,19 @@ def test_ensure_guard_calls_ensure_when_env_unset(monkeypatch):
     monkeypatch.delenv("ARQ_SKIP_FRESHNESS", raising=False)
     calls = {"n": 0}
 
-    def fake_ensure():
+    def fake_refresh():
         calls["n"] += 1
-        return (False, None, False, {})
+        return {
+            "repo_applicable": True,
+            "pull_attempted": True,
+            "pull_result": "ok",
+            "index_rebuilt": False,
+            "memory_rebuilt": False,
+        }
 
-    import arquimedes.index as index_mod
+    import arquimedes.freshness as freshness_mod
 
-    monkeypatch.setattr(index_mod, "ensure_index_and_memory", fake_ensure)
+    monkeypatch.setattr(freshness_mod, "update_workspace", fake_refresh)
 
     @agent_cli.ensure_guard
     def cmd():
@@ -31,12 +37,12 @@ def test_ensure_guard_calls_ensure_when_env_unset(monkeypatch):
 
 def test_ensure_guard_skips_when_env_truthy(monkeypatch):
     monkeypatch.setenv("ARQ_SKIP_FRESHNESS", "1")
-    import arquimedes.index as index_mod
+    import arquimedes.freshness as freshness_mod
 
     def boom():
-        raise AssertionError("ensure_index_and_memory must not be called")
+        raise AssertionError("update_workspace must not be called")
 
-    monkeypatch.setattr(index_mod, "ensure_index_and_memory", boom)
+    monkeypatch.setattr(freshness_mod, "update_workspace", boom)
 
     @agent_cli.ensure_guard
     def cmd():
@@ -47,12 +53,12 @@ def test_ensure_guard_skips_when_env_truthy(monkeypatch):
 
 def test_ensure_guard_converts_file_not_found(monkeypatch):
     monkeypatch.delenv("ARQ_SKIP_FRESHNESS", raising=False)
-    import arquimedes.index as index_mod
+    import arquimedes.freshness as freshness_mod
 
-    def fake_ensure():
+    def fake_refresh():
         raise FileNotFoundError("no index at /tmp/foo")
 
-    monkeypatch.setattr(index_mod, "ensure_index_and_memory", fake_ensure)
+    monkeypatch.setattr(freshness_mod, "update_workspace", fake_refresh)
 
     @agent_cli.ensure_guard
     def cmd():

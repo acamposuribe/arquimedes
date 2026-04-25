@@ -1,4 +1,4 @@
-"""Sanity checks for docs/agent-handbook.md.
+"""Sanity checks for docs/collaborator/agent-handbook.md.
 
 Verifies the handbook exists, stays under its token budget, and that every
 `arq <command>` it names is actually registered in the CLI.
@@ -12,7 +12,7 @@ from pathlib import Path
 from arquimedes.cli import cli
 
 
-HANDBOOK = Path(__file__).resolve().parents[1] / "docs" / "agent-handbook.md"
+HANDBOOK = Path(__file__).resolve().parents[1] / "docs" / "collaborator" / "agent-handbook.md"
 # Token budget: ~800 tokens. Using 1.4 tokens/word as a safe upper bound,
 # this caps the handbook body at ~570 words.
 WORD_BUDGET = 600

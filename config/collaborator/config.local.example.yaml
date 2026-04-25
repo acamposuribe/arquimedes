@@ -1,0 +1,4 @@
+# Arquimedes collaborator local config
+# Copy to config/collaborator/config.local.yaml and set only this value.
+
+library_root: "C:/PATH/TO/Arquimedes"

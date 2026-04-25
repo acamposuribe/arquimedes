@@ -11,15 +11,15 @@ An architect and architecture professor needs a collaborative knowledge base tha
 
 The system is inspired by Karpathy's LLM knowledge base pattern: raw data collected, compiled by LLM into a wiki, operated on by CLI tools and agents, viewable in a browser. The key difference is this is collaborative, domain-specific (architecture), and agent-first.
 
-For the practical end-to-end operating flow, including what happens when a collaborator adds a file and which steps use an LLM, see `docs/PIPELINE.md`.
+For the practical end-to-end operating flow, including what happens when a collaborator adds a file and which steps use an LLM, see `docs/developer/PIPELINE.md`.
 
-For the original conceptual pattern, see `docs/llm-wiki.md`. That file is the local reference for the source idea. This spec defines how Arquimedes instantiates and extends that pattern for architecture practice and research, with explicit provenance, deterministic extraction, multimodal materials, collaboration, and a future server-maintainer daemon.
+For the original conceptual pattern, see `docs/developer/llm-wiki.md`. That file is the local reference for the source idea. This spec defines how Arquimedes instantiates and extends that pattern for architecture practice and research, with explicit provenance, deterministic extraction, multimodal materials, collaboration, and a future server-maintainer daemon.
 
-For how Arquimedes should evolve from a searchable archive into a connected memory system before the wiki compiler exists, see `docs/superpowers/completed/specs/2026-04-05-connection-model.md`. That note explains how structural, semantic, retrieval, attention, and materialized connections should emerge across phases.
+For how Arquimedes should evolve from a searchable archive into a connected memory system before the wiki compiler exists, see `docs/developer/superpowers/completed/specs/2026-04-05-connection-model.md`. That note explains how structural, semantic, retrieval, attention, and materialized connections should emerge across phases.
 
-For the post-compile bridge that makes the wiki graph queryable for agents, see the consolidated Phase 5 wiki compiler spec in `docs/superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md`. That spec now includes the memory bridge projection into SQLite.
+For the post-compile bridge that makes the wiki graph queryable for agents, see the consolidated Phase 5 wiki compiler spec in `docs/developer/superpowers/completed/specs/2026-04-05-phase5-wiki-compiler-design.md`. That spec now includes the memory bridge projection into SQLite.
 
-For the proposed next evolution where collections become first-order semantic homes and a separate global bridge graph reconnects them, see `docs/superpowers/specs/2026-04-09-collection-graph-design.md`.
+For the proposed next evolution where collections become first-order semantic homes and a separate global bridge graph reconnects them, see `docs/developer/superpowers/specs/2026-04-09-collection-graph-design.md`.
 
 The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer. It is responsible for ingesting new sources, enriching them, compiling and updating wiki pages, running health checks, and keeping indexes current. Semantic publication belongs to that server-maintainer path: clustering and wiki compilation are not collaborator responsibilities. Collaborator machines rebuild only deterministic local query layers from already-committed outputs. This maintainer role is assembled progressively:
 - **Wiki compilation** defines what the maintainer writes and updates
@@ -31,21 +31,21 @@ Current project docs such as `CLAUDE.md` describe how to build Arquimedes itself
 ## Architecture Overview
 
 **Three deployment contexts:**
-1. **Server (Mac Mini)** — always-on, watches iCloud folder, auto-ingests/extracts/compiles, commits + pushes
+1. **Server (Mac Mini)** — always-on, scans the iCloud folder on a fixed cadence, auto-ingests/extracts/compiles, commits + pushes
 2. **Admin (you)** — full CLI access, manages system, runs manual commands
-3. **Collaborators** — drop files into iCloud, search via web UI or their own agents, auto-pull for updates
+3. **Collaborators** — drop files into iCloud, search via web UI or their own agents, auto-sync for updates
 
 **Data flow:**
 ```
 iCloud folder (shared)
-  → Server agent detects new files (FSEvents)
+  → Server agent detects new files on the next scheduled scan
   → arq ingest (register in manifest)
   → arq extract (deterministic extraction + LLM enrichment)
   → arq index rebuild (SQLite FTS5 over extracted/enriched artifacts)
   → arq cluster (collection-local concept clustering)
   → arq compile (wiki generation; auto-runs arq memory rebuild)
   → git commit + push (extracted/, wiki/, manifests/)
-  → Collaborators auto-pull (arq sync daemon)
+  → Collaborators auto-sync (arq sync daemon)
   → arq index ensure (rebuild index locally if stale; auto-runs arq memory ensure)
   → Search via web UI, CLI, or MCP tools
 ```
@@ -55,9 +55,12 @@ iCloud folder (shared)
 ```
 arquimedes/
   config/
-    config.yaml                      # defaults: library_root, LLM settings, extraction params
-    config.local.yaml                # gitignored, per-device overrides
-    config.template.yaml             # committed template for new device setup
+    config.yaml                      # shared defaults safe for read/search
+    collaborator/
+      config.local.example.yaml      # collaborator example; local copy is gitignored
+    maintainer/
+      config.yaml                    # maintainer LLM/provider and daemon profile
+      config.local.yaml              # gitignored maintainer-local overrides
   src/arquimedes/
     __init__.py
     cli.py                           # `arq` Click entrypoint
@@ -75,8 +78,8 @@ arquimedes/
     compile.py                       # wiki generation from extracted data
     lint.py                          # wiki health checks + reflective maintenance
     lint_global_bridge.py            # Step 2 global bridge artifact generation from local clusters
-    watch.py                         # file watcher daemon (fsevents/poll + debounce)
-    sync.py                          # auto-pull daemon for collaborators
+    watch.py                         # scheduled scan daemon for publication batches
+    sync.py                          # auto-sync daemon for collaborators
     serve.py                         # FastAPI web UI server
     mcp_server.py                    # MCP tool wrapper
     models.py                        # data models (Material, Chunk, Figure, etc.)
@@ -153,93 +156,29 @@ Collections let collaborators scope work to a subset of materials — useful for
 
 ## Configuration
 
+Shared config stays safe for collaborator read/search use:
+
 ```yaml
-# config.yaml (committed defaults)
+# config/config.yaml
 library_root: "~/Arquimedes-Library"
-llm:
-  agent_cmd:                      # legacy fallback; stage routes take precedence
-    - "claude --print"
-    - "codex exec"
-enrichment:
-  llm_routes:
-    document:
-      - provider: codex
-        command: "codex exec"
-        model: gpt-5.4-mini
-        effort: high
-      - provider: claude
-        command: "claude --print"
-        model: sonnet
-        effort: medium
-      - provider: copilot
-        command: "copilot"
-        agent: copilot-no-tools-json
-        model: gpt-4.1
-        silent: true
-        no_ask_user: true
-        no_auto_update: true
-        no_custom_instructions: true
-        allow_all: false
-    chunk:
-      - provider: copilot
-        command: "copilot"
-        agent: copilot-no-tools-json
-        model: gpt-4.1
-        silent: true
-        no_ask_user: true
-        no_auto_update: true
-        no_custom_instructions: true
-        allow_all: false
-    figure:
-      - provider: codex
-        command: "codex exec"
-        model: gpt-5.4-mini
-        effort: medium
-      - provider: copilot
-        command: "copilot"
-        agent: copilot-no-tools-json
-        model: gpt-4o
-        silent: true
-        no_ask_user: true
-        no_auto_update: true
-        no_custom_instructions: true
-        allow_all: false
-    cluster:
-      - provider: claude
-        command: "claude --print"
-        model: sonnet
-        effort: medium
-      - provider: codex
-        command: "codex exec"
-        model: gpt-5.4-mini
-        effort: high
-      - provider: copilot
-        command: "copilot"
-        agent: copilot-no-tools-json
-        model: gpt-4.1
-        silent: true
-        no_ask_user: true
-        no_auto_update: true
-        no_custom_instructions: true
-        allow_all: false
-  chunk_parallel_requests: 1   # parallel chunk batch LLM requests per material
-  figure_parallel_requests: 1  # parallel figure batch LLM requests per material
-extraction:
-  chunk_size: 500            # tokens per chunk
-  generate_thumbnails: true
-  ocr_fallback: true
-watch:
-  backend: fsevents           # fsevents (macOS native) or poll (fallback)
-  poll_interval: 30           # seconds between scans (poll backend only)
-  debounce_window: 10         # seconds to wait for batch to settle
-  batch_commit: true          # commit all ingested materials in one commit
 sync:
-  pull_interval: 300         # seconds between git pull (collaborator mode)
-  auto_start: false          # collaborators opt-in to auto-pull
-  auto_index: true           # run `arq index ensure` after each pull
+  pull_interval: 300
+  auto_start: false
+  auto_index: true
+  reset_tracked: true
+serve:
+  host: "0.0.0.0"
+  port: 8420
 ```
 
-`config.local.yaml` overrides any value (gitignored). `config.template.yaml` is committed with placeholder comments.
+Collaborator local config contains only the per-machine cloud root and is gitignored:
+
+```yaml
+# config/collaborator/config.local.yaml
+library_root: "C:/PATH/TO/Arquimedes"
+```
+
+Maintainer-only extraction, enrichment, LLM routing, watch, lint, and clustering settings live in `config/maintainer/config.yaml`. Optional `config/maintainer/config.local.yaml` is gitignored for maintainer-local overrides.
 
 Provider routing is based on ordered process outcomes, not generated-text heuristics. Arquimedes falls through to the next configured route only when an agent process exits non-zero, times out, or returns unusable empty output. It does not scan stdout/stderr for phrases like rate-limit or unauthorized, and it does not cache providers as exhausted across calls.
 
@@ -469,9 +408,9 @@ At the end of Step 1 of the collection-graph rollout, the primary semantic publi
 
 `ingest -> extract -> index rebuild -> cluster -> compile -> memory rebuild`
 
-Legacy bridge artifacts such as `derived/bridge_concept_clusters.jsonl` may still exist during the transition and may continue to support some cross-collection continuity features, but they are no longer the primary semantic publication layer. Step 2 introduces a distinct global bridge graph built from local semantic outputs rather than from raw material-level global clustering.
+Legacy raw-material bridge artifacts are retired and are not part of the active data model. Step 2 introduces a distinct global bridge graph built from local semantic outputs rather than from raw material-level global clustering.
 
-The first Step 2 execution boundary lives inside lint as the `global-bridge` stage. That stage should write `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json` by running an incremental LLM clustering pass over collection-local clusters, using compact hosting-collection context plus existing global bridge memory. That memory should carry the connected local-cluster reflections and collection signals needed to synthesize bridge pages as substantial cross-collection explanations rather than short blurbs. Freshness should be decided only by whether there are new or changed promoted local clusters not yet covered by the bridge layer, so the saved global-bridge input fingerprint should track only that pending local-cluster delta rather than collection-reflection churn or bridge-memory drift. Compile renders shared bridge pages from those collection-cluster members, and memory/search project the same bridge layer into SQLite-backed traversal while the remaining legacy raw-material bridge publication path is still being retired. A separate public `arq bridge-global` command is not currently part of the design.
+The first Step 2 execution boundary lives inside lint as the `global-bridge` stage. That stage should write `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json` by running an incremental LLM clustering pass over collection-local clusters, using compact hosting-collection context plus existing global bridge memory. That memory should carry the connected local-cluster reflections and collection signals needed to synthesize bridge pages as substantial cross-collection explanations rather than short blurbs. Freshness should be decided only by whether there are new or changed promoted local clusters not yet covered by the bridge layer, so the saved global-bridge input fingerprint should track only that pending local-cluster delta rather than collection-reflection churn or bridge-memory drift. Compile renders shared bridge pages from those collection-cluster members, and memory/search project the same bridge layer into SQLite-backed traversal. A separate public `arq bridge-global` command is not currently part of the design.
 
 Step 2 global bridging works only with collection-local clusters as members. Raw material-level concepts are not direct bridge members. The bridge-clustering pass itself should also emit bridge takeaways, tensions, open questions, helpful new sources, and why the bridge matters, so bridge-level reflection is part of clustering rather than a second pass layered on top. `why_this_bridge_matters` should be treated as the main prose body of the bridge page: a grounded mini-essay that explains what becomes visible only when the connected local clusters are read together.
 
@@ -518,7 +457,7 @@ Phase 6 is complete. The detailed design lives in [the archived phase-6 spec](..
 - operator logs for `arq enrich`, `arq cluster`, and `arq lint` live under `logs/` and must always include an explicit terminal success/failure record
 
 ### Integration with the server agent:
-The watcher should run `arq lint --quick` (deterministic checks only) after each compile, and `arq lint --full` (including reflective passes with refreshes between stages) on a scheduled basis.
+The server maintainer should run the daytime publication loop on a fixed scan cadence, with `arq lint --quick` after each compile, and run `arq lint --full` (including reflective passes such as `global-bridge`, with refreshes between stages) once per day on a scheduled basis.
 
 ## Agent Tool Layer
 
@@ -549,8 +488,8 @@ The watcher should run `arq lint --quick` (deterministic checks only) after each
 | `arq index ensure` | Rebuild index only if stale (auto-check) |
 | `arq memory rebuild` | Deterministically project the cluster/wiki graph into SQLite |
 | `arq memory ensure` | Rebuild the local graph bridge only if stale |
-| `arq watch` | Start file watcher daemon (server) |
-| `arq sync` | Start auto-pull daemon (collaborator) |
+| `arq watch` | Start scheduled scan daemon (server) |
+| `arq sync` | Start auto-sync daemon (collaborator) |
 | `arq serve` | Start web UI |
 | `arq status` | System stats, recent additions |
 
@@ -589,24 +528,21 @@ This is the phase where the Karpathy-style "wiki maintainer" becomes operational
 
 ### `arq watch` daemon:
 
-1. Monitors iCloud folder for new/changed files
-2. **Watch backend** (configurable via `watch.backend`):
-   - `fsevents` (default on macOS) — native filesystem events, low overhead
-   - `poll` — fallback, configurable interval, works everywhere
-3. **Debouncing + batching**: iCloud sync triggers multiple events per file. The watcher debounces events (default 10s window) and batches files that arrive together into a single pipeline run.
-4. On batch ready:
+1. Scans the iCloud folder every 30 minutes for new/changed/moved/deleted files
+2. Builds one publication batch from the durable library delta
+3. On batch ready:
    - `arq ingest` — register new materials in manifest
    - `arq extract` — deterministic parsing + LLM enrichment
-   - `arq compile` — update wiki
    - `arq index rebuild` — update local search index
+   - `arq compile` — update wiki
    - `git add . && git commit -m "auto: ingest <n> new materials" && git push`
-5. Runs as a launchd service for auto-start on boot
-6. Logs to `~/.arquimedes/watch.log`
+4. Runs as a launchd-managed scheduled job
+5. Logs to `~/.arquimedes/watch.log`
 
 ### Collaborator sync (`arq sync`):
 
-- Runs `git pull` every 5 minutes (configurable)
-- Runs `arq index ensure` immediately after pull so collaborator search and local memory stay current
+- Runs a fetch/reset/clean cycle every 5 minutes (configurable)
+- Runs `arq index ensure` immediately after sync so collaborator search and local memory stay current
 - Lightweight launchd service
 - Collaborators install once: `arq sync --install` creates the launchd plist
 
@@ -632,7 +568,7 @@ This is the phase where the Karpathy-style "wiki maintainer" becomes operational
 5. **Deep search**: `arq search --deep "thermal mass"` → verify multi-layer drill returns chunk text
 6. **Compile**: `arq compile` → verify wiki pages generated with correct links and cross-references, and memory bridge rebuilt
 7. **Lint**: `arq lint` → verify deterministic checks catch broken links, missing metadata; LLM checks find connections and suggest concepts
-8. **Watch**: start `arq watch`, drop file into iCloud folder → verify auto-pipeline runs end-to-end with debounced batch commit
-9. **Sync**: on second device, `arq sync` → verify git pull brings new content, `arq index ensure` auto-rebuilds local index and local memory bridge
+8. **Watch**: start `arq watch`, drop file into iCloud folder → verify the next scheduled scan runs the publish pipeline end-to-end with one batch commit
+9. **Sync**: on second device, `arq sync` → verify fetch/reset brings canonical content, removes scratch repo files, and `arq index ensure` auto-rebuilds local index and local memory bridge
 10. **Web UI**: `arq serve` → browse wiki, search, view material pages, open figures
 11. **MCP**: connect agent to MCP server → verify search and read tools work

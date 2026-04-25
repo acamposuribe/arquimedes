@@ -163,58 +163,6 @@ CREATE TABLE IF NOT EXISTS material_authors (
     PRIMARY KEY (material_id, author)
 );
 
--- ---------------------------------------------------------------------------
--- Concept cluster graph (populated after clustering, via index_clusters())
--- ---------------------------------------------------------------------------
-
-CREATE TABLE IF NOT EXISTS concept_clusters (
-    cluster_id     TEXT PRIMARY KEY,
-    canonical_name TEXT NOT NULL DEFAULT '',
-    slug           TEXT NOT NULL DEFAULT '',
-    aliases        TEXT NOT NULL DEFAULT '[]',  -- JSON array
-    confidence     REAL NOT NULL DEFAULT 0.0,
-    wiki_path      TEXT NOT NULL DEFAULT '',    -- filled by arq memory rebuild
-    material_count INTEGER NOT NULL DEFAULT 0   -- filled by arq memory rebuild
-);
-
-CREATE VIRTUAL TABLE IF NOT EXISTS concept_clusters_fts USING fts5(
-    cluster_id UNINDEXED,
-    canonical_name,
-    aliases,
-    content='concept_clusters',
-    content_rowid='rowid',
-    tokenize='porter unicode61'
-);
-
--- One row per (cluster, material) membership.
--- source_pages and evidence_spans come from the source_concept entry with highest confidence.
-CREATE TABLE IF NOT EXISTS cluster_materials (
-    cluster_id          TEXT NOT NULL,
-    material_id         TEXT NOT NULL,
-    relevance           TEXT NOT NULL DEFAULT '',
-    source_pages        TEXT NOT NULL DEFAULT '[]',  -- JSON array
-    evidence_spans      TEXT NOT NULL DEFAULT '[]',  -- JSON array
-    confidence          REAL NOT NULL DEFAULT 0.0,       -- filled by arq memory rebuild
-    material_wiki_path  TEXT NOT NULL DEFAULT '',        -- filled by arq memory rebuild
-    PRIMARY KEY (cluster_id, material_id)
-);
-
--- Direct cluster-to-cluster relations derived from shared material membership.
-CREATE TABLE IF NOT EXISTS cluster_relations (
-    cluster_id            TEXT NOT NULL,
-    related_cluster_id    TEXT NOT NULL,
-    shared_material_count INTEGER NOT NULL DEFAULT 0,
-    shared_material_ids   TEXT NOT NULL DEFAULT '[]',  -- JSON array; filled by arq memory rebuild
-    PRIMARY KEY (cluster_id, related_cluster_id)
-);
-
--- One alias per row; populated by arq memory rebuild.
-CREATE TABLE IF NOT EXISTS concept_cluster_aliases (
-    cluster_id TEXT NOT NULL,
-    alias      TEXT NOT NULL,
-    PRIMARY KEY (cluster_id, alias)
-);
-
 -- Wiki page registry; populated by arq memory rebuild.
 CREATE TABLE IF NOT EXISTS wiki_pages (
     page_type  TEXT NOT NULL,           -- material | concept | collection
@@ -618,9 +566,6 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
         con.execute("INSERT INTO annotations_fts(annotations_fts) VALUES ('rebuild')")
         con.execute("INSERT INTO concepts_fts(concepts_fts) VALUES ('rebuild')")
 
-        # Populate cluster graph tables (no-op if derived/bridge_concept_clusters.jsonl absent)
-        _populate_clusters(con, root)
-
         # Write index_state
         manifest_hash = _compute_manifest_hash(manifest_path)
         extracted_snapshot = _compute_extracted_snapshot(extracted_dir, material_ids, root)
@@ -648,218 +593,10 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
 
 # --- Cluster graph indexing ---
 
-def _populate_clusters(con: sqlite3.Connection, project_root: Path) -> int:
-    """Populate concept_clusters, cluster_materials, cluster_relations from cluster JSONL files.
-
-    Clears existing cluster tables first, then re-inserts. Safe to call on any
-    open connection (caller is responsible for commit). Returns cluster count written.
-    """
-    con.execute("DELETE FROM cluster_materials")
-    con.execute("DELETE FROM cluster_relations")
-    con.execute("DELETE FROM concept_clusters")
-    # Rebuild FTS for clusters
-    con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('delete-all')")
-
-    from arquimedes.cluster import load_bridge_clusters
-
-    clusters = load_bridge_clusters(project_root)
-    if not clusters:
-        return 0
-
-    # Build material→[cluster_ids] map for cluster_relations
-    mat_to_clusters: dict[str, list[str]] = {}
-
-    for c in clusters:
-        cluster_id = c.get("cluster_id", "")
-        if not cluster_id:
-            continue
-
-        aliases = c.get("aliases") or []
-        wiki_path = c.get("wiki_path", "") or ""
-        material_count = len(c.get("material_ids") or [])
-        con.execute(
-            """INSERT OR REPLACE INTO concept_clusters
-               (cluster_id, canonical_name, slug, aliases, confidence, wiki_path, material_count)
-               VALUES (?,?,?,?,?,?,?)""",
-            (
-                cluster_id,
-                c.get("canonical_name", ""),
-                c.get("slug", ""),
-                json.dumps(aliases, ensure_ascii=False),
-                float(c.get("confidence", 0.0)),
-                wiki_path,
-                material_count,
-            ),
-        )
-
-        for sc in (c.get("source_concepts") or []):
-            mid = sc.get("material_id", "")
-            if not mid:
-                continue
-            relevance = sc.get("relevance", "")
-            source_pages = json.dumps(sc.get("source_pages") or [], ensure_ascii=False)
-            evidence_spans = json.dumps(sc.get("evidence_spans") or [], ensure_ascii=False)
-            # INSERT OR IGNORE: first source_concept for (cluster, material) wins
-            con.execute(
-                """INSERT OR IGNORE INTO cluster_materials
-                   (cluster_id, material_id, relevance, source_pages, evidence_spans)
-                   VALUES (?,?,?,?,?)""",
-                (cluster_id, mid, relevance, source_pages, evidence_spans),
-            )
-            mat_to_clusters.setdefault(mid, []).append(cluster_id)
-
-    # Derive cluster_relations: two clusters are related when they share a material
-    from collections import defaultdict
-    pair_counts: dict[tuple[str, str], int] = defaultdict(int)
-    for cluster_ids in mat_to_clusters.values():
-        unique = list(dict.fromkeys(cluster_ids))  # preserve order, dedupe
-        for i, a in enumerate(unique):
-            for b in unique[i + 1:]:
-                pair_counts[(a, b)] += 1
-                pair_counts[(b, a)] += 1
-
-    for (a, b), count in pair_counts.items():
-        con.execute(
-            """INSERT OR REPLACE INTO cluster_relations
-               (cluster_id, related_cluster_id, shared_material_count)
-               VALUES (?,?,?)""",
-            (a, b, count),
-        )
-
-    # Rebuild FTS for clusters after new data
-    con.execute("INSERT INTO concept_clusters_fts(concept_clusters_fts) VALUES ('rebuild')")
-
-    return len(clusters)
-
-
 def index_clusters(config: dict | None = None) -> int:
-    """Update the cluster graph tables in an existing search index.
-
-    Reads derived/bridge_concept_clusters.jsonl and replaces the three cluster tables
-    (concept_clusters, cluster_materials, cluster_relations) in the live index.
-    No-op if the index does not yet exist (full rebuild will populate clusters).
-
-    Returns the number of clusters written.
-    """
-    if config is None:
-        config = load_config()
-
-    root = get_project_root()
-    index_path = root / "indexes" / "search.sqlite"
-    if not index_path.exists():
-        return 0
-
-    con = sqlite3.connect(str(index_path))
-    try:
-        # Ensure cluster tables exist (in case index was built before this schema version)
-        con.executescript("""
-            CREATE TABLE IF NOT EXISTS concept_clusters (
-                cluster_id     TEXT PRIMARY KEY,
-                canonical_name TEXT NOT NULL DEFAULT '',
-                slug           TEXT NOT NULL DEFAULT '',
-                aliases        TEXT NOT NULL DEFAULT '[]',
-                confidence     REAL NOT NULL DEFAULT 0.0,
-                wiki_path      TEXT NOT NULL DEFAULT '',
-                material_count INTEGER NOT NULL DEFAULT 0
-            );
-            CREATE VIRTUAL TABLE IF NOT EXISTS concept_clusters_fts USING fts5(
-                cluster_id UNINDEXED,
-                canonical_name,
-                aliases,
-                content='concept_clusters',
-                content_rowid='rowid',
-                tokenize='porter unicode61'
-            );
-            CREATE TABLE IF NOT EXISTS cluster_materials (
-                cluster_id         TEXT NOT NULL,
-                material_id        TEXT NOT NULL,
-                relevance          TEXT NOT NULL DEFAULT '',
-                source_pages       TEXT NOT NULL DEFAULT '[]',
-                evidence_spans     TEXT NOT NULL DEFAULT '[]',
-                confidence         REAL NOT NULL DEFAULT 0.0,
-                material_wiki_path TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY (cluster_id, material_id)
-            );
-            CREATE TABLE IF NOT EXISTS cluster_relations (
-                cluster_id            TEXT NOT NULL,
-                related_cluster_id    TEXT NOT NULL,
-                shared_material_count INTEGER NOT NULL DEFAULT 0,
-                shared_material_ids   TEXT NOT NULL DEFAULT '[]',
-                PRIMARY KEY (cluster_id, related_cluster_id)
-            );
-            CREATE TABLE IF NOT EXISTS concept_cluster_aliases (
-                cluster_id TEXT NOT NULL,
-                alias      TEXT NOT NULL,
-                PRIMARY KEY (cluster_id, alias)
-            );
-            CREATE TABLE IF NOT EXISTS wiki_pages (
-                page_type  TEXT NOT NULL,
-                page_id    TEXT NOT NULL,
-                title      TEXT NOT NULL DEFAULT '',
-                path       TEXT NOT NULL UNIQUE,
-                domain     TEXT NOT NULL DEFAULT '',
-                collection TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY (page_type, page_id)
-            );
-            CREATE TABLE IF NOT EXISTS cluster_reviews (
-                review_id              TEXT PRIMARY KEY,
-                cluster_id             TEXT NOT NULL DEFAULT '',
-                finding_type           TEXT NOT NULL DEFAULT '',
-                severity               TEXT NOT NULL DEFAULT '',
-                recommendation         TEXT NOT NULL DEFAULT '',
-                affected_material_ids  TEXT NOT NULL DEFAULT '[]',
-                affected_concept_names TEXT NOT NULL DEFAULT '[]',
-                evidence               TEXT NOT NULL DEFAULT '[]',
-                input_fingerprint      TEXT NOT NULL DEFAULT '',
-                wiki_path              TEXT NOT NULL DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS concept_reflections (
-                cluster_id               TEXT PRIMARY KEY,
-                slug                     TEXT NOT NULL DEFAULT '',
-                canonical_name           TEXT NOT NULL DEFAULT '',
-                main_takeaways           TEXT NOT NULL DEFAULT '[]',
-                main_tensions            TEXT NOT NULL DEFAULT '[]',
-                open_questions           TEXT NOT NULL DEFAULT '[]',
-                helpful_new_sources      TEXT NOT NULL DEFAULT '[]',
-                why_this_concept_matters TEXT NOT NULL DEFAULT '',
-                supporting_material_ids  TEXT NOT NULL DEFAULT '[]',
-                supporting_evidence      TEXT NOT NULL DEFAULT '[]',
-                input_fingerprint        TEXT NOT NULL DEFAULT '',
-                wiki_path                TEXT NOT NULL DEFAULT ''
-            );
-            CREATE TABLE IF NOT EXISTS collection_reflections (
-                domain                  TEXT NOT NULL,
-                collection              TEXT NOT NULL,
-                main_takeaways          TEXT NOT NULL DEFAULT '[]',
-                main_tensions           TEXT NOT NULL DEFAULT '[]',
-                important_material_ids  TEXT NOT NULL DEFAULT '[]',
-                important_cluster_ids   TEXT NOT NULL DEFAULT '[]',
-                open_questions          TEXT NOT NULL DEFAULT '[]',
-                helpful_new_sources     TEXT NOT NULL DEFAULT '[]',
-                why_this_collection_matters TEXT NOT NULL DEFAULT '',
-                input_fingerprint       TEXT NOT NULL DEFAULT '',
-                wiki_path               TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY (domain, collection)
-            );
-            CREATE TABLE IF NOT EXISTS graph_findings (
-                finding_id              TEXT PRIMARY KEY,
-                finding_type            TEXT NOT NULL DEFAULT '',
-                severity                TEXT NOT NULL DEFAULT '',
-                summary                 TEXT NOT NULL DEFAULT '',
-                details                 TEXT NOT NULL DEFAULT '',
-                affected_material_ids   TEXT NOT NULL DEFAULT '[]',
-                affected_cluster_ids    TEXT NOT NULL DEFAULT '[]',
-                candidate_future_sources TEXT NOT NULL DEFAULT '[]',
-                candidate_bridge_links  TEXT NOT NULL DEFAULT '[]',
-                input_fingerprint       TEXT NOT NULL DEFAULT ''
-            );
-        """)
-        count = _populate_clusters(con, root)
-        con.commit()
-    finally:
-        con.close()
-
-    return count
+    """Legacy no-op; memory_rebuild owns cluster graph projection."""
+    del config
+    return 0
 
 
 # --- Staleness detection ---
@@ -949,8 +686,8 @@ def _compute_manifest_hash(manifest_path: Path) -> str:
 def _compute_extracted_snapshot(extracted_dir: Path, material_ids: list[str], root: Path | None = None) -> str:
     """Hash of all index-input file contents across all materials, sorted for determinism.
 
-    Includes the bridge_concept_clusters.jsonl hash so staleness is detected when
-    bridge clustering changes without any material metadata changing.
+    Includes local/global cluster artifact hashes so staleness is detected when
+    clustering changes without any material metadata changing.
     """
     parts: list[str] = []
     for mid in sorted(material_ids):
@@ -983,13 +720,17 @@ def _compute_extracted_snapshot(extracted_dir: Path, material_ids: list[str], ro
 
 
 def _clusters_hash(root: Path) -> str:
-    """Hash of bridge cluster JSONL files for staleness detection."""
-    bridge_path = root / "derived" / "bridge_concept_clusters.jsonl"
-    if not bridge_path.exists():
+    """Hash of current cluster JSONL files for staleness detection."""
+    paths = [
+        root / "derived" / "global_bridge_clusters.jsonl",
+        *sorted((root / "derived" / "collections").glob("*/local_concept_clusters.jsonl")),
+    ]
+    existing = [path for path in paths if path.exists()]
+    if not existing:
         return ""
     hasher = hashlib.sha256()
-    if bridge_path.exists():
-        hasher.update(bridge_path.read_bytes())
+    for path in existing:
+        hasher.update(path.read_bytes())
     return hasher.hexdigest()[:16]
 
 

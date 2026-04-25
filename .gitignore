@@ -11,6 +11,8 @@ venv/
 
 # Local config
 config/config.local.yaml
+config/collaborator/config.local.yaml
+config/maintainer/config.local.yaml
 
 # Search index (rebuilt locally via `arq index ensure`)
 indexes/search.sqlite
@@ -41,6 +43,7 @@ $TMPDIR/
 
 # Lint reports (regenerated)
 wiki/_lint_report.md
+derived/memory_bridge_stamp.json
 # Added by code-review-graph
 .code-review-graph/
 .kiro/

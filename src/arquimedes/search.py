@@ -870,8 +870,8 @@ def _search_canonical_clusters(
     hits: list[CanonicalClusterHit] = []
     seen: set[str] = set()
 
-    for sql, params, is_local in (
-        (
+    try:
+        rows = con.execute(
             """SELECT cc.cluster_id, cc.canonical_name, cc.slug,
                       cc.aliases, cc.material_count, cc.wiki_path, cc.domain, cc.collection,
                       cr.main_takeaways, cr.main_tensions, cr.open_questions, cr.why_this_concept_matters
@@ -882,52 +882,36 @@ def _search_canonical_clusters(
                ORDER BY local_concept_clusters_fts.rank
                LIMIT ?""",
             [fts_query, limit],
-            True,
-        ),
-        (
-            """SELECT cc.cluster_id, cc.canonical_name, cc.slug,
-                      cc.aliases, cc.material_count, cc.wiki_path, '' AS domain, '' AS collection,
-                      '' AS main_takeaways, '' AS main_tensions, '' AS open_questions, '' AS why_this_concept_matters
-               FROM concept_clusters_fts
-               JOIN concept_clusters cc ON concept_clusters_fts.rowid = cc.rowid
-               WHERE concept_clusters_fts MATCH ?
-               ORDER BY concept_clusters_fts.rank
-               LIMIT ?""",
-            [fts_query, limit],
-            False,
-        ),
-    ):
+        ).fetchall()
+    except sqlite3.OperationalError:
+        rows = []
+    for row in rows:
+        cluster_id = row["cluster_id"]
+        if cluster_id in seen:
+            continue
+        seen.add(cluster_id)
         try:
-            rows = con.execute(sql, params).fetchall()
-        except sqlite3.OperationalError:
-            rows = []
-        for row in rows:
-            cluster_id = row["cluster_id"]
-            if cluster_id in seen:
-                continue
-            seen.add(cluster_id)
-            try:
-                aliases = json.loads(row["aliases"] or "[]")
-            except (json.JSONDecodeError, TypeError):
-                aliases = []
-            hits.append(CanonicalClusterHit(
-                cluster_id=cluster_id,
-                canonical_name=row["canonical_name"],
-                slug=row["slug"],
-                aliases=aliases,
-                material_count=row["material_count"] or 0,
-                wiki_path=row["wiki_path"] or "",
-                summary=_summary_from_reflection(
-                    row["why_this_concept_matters"],
-                    row["main_takeaways"],
-                    row["main_tensions"],
-                    row["open_questions"],
-                ),
-                domain=row["domain"] or "",
-                collection=row["collection"] or "",
-            ))
-            if len(hits) >= limit:
-                return hits
+            aliases = json.loads(row["aliases"] or "[]")
+        except (json.JSONDecodeError, TypeError):
+            aliases = []
+        hits.append(CanonicalClusterHit(
+            cluster_id=cluster_id,
+            canonical_name=row["canonical_name"],
+            slug=row["slug"],
+            aliases=aliases,
+            material_count=row["material_count"] or 0,
+            wiki_path=row["wiki_path"] or "",
+            summary=_summary_from_reflection(
+                row["why_this_concept_matters"],
+                row["main_takeaways"],
+                row["main_tensions"],
+                row["open_questions"],
+            ),
+            domain=row["domain"] or "",
+            collection=row["collection"] or "",
+        ))
+        if len(hits) >= limit:
+            return hits
 
     like = _like_pattern(raw_query)
     try:
@@ -1195,12 +1179,12 @@ def _local_cluster_rows_for_collection(con: sqlite3.Connection, domain: str, col
 def _global_bridge_rows_for_local_cluster(con: sqlite3.Connection, cluster_id: str) -> list[sqlite3.Row]:
     try:
         return con.execute(
-            """SELECT cc.cluster_id, cc.canonical_name, cc.slug, cc.aliases,
-                      cc.material_count, cc.wiki_path, '' AS domain, '' AS collection
+            """SELECT gbc.bridge_id AS cluster_id, gbc.canonical_name, gbc.slug, gbc.aliases,
+                      gbc.material_count, gbc.wiki_path, '' AS domain, '' AS collection
                FROM global_bridge_members gbm
-               JOIN concept_clusters cc ON gbm.bridge_cluster_id = cc.cluster_id
+               JOIN global_bridge_clusters gbc ON gbm.bridge_cluster_id = gbc.bridge_id
                WHERE gbm.local_cluster_id = ?
-               ORDER BY cc.canonical_name, cc.cluster_id""",
+               ORDER BY gbc.canonical_name, gbc.bridge_id""",
             [cluster_id],
         ).fetchall()
     except sqlite3.OperationalError:
@@ -1474,23 +1458,6 @@ def _do_find_related(
             ))
     except sqlite3.OperationalError:
         pass
-
-    # Shared global cluster membership (weight 2.0) — strongest cross-collection signal
-    try:
-        cluster_rows = con.execute(
-            """SELECT cm2.material_id, cc.canonical_name
-               FROM cluster_materials cm1
-               JOIN cluster_materials cm2 ON cm1.cluster_id = cm2.cluster_id
-               JOIN concept_clusters cc ON cm1.cluster_id = cc.cluster_id
-               WHERE cm1.material_id = ? AND cm2.material_id != ?""",
-            [material_id, material_id],
-        ).fetchall()
-        for row in cluster_rows:
-            _add(row["material_id"], Connection(
-                type="shared_global_cluster", value=row["canonical_name"], weight=2.0
-            ))
-    except sqlite3.OperationalError:
-        pass  # cluster tables absent (pre-clustering index)
 
     # Shared local concepts via concept_key (weight 1.0 each — normalized matching)
     rows = con.execute(

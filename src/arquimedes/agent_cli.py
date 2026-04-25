@@ -3,7 +3,7 @@
 Phase 7 introduces a small, disciplined read-only command surface for
 collaborator agents. Every agent-facing command follows the same contract:
 
-- stays fresh transparently (calls `ensure_index_and_memory()` unless
+- stays fresh transparently (calls `update_workspace()` unless
   `ARQ_SKIP_FRESHNESS` is set), so agents never see stale results
 - emits JSON by default, human-readable text with `--human`
 - converts `FileNotFoundError` into a `click.ClickException` with a helpful
@@ -44,10 +44,10 @@ def ensure_guard(func: Callable) -> Callable:
     @wraps(func)
     def wrapper(*args: Any, **kwargs: Any) -> Any:
         if not _truthy(os.environ.get(_SKIP_FRESHNESS_ENV)):
-            from arquimedes.index import ensure_index_and_memory
+            from arquimedes.freshness import update_workspace
 
             try:
-                ensure_index_and_memory()
+                update_workspace()
             except FileNotFoundError as exc:
                 raise click.ClickException(str(exc))
         return func(*args, **kwargs)

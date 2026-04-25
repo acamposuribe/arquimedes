@@ -9,9 +9,7 @@ from pathlib import Path
 import pytest
 
 from arquimedes.cluster import (
-    bridge_cluster_fingerprint,
     _validate_bridge_and_attach_provenance,
-    load_bridge_clusters,
     local_cluster_path,
 )
 from arquimedes.compile_pages import (
@@ -181,118 +179,6 @@ def test_validate_bridge_allows_multiple_concepts_from_same_material():
     assert len(validated[0]["source_concepts"]) == 3
     assert set(validated[0]["material_ids"]) == {"mat_aaa", "mat_bbb"}
 
-
-# ---------------------------------------------------------------------------
-# Test 1: cluster parse and write
-# ---------------------------------------------------------------------------
-
-def test_bridge_cluster_parse_and_write(tmp_path, monkeypatch):
-    """Mock LLM returns valid JSON → bridge_concept_clusters.jsonl written with correct fields."""
-    import arquimedes.cluster as cluster_mod
-    import arquimedes.config as config_mod
-
-    db_path = _make_sqlite_db(tmp_path)
-    derived_dir = tmp_path / "derived"
-    derived_dir.mkdir()
-
-    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
-    monkeypatch.setattr(cluster_mod, "get_project_root", lambda: tmp_path)
-
-    # Copy db to the expected index location
-    index_dir = tmp_path / "indexes"
-    index_dir.mkdir()
-    import shutil
-    shutil.copy(str(db_path), str(index_dir / "search.sqlite"))
-
-    def mock_llm(system, messages):
-        prompt = messages[0]["content"]
-        assert "Read the new concepts packet file from" in prompt
-        assert "Read the existing bridge cluster memory file from" in prompt
-        assert "Use links_to_existing only" in prompt
-        assert "Use new_clusters when packet concepts should form a new cross-material umbrella cluster instead." in prompt
-        return json.dumps({
-            "links_to_existing": [],
-            "new_clusters": [
-                {
-                    "canonical_name": "archive as architectural space",
-                    "descriptor": "How archival form turns storage into a spatial practice.",
-                    "aliases": ["archive as architectural space", "archival habitat", "archive as space"],
-                    "source_concepts": [
-                        {"material_id": "mat_aaa", "concept_name": "archival habitat"},
-                        {"material_id": "mat_bbb", "concept_name": "archive as space"},
-                    ],
-                }
-            ],
-            "_finished": True,
-        })
-
-    config = {"llm": {"agent_cmd": "echo"}}
-    clusters = cluster_mod.cluster_bridge_concepts(config, llm_fn=mock_llm, force=True)
-
-    assert clusters["clusters"] == 1
-    assert clusters["bridge_concepts"] == 3
-    assert clusters["multi_material"] == 1
-
-    written = load_bridge_clusters(tmp_path)
-    assert len(written) == 1
-
-    c0 = written[0]
-    assert c0["canonical_name"] == "archive as architectural space"
-    assert c0["descriptor"] == "How archival form turns storage into a spatial practice."
-    assert c0["slug"] == "archive-as-architectural-space"
-    assert set(c0["material_ids"]) == {"mat_aaa", "mat_bbb"}
-    assert len(c0["source_concepts"]) == 2
-
-    # Full provenance attached
-    sc = next(s for s in c0["source_concepts"] if s["material_id"] == "mat_aaa")
-    assert sc["relevance"] == "high"
-    assert sc["evidence_spans"] == ["the archive as a built environment"]
-    assert sc["source_pages"] == [1, 3]
-    assert sc["concept_name"] == "archival habitat"
-
-
-# ---------------------------------------------------------------------------
-# Test 2: cluster staleness skip
-# ---------------------------------------------------------------------------
-
-def test_bridge_cluster_staleness_skip(tmp_path, monkeypatch):
-    """Unchanged bridge fingerprint → clustering skipped, no LLM call."""
-    import arquimedes.cluster as cluster_mod
-    import arquimedes.config as config_mod
-
-    db_path = _make_sqlite_db(tmp_path)
-    index_dir = tmp_path / "indexes"
-    index_dir.mkdir()
-    import shutil
-    shutil.copy(str(db_path), str(index_dir / "search.sqlite"))
-
-    derived_dir = tmp_path / "derived"
-    derived_dir.mkdir()
-
-    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
-    monkeypatch.setattr(cluster_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.setattr(cluster_mod, "is_bridge_clustering_stale", lambda config=None, force=False: False)
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [{"material_ids": ["mat_aaa", "mat_bbb"], "source_concepts": []}])
-
-    config = {"llm": {"agent_cmd": "echo"}}
-
-    # Write a fake cluster file and stamp matching current fingerprint
-    llm_called = []
-
-    def mock_llm(system, messages):
-        llm_called.append(True)
-        return "[]"
-
-    result = cluster_mod.cluster_bridge_concepts(config, llm_fn=mock_llm, force=False)
-    assert result.get("skipped") is True
-    assert not llm_called
-
-
-# ---------------------------------------------------------------------------
-# Test 3: material page sections
-# ---------------------------------------------------------------------------
 
 def test_material_page_sections():
     """Rendered material page contains all expected sections."""
@@ -566,16 +452,14 @@ def test_incremental_skip(tmp_path, monkeypatch):
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
 
-    # Patch bridge clustering to return "skipped"
+    # Patch canonical local clustering to return "skipped"
     monkeypatch.setattr(
         cluster_mod,
-        "cluster_bridge_concepts",
-        lambda config, llm_fn=None, force=False: {
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False, domain=None, collection=None: {
             "bridge_concepts": 3, "clusters": 1, "multi_material": 0, "skipped": True
         },
     )
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: clusters_data)
-
     result = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=False)
 
     assert result["material_pages"] == 0
@@ -784,7 +668,23 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
             "confidence": 0.88,
         }],
     }
-    (derived / "bridge_concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+    (derived / "global_bridge_clusters.jsonl").write_text(
+        json.dumps({
+            "bridge_id": "b_001",
+            "canonical_name": "Archive Space Framework",
+            "slug": "archive-space-framework",
+            "aliases": ["archival space framework"],
+            "wiki_path": "wiki/shared/bridge-concepts/archive-space-framework.md",
+            "confidence": 0.88,
+            "supporting_material_ids": [mid, mid2],
+            "bridge_takeaways": ["It links built form and archive practice."],
+            "bridge_tensions": ["Storage vs. inhabitation"],
+            "bridge_open_questions": ["What counts as an archive room?"],
+            "helpful_new_sources": ["Adaptive reuse archive case studies with plan drawings."],
+            "why_this_bridge_matters": "It anchors the corpus.",
+        }) + "\n",
+        encoding="utf-8",
+    )
     (derived / "lint").mkdir(parents=True, exist_ok=True)
     (derived / "lint" / "concept_reflections.jsonl").write_text(
         json.dumps({
@@ -861,13 +761,11 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(
         cluster_mod,
-        "cluster_bridge_concepts",
-        lambda config, llm_fn=None, force=False: {
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False, domain=None, collection=None: {
             "bridge_concepts": 1, "clusters": 1, "multi_material": 1, "skipped": True
         },
     )
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [bridge_cluster])
-
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
 
     meta_after = json.loads((tmp_path / "extracted" / mid / "meta.json").read_text())
@@ -875,13 +773,12 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     assert meta_after["bridge_concepts"][0]["canonical_name"] == "Archive Space Framework"
 
     concept_page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "archive-space-framework.md").read_text()
-    assert "## Reflections" in concept_page
+    assert "## Cross-Collection Synthesis" in concept_page
     assert "It anchors the corpus." in concept_page
-    assert "Helpful new sources" in concept_page
     assert "Adaptive reuse archive case studies with plan drawings." in concept_page
     assert "## Recent Changes" in concept_page
     assert "Added one more cross-material source concept." in concept_page
-    assert concept_page.index("## Reflections") < concept_page.index("## By Material")
+    assert concept_page.index("## Cross-Collection Synthesis") < concept_page.index("## Recent Changes")
 
     collection_page = (tmp_path / "wiki" / "research" / "papers" / "_index.md").read_text()
     assert "## Reflections" in collection_page
@@ -900,16 +797,11 @@ def test_compile_populates_memory_bridge(tmp_path, monkeypatch):
     material_pages = con.execute(
         "SELECT path FROM wiki_pages WHERE page_type='material'"
     ).fetchall()
-    aliases = con.execute(
-        "SELECT alias FROM concept_cluster_aliases WHERE cluster_id=?",
-        (bridge_cluster["cluster_id"],),
-    ).fetchall()
     con.close()
 
     assert any("shared/concepts/_index.md" in r[0] for r in concept_index), "local concept index not in wiki_pages"
     assert any("bridge-concepts/archive-space-framework" in r[0] for r in concept_pages), "bridge concept page not in wiki_pages"
     assert any(mid in r[0] for r in material_pages), "material page not in wiki_pages"
-    assert {r[0] for r in aliases} == {"archival space framework"}
 
 
 def test_compile_prefers_global_bridge_pages_when_present(tmp_path, monkeypatch):
@@ -1019,7 +911,6 @@ def test_compile_prefers_global_bridge_pages_when_present(tmp_path, monkeypatch)
     monkeypatch.setattr(index_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(cluster_mod, "load_local_clusters", lambda root=None: [local_cluster])
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
     monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False: {"clusters": 1, "skipped": True})
 
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
@@ -1128,7 +1019,6 @@ def test_compile_does_not_fallback_to_legacy_bridge_pages_when_local_clusters_ex
     monkeypatch.setattr(index_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(cluster_mod, "load_local_clusters", lambda root=None: [local_cluster])
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [legacy_bridge])
     monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False: {"clusters": 1, "skipped": True})
 
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
@@ -1269,11 +1159,9 @@ def test_compile_writes_collection_pages(tmp_path, monkeypatch):
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(
         cluster_mod,
-        "cluster_bridge_concepts",
-        lambda config, llm_fn=None, force=False: {"skipped": True},
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True},
     )
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [cluster])
-
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
 
     coll_page = (tmp_path / "wiki" / "research" / "papers" / "_index.md").read_text()
@@ -1325,9 +1213,7 @@ def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.setattr(cluster_mod, "cluster_bridge_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [])
-
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True})
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
 
     local_index = (tmp_path / "wiki" / "shared" / "concepts" / "_index.md").read_text()
@@ -1526,8 +1412,7 @@ def test_compile_runs_quick_lint_after_compile(tmp_path, monkeypatch):
     monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
     monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
-    monkeypatch.setattr(cluster_mod, "cluster_bridge_concepts", lambda config, llm_fn=None, force=False: {"skipped": True})
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [cluster])
+    monkeypatch.setattr(cluster_mod, "cluster_concepts", lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True})
     monkeypatch.setattr("arquimedes.lint.run_lint", fake_run_lint)
 
     result = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
@@ -1593,30 +1478,19 @@ def test_compile_recompile_pages_rerenders_without_reclustering(tmp_path, monkey
     derived = tmp_path / "derived"
     derived.mkdir(exist_ok=True)
     cluster = {
-        "cluster_id": "b_recompile",
+        "bridge_id": "b_recompile",
         "canonical_name": "Recompile Concept",
         "slug": "recompile-concept",
         "aliases": [],
-            "wiki_path": "wiki/shared/bridge-concepts/recompile-concept.md",
-            "confidence": 1.0,
-            "material_ids": [mid, mid2],
-            "source_concepts": [{
-                "material_id": mid,
-                "concept_name": "recompile concept",
-                "relevance": "high",
-            "source_pages": [1],
-                "evidence_spans": ["recompile evidence"],
-                "confidence": 1.0,
-            }, {
-                "material_id": mid2,
-                "concept_name": "recompile concept two",
-                "relevance": "high",
-                "source_pages": [1],
-                "evidence_spans": ["recompile evidence two"],
-                "confidence": 1.0,
-            }],
-        }
-    (derived / "bridge_concept_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
+        "wiki_path": "wiki/shared/bridge-concepts/recompile-concept.md",
+        "confidence": 1.0,
+        "supporting_material_ids": [mid, mid2],
+        "bridge_takeaways": ["Reflection text from artifacts."],
+        "bridge_tensions": [],
+        "bridge_open_questions": [],
+        "why_this_bridge_matters": "It matters.",
+    }
+    (derived / "global_bridge_clusters.jsonl").write_text(json.dumps(cluster) + "\n")
     (derived / "lint").mkdir(parents=True, exist_ok=True)
     (derived / "lint" / "concept_reflections.jsonl").write_text(
         json.dumps({
@@ -1643,29 +1517,15 @@ def test_compile_recompile_pages_rerenders_without_reclustering(tmp_path, monkey
     monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
     monkeypatch.setattr(
         cluster_mod,
-        "cluster_bridge_concepts",
-        lambda config, llm_fn=None, force=False: calls.append(force) or {"skipped": True},
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False, domain=None, collection=None: calls.append(force) or {"skipped": True},
     )
-    monkeypatch.setattr(cluster_mod, "load_bridge_clusters", lambda root=None: [cluster])
-
     summary = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, recompile_pages=True)
 
-    assert calls == [False]
+    assert calls == []
     assert summary["concept_pages"] == 1
     page = (tmp_path / "wiki" / "shared" / "bridge-concepts" / "recompile-concept.md").read_text()
     assert "Reflection text from artifacts." in page
-
-
-def test_load_bridge_clusters_falls_back_to_global_bridge_file(tmp_path):
-    derived = tmp_path / "derived"
-    derived.mkdir()
-    (derived / "global_bridge_clusters.jsonl").write_text(
-        json.dumps({"slug": "fallback-bridge", "canonical_name": "Fallback Bridge"}) + "\n",
-        encoding="utf-8",
-    )
-    rows = load_bridge_clusters(tmp_path)
-    assert rows[0]["canonical_name"] == "Fallback Bridge"
-    assert rows[0]["wiki_path"] == "wiki/shared/bridge-concepts/fallback-bridge.md"
 
 
 def test_collection_page_key_concepts_ranked():

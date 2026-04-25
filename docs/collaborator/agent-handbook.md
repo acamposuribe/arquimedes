@@ -2,7 +2,7 @@
 
 You are investigating a knowledge base you did **not** build. Your job is to answer questions using the `arq` CLI; never edit the index, wiki, or `derived/` artifacts.
 
-If you are helping a Windows collaborator set up Arquimedes, read `docs/collaborator/setup.md` first.
+**Precondition:** this handbook assumes setup is already done and the project virtualenv is activated (Windows: `.\.venv\Scripts\Activate.ps1`, macOS/Linux: `source .venv/bin/activate`) before running any `arq` command — verify with `arq overview --human`; if `arq` is not found or the command fails, stop and follow `docs/collaborator/setup.md`.
 
 ## Mental model
 

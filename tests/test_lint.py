@@ -14,7 +14,7 @@ from click.testing import CliRunner
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import EnrichmentError, ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _cluster_audit_apply_bridge_update, _filter_local_rows_not_in_bridge, _graph_reflection_due, _graph_reflection_packet, _load_manifest, _memory_state_stale, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, _stage_cluster_audit_reviews_input, run_deterministic_lint, run_lint
+from arquimedes.lint import EnrichmentError, ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _cluster_audit_apply_bridge_update, _expected_pages, _filter_local_rows_not_in_bridge, _graph_reflection_due, _graph_reflection_packet, _load_manifest, _memory_state_stale, _resolve_wiki_link, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, _stage_cluster_audit_reviews_input, run_deterministic_lint, run_lint
 from arquimedes.memory import memory_rebuild
 from arquimedes.cli import lint as lint_cmd
 
@@ -226,6 +226,54 @@ def test_run_deterministic_lint_reports_core_issues(tmp_path, monkeypatch):
     assert "stale_index" in checks
     assert "stale_memory_bridge" in checks
     assert (root / "derived" / "lint" / "deterministic_report.json").exists()
+
+
+def test_resolve_wiki_link_decodes_url_encoded_collection_names(tmp_path):
+    root = tmp_path
+    page_path = root / "wiki" / "research" / "_index.md"
+    page_path.parent.mkdir(parents=True, exist_ok=True)
+    page_path.write_text("Collection home.", encoding="utf-8")
+
+    resolved = _resolve_wiki_link(
+        page_path,
+        "Van%20Eyck/mat_001.md",
+        root / "wiki",
+        root,
+    )
+
+    assert resolved == root / "wiki" / "research" / "Van Eyck" / "mat_001.md"
+
+
+def test_expected_pages_include_local_concepts_and_collection_indexes(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root = tmp_path
+    monkeypatch.setattr(lint_mod, "load_global_bridge_clusters", lambda _root: [])
+    manifest_records = [{
+        "material_id": "mat_001",
+        "domain": "research",
+        "collection": "Van Eyck",
+    }]
+    metas = {
+        "mat_001": {
+            "material_id": "mat_001",
+            "domain": "research",
+            "collection": "Van Eyck",
+            "title": "One",
+        }
+    }
+    clusters = [{
+        "cluster_id": "research__Van Eyck__local_0001",
+        "domain": "research",
+        "collection": "Van Eyck",
+        "slug": "threshold-space-and-the-in-between",
+        "wiki_path": "wiki/research/Van Eyck/concepts/threshold-space-and-the-in-between.md",
+    }]
+
+    expected = _expected_pages(root, manifest_records, metas, clusters)
+
+    assert root / "wiki" / "research" / "Van Eyck" / "concepts" / "_index.md" in expected
+    assert root / "wiki" / "research" / "Van Eyck" / "concepts" / "threshold-space-and-the-in-between.md" in expected
 
 
 def test_run_lint_quick_writes_markdown_report(tmp_path, monkeypatch):

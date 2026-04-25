@@ -28,6 +28,7 @@ from collections import Counter, defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
+from urllib.parse import unquote
 
 from arquimedes.cluster import (
     _collection_scope,
@@ -406,7 +407,7 @@ def _resolve_wiki_link(page_path: Path, target: str, wiki_root: Path, root: Path
         return None
     if target.startswith(("http://", "https://", "mailto:", "file://")):
         return None
-    target = target.split("#", 1)[0].strip()
+    target = unquote(target.split("#", 1)[0].strip())
     if not target:
         return None
     if target.startswith("wiki/"):
@@ -1689,6 +1690,8 @@ def _detect_missing_compiled_pages(
 ) -> list[dict]:
     issues: list[dict] = []
     bridge_clusters = load_global_bridge_clusters(root)
+    concept_clusters = [cluster for cluster in (clusters or []) if isinstance(cluster, dict)]
+    concept_clusters.extend(cluster for cluster in bridge_clusters if isinstance(cluster, dict))
 
     # Material pages
     for rec in manifest_records:
@@ -1723,6 +1726,18 @@ def _detect_missing_compiled_pages(
                 path=str(page_path.relative_to(root)),
                 fixable=True,
             ))
+        concept_index_path = root / f"wiki/{domain}/{collection}/concepts/_index.md"
+        if not concept_index_path.exists():
+            issues.append(_issue(
+                "missing_compiled_page",
+                "high",
+                "Missing concept index",
+                "Compiled collection concept _index.md page is missing.",
+                domain=domain,
+                collection=collection,
+                path=str(concept_index_path.relative_to(root)),
+                fixable=True,
+            ))
     for domain in sorted({meta.get("domain") or "practice" for meta in metas.values()}):
         page_path = root / f"wiki/{domain}/_index.md"
         if not page_path.exists():
@@ -1752,8 +1767,12 @@ def _detect_missing_compiled_pages(
             ))
 
     # Concept pages
-    for cluster in bridge_clusters:
+    seen_concept_paths: set[Path] = set()
+    for cluster in concept_clusters:
         page_path = root / _concept_page_path(cluster)
+        if page_path in seen_concept_paths:
+            continue
+        seen_concept_paths.add(page_path)
         if not page_path.exists():
             issues.append(_issue(
                 "missing_compiled_page",
@@ -1804,14 +1823,21 @@ def _expected_pages(
     grouped = _group_materials_by_collection(metas)
     for (domain, collection), _metas in grouped.items():
         expected.add(root / f"wiki/{domain}/{collection}/_index.md")
+        expected.add(root / f"wiki/{domain}/{collection}/concepts/_index.md")
     for domain in sorted({meta.get("domain") or "practice" for meta in metas.values()}):
         expected.add(root / f"wiki/{domain}/_index.md")
     expected.add(root / "wiki" / "_index.md")
     expected.add(root / "wiki" / "shared" / "concepts" / "_index.md")
     expected.add(root / "wiki" / "shared" / "glossary" / "_index.md")
     # Concept pages
+    for cluster in [cluster for cluster in (clusters or []) if isinstance(cluster, dict)]:
+        expected.add(root / _concept_page_path(cluster))
     for cluster in bridge_clusters:
         expected.add(root / _concept_page_path(cluster))
+
+    # Maintenance pages (add more as needed)
+    expected.add(root / "wiki" / "shared" / "maintenance" / "graph-health.md")
+
     # Phase 6 report itself is expected when written
     expected.add(root / REPORT_PATH)
     return expected

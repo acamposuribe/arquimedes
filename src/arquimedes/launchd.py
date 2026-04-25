@@ -21,13 +21,13 @@ def plist_path(label: str) -> Path:
     return LAUNCH_AGENTS / f"{label}.plist"
 
 
-def render_plist(label: str, program_arguments: list[str], *, working_directory: str, start_interval: int | None = None, start_calendar_interval: dict[str, int] | None = None, run_at_load: bool = False) -> str:
+def render_plist(label: str, program_arguments: list[str], *, working_directory: str, start_interval: int | None = None, start_calendar_interval: dict[str, int] | None = None, run_at_load: bool = False, keep_alive: bool = False) -> str:
     payload: dict[str, Any] = {
         "Label": label,
         "ProgramArguments": program_arguments,
         "WorkingDirectory": working_directory,
         "RunAtLoad": run_at_load,
-        "KeepAlive": False,
+        "KeepAlive": keep_alive,
         "StandardOutPath": str(Path.home() / ".arquimedes" / f"{label}.out.log"),
         "StandardErrorPath": str(Path.home() / ".arquimedes" / f"{label}.err.log"),
     }

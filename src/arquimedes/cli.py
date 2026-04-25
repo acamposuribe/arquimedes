@@ -918,9 +918,45 @@ def sync(install: bool, uninstall: bool, show_status: bool, once: bool):
 @cli.command()
 @click.option("--host", default=None, help="Host to bind to")
 @click.option("--port", type=int, default=None, help="Port to listen on")
-def serve(host: str | None, port: int | None):
+@click.option("--config", "config_path", help="Path to a role config file, e.g. config/maintainer/config.yaml.")
+@click.option("--install", is_flag=True, help="Install launchd job that keeps the web UI running.")
+@click.option("--uninstall", is_flag=True, help="Uninstall launchd web UI job.")
+@click.option("--status", "show_status", is_flag=True, help="Show launchd web UI job status.")
+def serve(host: str | None, port: int | None, config_path: str | None, install: bool, uninstall: bool, show_status: bool):
     """Start the web UI."""
     from arquimedes.config import load_config
+
+    label = "com.arquimedes.serve"
+    if install or uninstall or show_status:
+        from arquimedes.config import get_project_root
+        from arquimedes.launchd import install as install_plist, render_plist, status as launchd_status, uninstall as uninstall_plist
+
+        try:
+            if uninstall:
+                click.echo(json.dumps(uninstall_plist(label), indent=2))
+                return
+            if show_status:
+                click.echo(json.dumps(launchd_status(label), indent=2))
+                return
+            args = [sys.executable, "-m", "arquimedes.cli", "serve"]
+            if host:
+                args.extend(["--host", host])
+            if port is not None:
+                args.extend(["--port", str(port)])
+            if config_path:
+                args.extend(["--config", config_path])
+            plist = render_plist(
+                label,
+                args,
+                working_directory=str(get_project_root()),
+                run_at_load=True,
+                keep_alive=True,
+            )
+            click.echo(json.dumps(install_plist(label, plist), indent=2))
+            return
+        except RuntimeError as e:
+            raise click.ClickException(str(e))
+
     import uvicorn
 
     try:
@@ -931,7 +967,7 @@ def serve(host: str | None, port: int | None):
             "for the current Python environment, e.g. `python3 -m pip install -e .`."
         ) from exc
 
-    config = load_config()
+    config = load_config(config_path)
     serve_cfg = config.get("serve") or {}
     uvicorn.run(
         create_app(config),

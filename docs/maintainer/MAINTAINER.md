@@ -21,6 +21,7 @@ Install from the repo root on the maintainer machine:
 ```bash
 arq watch --install
 arq lint --install-full
+arq serve --install --config config/maintainer/config.yaml
 ```
 
 Use the maintainer config profile for maintainer commands:
@@ -50,6 +51,33 @@ scan library -> ingest -> extract -> index rebuild -> compile -> commit/push
 ```
 
 Reflective lint stages do not run in the daytime cycle. `global-bridge` runs only through the nightly `arq lint --full` job.
+
+## LAN Web UI
+
+The maintainer machine serves the web UI to collaborators on the local network. With `serve.host: 0.0.0.0` and `serve.port: 8420` in `config/maintainer/config.yaml`, `arq serve --install` registers a `KeepAlive` launchd job (`com.arquimedes.serve`) that stays up across reboots and restarts on crash.
+
+Find the hostname collaborators should use:
+
+```bash
+scutil --get LocalHostName
+```
+
+That name resolves over mDNS as `<name>.local` from any client on the same LAN. Collaborators just open `http://<name>.local:8420` in a browser.
+
+First run: macOS will prompt once to allow incoming connections for the Python binary. Approve it. If `serve` does not appear on the LAN, check System Settings → Network → Firewall.
+
+Manage the job:
+
+```bash
+arq serve --status
+arq serve --uninstall
+```
+
+Caveats:
+
+- The web UI has no authentication. Only expose it on a trusted LAN. Do not port-forward to the public internet.
+- Windows 10 build 1803+ resolves `*.local` natively. Older Windows needs Bonjour Print Services (free Apple installer) — see `docs/collaborator/setup.md`.
+- The Mac Mini must not sleep. Energy Saver → "Prevent automatic sleeping when the display is off" must be on (also required for `arq watch`).
 
 ## Recovery
 

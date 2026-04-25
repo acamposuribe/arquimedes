@@ -50,6 +50,10 @@ Every command emits JSON by default; add `--human` for short human-readable text
 - `arq search` already returns compact snippets — you rarely need `--full`.
 - Filter figures with `--visual-type` and annotations with `--page`/`--type`.
 
+## Web UI
+
+The maintainer machine serves the web UI on the local network at `http://<maintainer-hostname>.local:8420`. If the human collaborator wants to browse visually, point them there — do not start a local server yourself.
+
 ## Maintainer-only commands — do not call - out of bounds!
 
-`arq ingest`, `arq extract`, `arq extract-raw`, `arq enrich`, `arq cluster`, `arq compile`, `arq memory`, `arq lint`, `arq index`, `arq watch`, `arq sync`, `arq serve`. These mutate artifacts or kick off long-running pipelines. If you think one is needed, ask the human maintainer.
+`arq ingest`, `arq extract`, `arq extract-raw`, `arq enrich`, `arq cluster`, `arq compile`, `arq memory`, `arq lint`, `arq index`, `arq watch`, `arq sync`, `arq serve`. These mutate artifacts or kick off long-running pipelines. If you think one is needed, ask the human maintainer. (`arq serve` is read-only but long-running and is owned by the maintainer's launchd job — never start a second instance.)

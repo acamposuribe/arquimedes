@@ -87,6 +87,41 @@ Run one publication cycle manually:
 arq watch --once
 ```
 
+## Onboarding a collaborator
+
+Collaborator onboarding is a standard maintainer task. The maintainer can delegate it to an agent, but the handoff should always contain the same ingredients:
+
+- a per-collaborator read-only deploy key
+- the vault clone URL
+- the collaborator setup guide
+- a small collaborator-facing handoff note that tells the collaborator's agent what to read and which local key file to use
+
+Recommended flow:
+
+1. Generate a dedicated deploy key for that collaborator.
+```bash
+ssh-keygen -t ed25519 -f ~/Downloads/arq-vault-<name>.key -C "arq-vault <name>"
+```
+2. Add `~/Downloads/arq-vault-<name>.key.pub` to the private vault repo as a GitHub deploy key, with write access disabled.
+3. Create a handoff folder containing:
+   `docs/collaborator/setup.md`, the private key file, and a copy of `docs/maintainer/collaborator-handoff-template.md` filled in for that collaborator.
+4. Send the handoff folder securely to the collaborator.
+
+The vault clone URL given to collaborators should use the SSH host alias described in `docs/collaborator/setup.md`, for example:
+
+```text
+git@arq-vault:<user>/arq-vault-personal.git
+```
+
+The collaborator's agent should be told to read the setup guide first and use the private key file from the same handoff folder. The reusable template for that note lives at `docs/maintainer/collaborator-handoff-template.md`.
+
+If you are using an agent to prepare the handoff, the agent should:
+
+1. generate the per-collaborator deploy keypair
+2. assemble the handoff folder
+3. fill in the handoff template with the vault clone URL and filenames
+4. stop before any GitHub-side deploy-key registration unless the maintainer explicitly asks it to continue
+
 ## Publication Cycle
 
 The daytime cycle is intentionally narrow:

@@ -8,7 +8,7 @@ You do **not** need a GitHub account. The `arquimedes` code is installed anonymo
 
 The setup requires three collaborator-specific inputs:
 
-- the **vault git URL** (something like `git@github.com:<maintainer>/arq-vault-personal.git`) — the maintainer provides it
+- the **vault git URL** (something like `git@arq-vault:<maintainer>/arq-vault-personal.git`) — the maintainer provides it
 - the **deploy key** (an SSH private key file the maintainer issues to you) — also provided by the maintainer
 - the path to the **shared library folder** on this machine (the location where the source PDFs live — could be an iCloud / OneDrive / Dropbox sync folder, a NAS mount, or any other directory that appears to the OS as a normal local path; the maintainer tells you which)
 

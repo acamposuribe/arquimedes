@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 import types
 
@@ -468,6 +469,86 @@ def test_mcp_cli_runs_server_from_config(monkeypatch):
 
     assert result.exit_code == 0
     assert calls["transport"] == "streamable-http"
+
+
+def test_mcp_cloudflare_tunnel_config_parses_enabled_block():
+    from arquimedes import cli as cli_mod
+
+    payload = cli_mod._mcp_cloudflare_tunnel_config(
+        {
+            "mcp": {
+                "cloudflare_tunnel": {
+                    "enabled": True,
+                    "tunnel_name": "arquimedes-personal",
+                }
+            }
+        }
+    )
+
+    assert payload is not None
+    assert payload["label"] == "com.arquimedes.cloudflared-tunnel"
+    assert payload["tunnel_name"] == "arquimedes-personal"
+
+
+def test_mcp_cli_install_also_installs_cloudflare_tunnel(monkeypatch):
+    real_exists = Path.exists
+
+    monkeypatch.setattr(
+        "arquimedes.config.load_config",
+        lambda config_path=None: {
+            "mcp": {
+                "keep_alive": True,
+                "cloudflare_tunnel": {
+                    "enabled": True,
+                    "tunnel_name": "arquimedes-personal",
+                    "binary_path": "/opt/homebrew/bin/cloudflared",
+                },
+            }
+        },
+    )
+    monkeypatch.setattr("arquimedes.config.get_project_root", lambda: Path("/repo"))
+    monkeypatch.setattr("arquimedes.launchd.render_plist", lambda *args, **kwargs: "<plist />")
+    monkeypatch.setattr(
+        "arquimedes.launchd.install",
+        lambda label, plist_text: {"label": label, "plist": plist_text},
+    )
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        lambda self: True if str(self) == "/opt/homebrew/bin/cloudflared" else real_exists(self),
+    )
+
+    result = CliRunner().invoke(cli, ["mcp", "--install"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["mcp"]["label"] == "com.arquimedes.mcp"
+    assert payload["cloudflare_tunnel"]["label"] == "com.arquimedes.cloudflared-tunnel"
+
+
+def test_mcp_cli_status_includes_cloudflare_tunnel(monkeypatch):
+    monkeypatch.setattr(
+        "arquimedes.config.load_config",
+        lambda config_path=None: {
+            "mcp": {
+                "cloudflare_tunnel": {
+                    "enabled": True,
+                    "tunnel_name": "arquimedes-personal",
+                }
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "arquimedes.launchd.status",
+        lambda label: {"label": label, "loaded": label == "com.arquimedes.cloudflared-tunnel"},
+    )
+
+    result = CliRunner().invoke(cli, ["mcp", "--status"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["mcp"]["label"] == "com.arquimedes.mcp"
+    assert payload["cloudflare_tunnel"]["label"] == "com.arquimedes.cloudflared-tunnel"
 
 
 def test_main_uses_requested_transport(monkeypatch):

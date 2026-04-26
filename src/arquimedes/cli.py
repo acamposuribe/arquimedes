@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from pathlib import Path
 import subprocess
 import sys
 
@@ -74,6 +75,72 @@ def _mcp_server_from_config(config_path: str | None):
         debug_http_log=debug_http_log,
     )
     return server, transport, mount_path
+
+
+def _mcp_cloudflare_tunnel_config(config: dict) -> dict | None:
+    mcp_cfg = _mcp_config(config)
+    tunnel_cfg = mcp_cfg.get("cloudflare_tunnel") or {}
+    if not isinstance(tunnel_cfg, dict):
+        raise click.ClickException("mcp.cloudflare_tunnel config must be a mapping in config.yaml")
+    if not tunnel_cfg.get("enabled"):
+        return None
+
+    tunnel_name = str(tunnel_cfg.get("tunnel_name") or "").strip()
+    if not tunnel_name:
+        raise click.ClickException("mcp.cloudflare_tunnel.tunnel_name is required when enabled")
+
+    binary_path = str(tunnel_cfg.get("binary_path") or "/opt/homebrew/bin/cloudflared")
+    label = str(tunnel_cfg.get("label") or "com.arquimedes.cloudflared-tunnel")
+    return {
+        "label": label,
+        "binary_path": binary_path,
+        "tunnel_name": tunnel_name,
+        "keep_alive": bool(tunnel_cfg.get("keep_alive", True)),
+    }
+
+
+def _install_cloudflare_tunnel_launch_agent(tunnel_cfg: dict, *, working_directory: str) -> dict:
+    from arquimedes.launchd import install as install_plist, render_plist
+
+    binary_path = str(tunnel_cfg["binary_path"])
+    if not Path(binary_path).exists():
+        raise click.ClickException(
+            f"cloudflared binary not found at {binary_path}. "
+            "Set mcp.cloudflare_tunnel.binary_path or install cloudflared first."
+        )
+
+    plist = render_plist(
+        str(tunnel_cfg["label"]),
+        [binary_path, "tunnel", "run", str(tunnel_cfg["tunnel_name"])],
+        working_directory=working_directory,
+        run_at_load=True,
+        keep_alive=bool(tunnel_cfg.get("keep_alive", True)),
+    )
+    return install_plist(str(tunnel_cfg["label"]), plist)
+
+
+def _cloudflare_tunnel_status(tunnel_cfg: dict | None) -> dict:
+    from arquimedes.launchd import status as launchd_status
+
+    if tunnel_cfg is None:
+        return {"enabled": False, "label": "com.arquimedes.cloudflared-tunnel", "managed": False}
+    payload = launchd_status(str(tunnel_cfg["label"]))
+    payload["enabled"] = True
+    payload["managed"] = True
+    payload["tunnel_name"] = str(tunnel_cfg["tunnel_name"])
+    return payload
+
+
+def _uninstall_cloudflare_tunnel(tunnel_cfg: dict | None) -> dict:
+    from arquimedes.launchd import plist_path, uninstall as uninstall_plist
+
+    label = str((tunnel_cfg or {}).get("label") or "com.arquimedes.cloudflared-tunnel")
+    path = plist_path(label)
+    if not path.exists():
+        return {"label": label, "path": str(path), "installed": False, "present": False}
+    payload = uninstall_plist(label)
+    payload["present"] = False
+    return payload
 
 
 def _commit_and_push_if_changed(message: str) -> dict:
@@ -1137,13 +1204,30 @@ def mcp(config_path: str | None, install: bool, uninstall: bool, show_status: bo
         from arquimedes.launchd import install as install_plist, render_plist, status as launchd_status, uninstall as uninstall_plist
 
         try:
+            config = load_config(config_path)
+            tunnel_cfg = _mcp_cloudflare_tunnel_config(config)
             if uninstall:
-                click.echo(json.dumps(uninstall_plist(label), indent=2))
+                click.echo(
+                    json.dumps(
+                        {
+                            "mcp": uninstall_plist(label),
+                            "cloudflare_tunnel": _uninstall_cloudflare_tunnel(tunnel_cfg),
+                        },
+                        indent=2,
+                    )
+                )
                 return
             if show_status:
-                click.echo(json.dumps(launchd_status(label), indent=2))
+                click.echo(
+                    json.dumps(
+                        {
+                            "mcp": launchd_status(label),
+                            "cloudflare_tunnel": _cloudflare_tunnel_status(tunnel_cfg),
+                        },
+                        indent=2,
+                    )
+                )
                 return
-            config = load_config(config_path)
             mcp_cfg = _mcp_config(config)
             args = _arq_program_args("mcp")
             if config_path and "--config" not in args:
@@ -1155,7 +1239,18 @@ def mcp(config_path: str | None, install: bool, uninstall: bool, show_status: bo
                 run_at_load=True,
                 keep_alive=bool(mcp_cfg.get("keep_alive", True)),
             )
-            click.echo(json.dumps(install_plist(label, plist), indent=2))
+            result = {
+                "mcp": install_plist(label, plist),
+                "cloudflare_tunnel": (
+                    _install_cloudflare_tunnel_launch_agent(
+                        tunnel_cfg,
+                        working_directory=str(get_project_root()),
+                    )
+                    if tunnel_cfg is not None
+                    else {"enabled": False, "managed": False}
+                ),
+            }
+            click.echo(json.dumps(result, indent=2))
             return
         except RuntimeError as e:
             raise click.ClickException(str(e))

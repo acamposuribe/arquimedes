@@ -65,17 +65,14 @@ _MAINTAINER_PROFILE = """\
 #
 # mcp:
 #   transport: "streamable-http"
-#   host: "127.0.0.1"
+#   host: "0.0.0.0"
 #   port: 8000
 #   streamable_http_path: "/mcp"
 #   keep_alive: true
-#   auth:
-#     issuer_url: "https://auth.example.com"
-#     resource_server_url: "https://mcp.example.com/mcp"
-#     required_scopes: ["arq.read"]
-#     allowed_emails: ["you@example.com"]
-#     # or, for an org vault:
-#     # allowed_email_domains: ["yourorg.com"]
+#   cloudflare_tunnel:
+#     enabled: true
+#     tunnel_name: "arquimedes-personal"
+#     binary_path: "/opt/homebrew/bin/cloudflared"
 """
 
 _VAULT_SUBDIRS = ("extracted", "manifests", "derived", "wiki", "config")

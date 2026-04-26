@@ -145,6 +145,10 @@ mcp:
   port: 8000
   streamable_http_path: "/mcp"
   keep_alive: true
+  cloudflare_tunnel:
+    enabled: true
+    tunnel_name: "arquimedes-personal"
+    binary_path: "/opt/homebrew/bin/cloudflared"
 ```
 
 Run in the foreground for testing:
@@ -159,6 +163,8 @@ Install the launchd job once the profile is correct:
 arq mcp --install
 arq mcp --status
 ```
+
+If `mcp.cloudflare_tunnel.enabled` is true, `arq mcp --install` also installs the `cloudflared tunnel run <name>` LaunchAgent automatically.
 
 Important:
 

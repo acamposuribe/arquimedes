@@ -71,7 +71,7 @@ _MAINTAINER_PROFILE = """\
 #   keep_alive: true
 #   cloudflare_tunnel:
 #     enabled: true
-#     tunnel_name: "arquimedes-personal"
+#     tunnel_name: "arquimedes-example"
 #     binary_path: "/opt/homebrew/bin/cloudflared"
 """
 

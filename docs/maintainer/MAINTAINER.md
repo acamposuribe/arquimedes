@@ -147,7 +147,7 @@ mcp:
   keep_alive: true
   cloudflare_tunnel:
     enabled: true
-    tunnel_name: "arquimedes-personal"
+    tunnel_name: "arquimedes-example"
     binary_path: "/opt/homebrew/bin/cloudflared"
 ```
 
@@ -194,13 +194,13 @@ cloudflared tunnel login
 3. Create a named tunnel:
 
 ```bash
-cloudflared tunnel create arquimedes-personal
+cloudflared tunnel create arquimedes-example
 ```
 
 4. Create the DNS route for the public MCP hostname:
 
 ```bash
-cloudflared tunnel route dns arquimedes-personal mcp-personal.example.com
+cloudflared tunnel route dns arquimedes-example mcp.example.com
 ```
 
 5. Write `~/.cloudflared/config.yml`:
@@ -210,7 +210,7 @@ tunnel: <TUNNEL-UUID>
 credentials-file: /Users/<you>/.cloudflared/<TUNNEL-UUID>.json
 
 ingress:
-  - hostname: mcp-personal.example.com
+  - hostname: mcp.example.com
     service: http://127.0.0.1:8000
   - service: http_status:404
 ```
@@ -218,13 +218,13 @@ ingress:
 6. Test the tunnel manually:
 
 ```bash
-cloudflared tunnel run arquimedes-personal
+cloudflared tunnel run arquimedes-example
 ```
 
 Smoke test from another terminal:
 
 ```bash
-curl -i https://mcp-personal.example.com/mcp
+curl -i https://mcp.example.com/mcp
 ```
 
 Expected result before Access is added:
@@ -250,7 +250,7 @@ That means the public hostname reaches the real MCP server.
     <string>/opt/homebrew/bin/cloudflared</string>
     <string>tunnel</string>
     <string>run</string>
-    <string>arquimedes-personal</string>
+    <string>arquimedes-example</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -280,7 +280,7 @@ launchctl list | grep arquimedes.cloudflared-tunnel
 
 - Zero Trust -> Access / Applications -> Add an application
 - Type: `Self-hosted`
-- Destination: `mcp-personal.example.com`
+- Destination: `mcp.example.com`
 - Policy: `Allow`
 - For a personal vault, allow only the specific email addresses you want to use
 - Session duration: `24 hours`
@@ -296,7 +296,7 @@ launchctl list | grep arquimedes.cloudflared-tunnel
 10. Smoke test after Access is added:
 
 ```bash
-curl -i https://mcp-personal.example.com/mcp
+curl -i https://mcp.example.com/mcp
 ```
 
 Expected result before browser login:
@@ -317,14 +317,14 @@ That proves:
 11. Connect ChatGPT:
 
 - ChatGPT web -> Settings -> Apps / Connectors -> add remote MCP server
-- MCP URL: `https://mcp-personal.example.com/mcp`
+- MCP URL: `https://mcp.example.com/mcp`
 - Authentication: `OAuth`
 - ChatGPT should now autodetect OAuth, redirect through Cloudflare login, and finish connected without any manual OAuth field entry
 
 12. Repeat the same shape for an office/org vault on its own maintainer server:
 
 - choose a different tunnel name, such as `arquimedes-office`
-- choose a different hostname, such as `mcp-office.example.com`
+- choose a different hostname, such as `mcp-office.example.com` or your real office hostname
 - point the tunnel ingress to that server's local MCP port
 - in the Access policy, allow the office collaborators' identities instead of the maintainer's personal emails
 - enable `Managed OAuth` on that office hostname too

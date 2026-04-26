@@ -52,8 +52,24 @@ Every command emits JSON by default; add `--human` for short human-readable text
 
 ## Web UI
 
-The maintainer machine serves the web UI on the local network at `http://<maintainer-hostname>.local:8420`. If the human collaborator wants to browse visually, point them there — do not start a local server yourself.
+The maintainer machine serves the web UI on the local network at `http://<maintainer-hostname>.local:8420`. If the human collaborator wants to browse visually and is on that LAN, point them there.
+
+If the human collaborator is away from the maintainer's LAN but explicitly wants the browser UI on their own machine, it is acceptable to run a local-only server from their vault clone:
+
+```bash
+arq refresh
+arq serve --host 127.0.0.1 --port 8420
+```
+
+Then have them open `http://127.0.0.1:8420`.
+
+Guardrails:
+
+- use this only as an explicit off-LAN fallback, not the default workflow
+- do not use `arq serve --install`
 
 ## Maintainer-only commands — do not call - out of bounds!
 
-`arq init`, `arq ingest`, `arq extract`, `arq extract-raw`, `arq enrich`, `arq cluster`, `arq compile`, `arq memory`, `arq lint`, `arq index`, `arq watch`, `arq sync`, `arq serve`. These mutate artifacts or kick off long-running pipelines. If you think one is needed, ask the human maintainer.
+`arq init`, `arq ingest`, `arq extract`, `arq extract-raw`, `arq enrich`, `arq cluster`, `arq compile`, `arq memory`, `arq lint`, `arq index`, `arq watch`, `arq sync`. These mutate artifacts or kick off long-running pipelines. If you think one is needed, ask the human maintainer. 
+
+`arq serve` is also maintainer-oriented by default, except for the explicit off-LAN local-only fallback described above.

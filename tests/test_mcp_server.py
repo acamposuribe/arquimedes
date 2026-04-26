@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+import types
 
 import pytest
+from click.testing import CliRunner
 
+from arquimedes.cli import cli
 from arquimedes import mcp_server
 
 
@@ -217,3 +220,248 @@ def test_tool_materials_for_concept(monkeypatch):
 
     assert payload["cluster_id"] == "cluster-1"
     assert payload["materials"][0]["title"] == "Archive"
+
+
+def test_build_server_passes_remote_settings(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeFastMCP:
+        def __init__(self, *args, **kwargs):
+            captured["args"] = args
+            captured["kwargs"] = kwargs
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                return fn
+            return decorator
+
+    fake_module = types.ModuleType("mcp.server.fastmcp")
+    fake_module.FastMCP = FakeFastMCP
+    fake_auth_settings = types.ModuleType("mcp.server.auth.settings")
+
+    class FakeAuthSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    fake_auth_settings.AuthSettings = FakeAuthSettings
+
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp", types.ModuleType("mcp"))
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp.server", types.ModuleType("mcp.server"))
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp.server.fastmcp", fake_module)
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp.server.auth", types.ModuleType("mcp.server.auth"))
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp.server.auth.settings", fake_auth_settings)
+
+    server = mcp_server.build_server(
+        config_path="/tmp/vault/config.yaml",
+        host="0.0.0.0",
+        port=9000,
+        mount_path="/",
+        sse_path="/events",
+        streamable_http_path="/mcp-test",
+    )
+
+    assert isinstance(server, FakeFastMCP)
+    assert captured["kwargs"]["host"] == "0.0.0.0"
+    assert captured["kwargs"]["port"] == 9000
+    assert captured["kwargs"]["sse_path"] == "/events"
+    assert captured["kwargs"]["streamable_http_path"] == "/mcp-test"
+    assert captured["kwargs"]["auth"] is None
+    assert captured["kwargs"]["token_verifier"] is None
+
+
+def test_auth_config_from_args_parses_restrictions():
+    args = types.SimpleNamespace(
+        auth_issuer_url="https://auth.example.com",
+        resource_server_url="https://mcp.example.com/mcp",
+        auth_required_scope=["arq.read,offline_access"],
+        auth_audience=["https://mcp.example.com/mcp"],
+        auth_allowed_subject=["sub-1"],
+        auth_allowed_email=["owner@example.com"],
+        auth_allowed_email_domain=["example.com"],
+        auth_service_documentation_url="https://docs.example.com/arq-mcp",
+        auth_jwks_url="https://auth.example.com/jwks.json",
+    )
+
+    auth_config = mcp_server._auth_config_from_args(args)
+
+    assert auth_config is not None
+    assert auth_config.required_scopes == ("arq.read", "offline_access")
+    assert auth_config.allowed_emails == frozenset({"owner@example.com"})
+    assert auth_config.allowed_email_domains == frozenset({"example.com"})
+
+
+def test_build_server_passes_auth_settings(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class FakeFastMCP:
+        def __init__(self, *args, **kwargs):
+            captured["kwargs"] = kwargs
+
+        def tool(self, *args, **kwargs):
+            def decorator(fn):
+                return fn
+            return decorator
+
+    class FakeAuthSettings:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class FakeVerifier:
+        def __init__(self, config):
+            captured["auth_config"] = config
+
+    fake_fastmcp = types.ModuleType("mcp.server.fastmcp")
+    fake_fastmcp.FastMCP = FakeFastMCP
+    fake_auth_settings = types.ModuleType("mcp.server.auth.settings")
+    fake_auth_settings.AuthSettings = FakeAuthSettings
+
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp", types.ModuleType("mcp"))
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp.server", types.ModuleType("mcp.server"))
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp.server.fastmcp", fake_fastmcp)
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp.server.auth", types.ModuleType("mcp.server.auth"))
+    monkeypatch.setitem(mcp_server.sys.modules, "mcp.server.auth.settings", fake_auth_settings)
+    monkeypatch.setattr("arquimedes.mcp_auth.OIDCTokenVerifier", FakeVerifier)
+
+    auth_config = types.SimpleNamespace(
+        issuer_url="https://auth.example.com",
+        service_documentation_url="https://docs.example.com/arq-mcp",
+        required_scopes=("arq.read",),
+        resource_server_url="https://mcp.example.com/mcp",
+    )
+    mcp_server.build_server(auth_config=auth_config)
+
+    assert captured["kwargs"]["auth"].kwargs["issuer_url"] == "https://auth.example.com"
+    assert captured["kwargs"]["token_verifier"].__class__ is FakeVerifier
+
+
+def test_auth_config_from_mapping_parses_yaml_shape():
+    auth_config = mcp_server._auth_config_from_mapping(
+        {
+            "issuer_url": "https://auth.example.com",
+            "resource_server_url": "https://mcp.example.com/mcp",
+            "required_scopes": ["arq.read"],
+            "allowed_emails": ["owner@example.com"],
+            "allowed_email_domains": ["example.com"],
+        }
+    )
+
+    assert auth_config is not None
+    assert auth_config.required_scopes == ("arq.read",)
+    assert auth_config.allowed_emails == frozenset({"owner@example.com"})
+
+
+def test_mcp_cli_install_uses_config_profile(monkeypatch):
+    calls: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "arquimedes.config.load_config",
+        lambda config_path=None: {
+            "mcp": {"keep_alive": True},
+        },
+    )
+    monkeypatch.setattr("arquimedes.config.get_project_root", lambda: Path("/repo"))
+    monkeypatch.setattr(
+        "arquimedes.launchd.render_plist",
+        lambda label, program_arguments, **kwargs: calls.setdefault(
+            "render",
+            {
+                "label": label,
+                "program_arguments": program_arguments,
+                "kwargs": kwargs,
+            },
+        ) or "<plist />",
+    )
+    monkeypatch.setattr(
+        "arquimedes.launchd.install",
+        lambda label, plist_text: {"label": label, "plist": plist_text},
+    )
+
+    result = CliRunner().invoke(cli, ["mcp", "--install"])
+
+    assert result.exit_code == 0
+    assert calls["render"]["label"] == "com.arquimedes.mcp"
+    assert calls["render"]["program_arguments"][-1] == "mcp"
+    assert calls["render"]["kwargs"]["keep_alive"] is True
+
+
+def test_mcp_cli_runs_server_from_config(monkeypatch):
+    calls: dict[str, object] = {}
+
+    class FakeServer:
+        def run(self, transport="stdio", mount_path=None):
+            calls["transport"] = transport
+            calls["mount_path"] = mount_path
+
+    monkeypatch.setattr(
+        "arquimedes.config.load_config",
+        lambda config_path=None: {
+            "mcp": {
+                "transport": "streamable-http",
+                "mount_path": "/",
+            }
+        },
+    )
+    monkeypatch.setattr(
+        "arquimedes.cli._mcp_server_from_config",
+        lambda config_path=None: (FakeServer(), "streamable-http", "/"),
+    )
+
+    result = CliRunner().invoke(cli, ["mcp"])
+
+    assert result.exit_code == 0
+    assert calls["transport"] == "streamable-http"
+
+
+def test_main_uses_requested_transport(monkeypatch):
+    calls: dict[str, object] = {}
+
+    class FakeServer:
+        def run(self, transport="stdio", mount_path=None):
+            calls["transport"] = transport
+            calls["mount_path"] = mount_path
+
+    def _build_server(**kwargs):
+        calls["kwargs"] = kwargs
+        return FakeServer()
+
+    monkeypatch.setattr(mcp_server, "build_server", _build_server)
+
+    mcp_server.main([
+        "--config", "/tmp/vault/config.yaml",
+        "--transport", "streamable-http",
+        "--host", "0.0.0.0",
+        "--port", "9000",
+        "--streamable-http-path", "/mcp-test",
+    ])
+
+    assert calls["kwargs"]["config_path"] == "/tmp/vault/config.yaml"
+    assert calls["kwargs"]["host"] == "0.0.0.0"
+    assert calls["kwargs"]["port"] == 9000
+    assert calls["kwargs"]["streamable_http_path"] == "/mcp-test"
+    assert calls["transport"] == "streamable-http"
+
+
+def test_main_forwards_auth_args(monkeypatch):
+    calls: dict[str, object] = {}
+
+    class FakeServer:
+        def run(self, transport="stdio", mount_path=None):
+            calls["transport"] = transport
+
+    def _build_server(**kwargs):
+        calls["kwargs"] = kwargs
+        return FakeServer()
+
+    monkeypatch.setattr(mcp_server, "build_server", _build_server)
+
+    mcp_server.main([
+        "--transport", "streamable-http",
+        "--resource-server-url", "https://mcp.example.com/mcp",
+        "--auth-issuer-url", "https://auth.example.com",
+        "--auth-required-scope", "arq.read",
+        "--auth-allowed-email-domain", "example.com",
+    ])
+
+    auth_config = calls["kwargs"]["auth_config"]
+    assert auth_config.issuer_url == "https://auth.example.com"
+    assert auth_config.required_scopes == ("arq.read",)

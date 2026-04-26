@@ -38,6 +38,42 @@ def _arq_program_args(*subcommand: str) -> list[str]:
     return base
 
 
+def _mcp_config(config: dict) -> dict:
+    mcp_cfg = config.get("mcp") or {}
+    if not isinstance(mcp_cfg, dict):
+        raise click.ClickException("mcp config must be a mapping in config.yaml")
+    return mcp_cfg
+
+
+def _mcp_server_from_config(config_path: str | None):
+    from arquimedes.config import load_config
+    from arquimedes.mcp_server import _auth_config_from_mapping, build_server
+
+    config = load_config(config_path)
+    mcp_cfg = _mcp_config(config)
+    host = str(mcp_cfg.get("host") or "127.0.0.1")
+    port = int(mcp_cfg.get("port") or 8000)
+    mount_path = str(mcp_cfg.get("mount_path") or "/")
+    sse_path = str(mcp_cfg.get("sse_path") or "/sse")
+    streamable_http_path = str(mcp_cfg.get("streamable_http_path") or "/mcp")
+    transport = str(mcp_cfg.get("transport") or "streamable-http")
+    if transport not in {"stdio", "sse", "streamable-http"}:
+        raise click.ClickException("mcp.transport must be one of: stdio, sse, streamable-http")
+
+    auth_mapping = mcp_cfg.get("auth") if isinstance(mcp_cfg.get("auth"), dict) else None
+    auth_config = _auth_config_from_mapping(auth_mapping)
+    server = build_server(
+        config_path=config_path,
+        host=host,
+        port=port,
+        mount_path=mount_path,
+        sse_path=sse_path,
+        streamable_http_path=streamable_http_path,
+        auth_config=auth_config,
+    )
+    return server, transport, mount_path
+
+
 def _commit_and_push_if_changed(message: str) -> dict:
     from arquimedes.config import get_project_root
 
@@ -1084,6 +1120,49 @@ def serve(host: str | None, port: int | None, config_path: str | None, install: 
         host=host or serve_cfg.get("host") or "127.0.0.1",
         port=port or int(serve_cfg.get("port") or 8420),
     )
+
+
+@cli.command()
+@click.option("--config", "config_path", help="Path to a role config file, e.g. config/maintainer/config.yaml.")
+@click.option("--install", is_flag=True, help="Install launchd job that keeps the remote MCP server running.")
+@click.option("--uninstall", is_flag=True, help="Uninstall launchd MCP job.")
+@click.option("--status", "show_status", is_flag=True, help="Show launchd MCP job status.")
+def mcp(config_path: str | None, install: bool, uninstall: bool, show_status: bool):
+    """Start the remote MCP server using the active maintainer config."""
+    label = "com.arquimedes.mcp"
+    if install or uninstall or show_status:
+        from arquimedes.config import get_project_root, load_config
+        from arquimedes.launchd import install as install_plist, render_plist, status as launchd_status, uninstall as uninstall_plist
+
+        try:
+            if uninstall:
+                click.echo(json.dumps(uninstall_plist(label), indent=2))
+                return
+            if show_status:
+                click.echo(json.dumps(launchd_status(label), indent=2))
+                return
+            config = load_config(config_path)
+            mcp_cfg = _mcp_config(config)
+            args = _arq_program_args("mcp")
+            if config_path and "--config" not in args:
+                args.extend(["--config", config_path])
+            plist = render_plist(
+                label,
+                args,
+                working_directory=str(get_project_root()),
+                run_at_load=True,
+                keep_alive=bool(mcp_cfg.get("keep_alive", True)),
+            )
+            click.echo(json.dumps(install_plist(label, plist), indent=2))
+            return
+        except RuntimeError as e:
+            raise click.ClickException(str(e))
+
+    try:
+        server, transport, mount_path = _mcp_server_from_config(config_path)
+    except RuntimeError as e:
+        raise click.ClickException(str(e))
+    server.run(transport=transport, mount_path=mount_path)
 
 
 @cli.command()

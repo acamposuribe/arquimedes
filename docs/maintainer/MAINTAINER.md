@@ -67,6 +67,7 @@ Install launchd jobs (each one embeds the current `$ARQUIMEDES_CONFIG` into its 
 arq watch --install
 arq lint --install-full
 arq serve --install
+arq mcp --install
 ```
 
 Verify the vault was resolved correctly:
@@ -125,6 +126,204 @@ arq-mcp --config <vault>/config/collaborator/config.local.yaml
 That server exposes the collaborator-safe read surface without granting Bash access.
 
 It also includes `serve_local_ui`, so collaborators using MCP-only agents can start a loopback-only browser UI without needing shell access.
+
+## Remote MCP for ChatGPT
+
+If you want ChatGPT developer mode to use Arquimedes without requiring each collaborator to clone a vault locally, run `arq-mcp` as a remote streamable HTTP server and expose it through an HTTPS tunnel.
+
+Recommended shape:
+
+- keep the tool surface read-only
+- expose the server through a stable HTTPS URL such as `https://mcp.example.com/mcp`
+- use OAuth / OIDC for identity
+- use Cloudflare Tunnel for public HTTPS reachability if you already manage the domain there
+
+Configure the remote MCP in `config/maintainer/config.yaml`:
+
+```yaml
+mcp:
+  transport: "streamable-http"
+  host: "127.0.0.1"
+  port: 8000
+  streamable_http_path: "/mcp"
+  keep_alive: true
+  auth:
+    issuer_url: "https://auth.example.com"
+    resource_server_url: "https://mcp.example.com/mcp"
+    required_scopes: ["arq.read"]
+```
+
+Two common restriction patterns:
+
+- personal vault: add `allowed_emails: ["you@example.com"]` or `allowed_subjects: ["<oidc-sub>"]` so the same OAuth identity works across all of your devices
+- org vault: add `allowed_email_domains: ["yourorg.com"]` so multiple collaborators in the same tenant can authenticate separately
+
+Run in the foreground for testing:
+
+```bash
+arq mcp
+```
+
+Install the launchd job once the profile is correct:
+
+```bash
+arq mcp --install
+arq mcp --status
+```
+
+Important:
+
+- this restriction is based on the OAuth / OIDC identity provider, not on a ChatGPT account identifier exposed to Arquimedes
+- `mcp.auth.resource_server_url` must be the public HTTPS MCP URL ChatGPT reaches, not the local bind URL
+- Cloudflare Tunnel solves HTTPS reachability; your OAuth provider still needs to issue access tokens with refresh support (`offline_access`) if you want ChatGPT to stay connected cleanly
+
+### Cloudflare Tunnel + Access runbook (tested on macOS)
+
+This is the operator path we have actually validated on the maintainer machine. It publishes the MCP over HTTPS and then places Cloudflare Access in front of it.
+
+1. Start the MCP locally and keep it bound to loopback. For first testing, running it in the foreground is fine:
+
+```bash
+arq mcp
+```
+
+The default maintainer profile should bind the MCP to `127.0.0.1:8000`.
+
+2. Install `cloudflared` and log in once:
+
+```bash
+brew install cloudflared
+cloudflared tunnel login
+```
+
+3. Create a named tunnel:
+
+```bash
+cloudflared tunnel create arquimedes-personal
+```
+
+4. Create the DNS route for the public MCP hostname:
+
+```bash
+cloudflared tunnel route dns arquimedes-personal mcp-personal.example.com
+```
+
+5. Write `~/.cloudflared/config.yml`:
+
+```yaml
+tunnel: <TUNNEL-UUID>
+credentials-file: /Users/<you>/.cloudflared/<TUNNEL-UUID>.json
+
+ingress:
+  - hostname: mcp-personal.example.com
+    service: http://127.0.0.1:8000
+  - service: http_status:404
+```
+
+6. Test the tunnel manually:
+
+```bash
+cloudflared tunnel run arquimedes-personal
+```
+
+Smoke test from another terminal:
+
+```bash
+curl -i https://mcp-personal.example.com/mcp
+```
+
+Expected result before Access is added:
+
+- `406 Not Acceptable`
+- JSON body complaining that the client must accept `text/event-stream`
+
+That means the public hostname reaches the real MCP server.
+
+7. On this macOS setup, the built-in `cloudflared service install` path did not preserve the `tunnel run <name>` invocation correctly for the named tunnel. The working persistent setup was a custom user LaunchAgent:
+
+`~/Library/LaunchAgents/com.arquimedes.cloudflared-tunnel.plist`
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.arquimedes.cloudflared-tunnel</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/cloudflared</string>
+    <string>tunnel</string>
+    <string>run</string>
+    <string>arquimedes-personal</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/<you>/Library/Logs/arquimedes-cloudflared.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/<you>/Library/Logs/arquimedes-cloudflared.err.log</string>
+</dict>
+</plist>
+```
+
+Load it with:
+
+```bash
+launchctl load ~/Library/LaunchAgents/com.arquimedes.cloudflared-tunnel.plist
+```
+
+Check it with:
+
+```bash
+launchctl list | grep arquimedes.cloudflared-tunnel
+```
+
+8. Add Cloudflare Access in front of the MCP hostname:
+
+- Zero Trust -> Access / Applications -> Add an application
+- Type: `Self-hosted`
+- Destination: `mcp-personal.example.com`
+- Policy: `Allow`
+- For a personal vault, allow only the specific email addresses you want to use
+- Session duration: `24 hours`
+
+9. Smoke test after Access is added:
+
+```bash
+curl -i https://mcp-personal.example.com/mcp
+```
+
+Expected result before browser login:
+
+- `302`
+- redirect to `*.cloudflareaccess.com`
+
+Open the MCP URL once in a browser, log in through Access, then test again in that browser tab. Expected result after successful login:
+
+- `406 Not Acceptable`
+
+That proves:
+
+- the tunnel works
+- Access is enforcing login
+- authenticated traffic reaches the real MCP server
+
+10. Repeat the same shape for an office/org vault on its own maintainer server:
+
+- choose a different tunnel name, such as `arquimedes-office`
+- choose a different hostname, such as `mcp-office.example.com`
+- point the tunnel ingress to that server's local MCP port
+- in the Access policy, allow the office collaborators' identities instead of the maintainer's personal emails
+
+Current status:
+
+- HTTPS publication is verified
+- Cloudflare Access protection is verified
+- browser login through Access is verified
+- ChatGPT as the MCP client still needs its own end-to-end verification against this protected endpoint
 
 If you are using an agent to prepare the handoff, the agent should:
 
@@ -203,7 +402,7 @@ If a deletion cascade needs undoing, revert the removal commit. The next scan re
 A maintainer can own multiple vaults across multiple machines (e.g., personal vault on the Mac Mini, office vault on a different host). Constraints:
 
 - Each vault gets its own private GitHub repo.
-- Each maintainer machine owns exactly one vault and runs exactly one set of `arq watch / arq lint / arq serve` launchd jobs.
+- Each maintainer machine owns exactly one vault and runs exactly one set of `arq watch / arq lint / arq serve / arq mcp` launchd jobs.
 - For one-off operations against a non-resident vault from any machine, point `arq` at it manually: `arq --config /path/to/other-vault/config/maintainer/config.yaml overview`.
 
 Do not try to install two `arq watch` launchd jobs on one machine — the labels collide.

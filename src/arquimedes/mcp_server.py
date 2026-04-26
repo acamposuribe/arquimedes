@@ -22,6 +22,59 @@ _LOCAL_UI_HOST = "127.0.0.1"
 _LOCAL_UI_START_TIMEOUT_SECONDS = 5.0
 
 
+def _csvish(values: list[str] | None) -> tuple[str, ...]:
+    cleaned: list[str] = []
+    for value in values or []:
+        for part in value.split(","):
+            token = part.strip()
+            if token:
+                cleaned.append(token)
+    return tuple(cleaned)
+
+
+def _auth_config_from_args(args: argparse.Namespace):
+    from arquimedes.mcp_auth import OIDCAuthConfig
+
+    if not args.auth_issuer_url:
+        return None
+    if not args.resource_server_url:
+        raise ValueError("--resource-server-url is required when auth is enabled")
+    return OIDCAuthConfig(
+        issuer_url=args.auth_issuer_url,
+        resource_server_url=args.resource_server_url,
+        required_scopes=_csvish(args.auth_required_scope),
+        audience=_csvish(args.auth_audience),
+        allowed_subjects=frozenset(_csvish(args.auth_allowed_subject)),
+        allowed_emails=frozenset(value.lower() for value in _csvish(args.auth_allowed_email)),
+        allowed_email_domains=frozenset(value.lower() for value in _csvish(args.auth_allowed_email_domain)),
+        service_documentation_url=args.auth_service_documentation_url,
+        jwks_url=args.auth_jwks_url,
+    )
+
+
+def _auth_config_from_mapping(mapping: dict[str, Any] | None):
+    from arquimedes.mcp_auth import OIDCAuthConfig
+
+    auth = mapping or {}
+    issuer_url = auth.get("issuer_url")
+    if not issuer_url:
+        return None
+    resource_server_url = auth.get("resource_server_url")
+    if not resource_server_url:
+        raise ValueError("mcp.auth.resource_server_url is required when mcp.auth.issuer_url is set")
+    return OIDCAuthConfig(
+        issuer_url=str(issuer_url),
+        resource_server_url=str(resource_server_url),
+        required_scopes=tuple(str(v) for v in auth.get("required_scopes") or []),
+        audience=tuple(str(v) for v in auth.get("audience") or []),
+        allowed_subjects=frozenset(str(v) for v in auth.get("allowed_subjects") or []),
+        allowed_emails=frozenset(str(v).lower() for v in auth.get("allowed_emails") or []),
+        allowed_email_domains=frozenset(str(v).lower() for v in auth.get("allowed_email_domains") or []),
+        service_documentation_url=str(auth["service_documentation_url"]) if auth.get("service_documentation_url") else None,
+        jwks_url=str(auth["jwks_url"]) if auth.get("jwks_url") else None,
+    )
+
+
 def _truthy(value: str | None) -> bool:
     if value is None:
         return False
@@ -398,19 +451,52 @@ def tool_serve_local_ui(*, port: int = 8420) -> dict[str, Any]:
     )
 
 
-def build_server(config_path: str | None = None):
+def build_server(
+    config_path: str | None = None,
+    *,
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    mount_path: str = "/",
+    sse_path: str = "/sse",
+    streamable_http_path: str = "/mcp",
+    auth_config=None,
+):
     """Build the FastMCP server lazily so tests don't require the SDK."""
     _configure(config_path)
 
     try:
         from mcp.server.fastmcp import FastMCP
+        from mcp.server.auth.settings import AuthSettings
     except ModuleNotFoundError as exc:  # pragma: no cover - exercised in real installs
         raise RuntimeError(
             "Missing MCP dependency: mcp. Install project dependencies for the current "
             "Python environment, e.g. `python3 -m pip install -e .`."
         ) from exc
 
-    mcp = FastMCP("Arquimedes", json_response=True)
+    auth_settings = None
+    token_verifier = None
+    if auth_config is not None:
+        from arquimedes.mcp_auth import OIDCTokenVerifier
+
+        auth_settings = AuthSettings(
+            issuer_url=auth_config.issuer_url,
+            service_documentation_url=auth_config.service_documentation_url,
+            required_scopes=list(auth_config.required_scopes) or None,
+            resource_server_url=auth_config.resource_server_url,
+        )
+        token_verifier = OIDCTokenVerifier(auth_config)
+
+    mcp = FastMCP(
+        "Arquimedes",
+        json_response=True,
+        auth=auth_settings,
+        token_verifier=token_verifier,
+        host=host,
+        port=port,
+        mount_path=mount_path,
+        sse_path=sse_path,
+        streamable_http_path=streamable_http_path,
+    )
 
     @mcp.tool()
     def refresh() -> dict[str, Any]:
@@ -539,10 +625,62 @@ def build_server(config_path: str | None = None):
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(description="Arquimedes read-only MCP server")
     parser.add_argument("--config", help="Path to a vault config file.")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse", "streamable-http"],
+        default="stdio",
+        help="MCP transport to expose.",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="Bind host for remote transports.")
+    parser.add_argument("--port", type=int, default=8000, help="Bind port for remote transports.")
+    parser.add_argument("--mount-path", default="/", help="Mount path for SSE transport.")
+    parser.add_argument("--sse-path", default="/sse", help="SSE endpoint path.")
+    parser.add_argument("--streamable-http-path", default="/mcp", help="Streamable HTTP endpoint path.")
+    parser.add_argument("--resource-server-url", help="Public HTTPS MCP URL for OAuth resource metadata.")
+    parser.add_argument("--auth-issuer-url", help="OIDC issuer URL for remote OAuth.")
+    parser.add_argument("--auth-jwks-url", help="Override JWKS URL if discovery is unavailable.")
+    parser.add_argument(
+        "--auth-required-scope",
+        action="append",
+        help="Required OAuth scope. Repeat or use comma-separated values.",
+    )
+    parser.add_argument(
+        "--auth-audience",
+        action="append",
+        help="Accepted token audience. Repeat or use comma-separated values.",
+    )
+    parser.add_argument(
+        "--auth-allowed-subject",
+        action="append",
+        help="Restrict access to one or more OIDC subject ids.",
+    )
+    parser.add_argument(
+        "--auth-allowed-email",
+        action="append",
+        help="Restrict access to one or more email addresses.",
+    )
+    parser.add_argument(
+        "--auth-allowed-email-domain",
+        action="append",
+        help="Restrict access to one or more email domains.",
+    )
+    parser.add_argument(
+        "--auth-service-documentation-url",
+        help="Optional public docs URL advertised in OAuth metadata.",
+    )
     args = parser.parse_args(argv)
+    auth_config = _auth_config_from_args(args)
 
-    server = build_server(config_path=args.config)
-    server.run()
+    server = build_server(
+        config_path=args.config,
+        host=args.host,
+        port=args.port,
+        mount_path=args.mount_path,
+        sse_path=args.sse_path,
+        streamable_http_path=args.streamable_http_path,
+        auth_config=auth_config,
+    )
+    server.run(transport=args.transport, mount_path=args.mount_path)
 
 
 if __name__ == "__main__":

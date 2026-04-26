@@ -2,6 +2,8 @@
 
 This guide is for Windows and macOS collaborators who want to use the Arquimedes knowledge base.
 
+If the maintainer has already published a remote authenticated ChatGPT app backed by Arquimedes MCP, you can skip this local install entirely and use that app instead. This guide is for the local-vault path.
+
 The system is built for collaborators' **agents** to read. The primary setup is: install `arq` once globally, then clone the **vault** (the maintainer's private knowledge-base repo) using a read-only deploy key. The agent runs `arq` commands that build a local SQLite index and answer questions from the wiki. A LAN-served web UI exists as an optional convenience for browsing visually, but it is not how the system is meant to be used day to day.
 
 You do **not** need a GitHub account. The `arquimedes` code is installed anonymously via pipx; the vault is cloned with a per-collaborator read-only deploy key the maintainer issues to you over a secure channel.
@@ -15,6 +17,11 @@ The setup requires three collaborator-specific inputs:
 Everything else uses sensible defaults.
 
 > Naming note: the source PDFs are sometimes called the "Library" (the agent handbook refers to PDFs in `Library/`). That is the same folder this guide calls the "shared library folder" — there is no `Library/` directory inside the vault itself.
+
+After setup:
+
+- use `Agent Handbook.md` when the agent can use MCP
+- use `Agent Handbook (CLI).md` only as fallback when MCP is unavailable but shell access exists
 
 ## What the agent should do
 
@@ -240,6 +247,18 @@ Minimal stdio MCP config shape:
   "command": "arq-mcp",
   "args": ["--config", "/absolute/path/to/vault/config/collaborator/config.local.yaml"]
 }
+```
+
+For remote MCP testing, the maintainer can also run:
+
+```text
+arq-mcp --config <vault>/config/collaborator/config.local.yaml --transport streamable-http --host 0.0.0.0 --port 8000
+```
+
+Default remote endpoint:
+
+```text
+http://<host>:8000/mcp
 ```
 
 This MCP server exposes the same collaborator-safe read surface as the CLI: `refresh`, `overview`, `search`, `read`, `figures`, `annotations`, `related`, `material_clusters`, `collection_clusters`, and `concepts`. It also adds MCP-only navigation helpers for shell-less agents: `list_domains_and_collections`, `list_wiki_dir`, `wiki_page_record`, `recent_materials`, `materials_for_collection`, and `materials_for_concept`. Finally, it exposes `serve_local_ui`, which starts the local-only web UI on `127.0.0.1` in the background and returns the URL.

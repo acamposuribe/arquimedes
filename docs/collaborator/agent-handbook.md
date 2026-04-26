@@ -2,6 +2,8 @@
 
 You are investigating a knowledge base you did **not** build. Use the **read-only MCP tools** when available. Do not modify the vault, index, wiki, or derived artifacts.
 
+If MCP is unavailable but shell access is available, fall back to [agent-handbook-cli.md](agent-handbook-cli.md).
+
 ## Surface
 
 Default surface: `arq-mcp`

@@ -59,6 +59,23 @@ _MAINTAINER_PROFILE = """\
 # Maintainer profile for this vault. Presence of this file marks the machine
 # as the vault's maintainer; freshness will not run destructive git restore
 # here.
+
+# Optional remote MCP profile for ChatGPT / other remote MCP clients.
+# Configure this only on the maintainer machine that should publish the MCP.
+#
+# mcp:
+#   transport: "streamable-http"
+#   host: "127.0.0.1"
+#   port: 8000
+#   streamable_http_path: "/mcp"
+#   keep_alive: true
+#   auth:
+#     issuer_url: "https://auth.example.com"
+#     resource_server_url: "https://mcp.example.com/mcp"
+#     required_scopes: ["arq.read"]
+#     allowed_emails: ["you@example.com"]
+#     # or, for an org vault:
+#     # allowed_email_domains: ["yourorg.com"]
 """
 
 _VAULT_SUBDIRS = ("extracted", "manifests", "derived", "wiki", "config")

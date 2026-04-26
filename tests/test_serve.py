@@ -17,9 +17,12 @@ def _write_json(path: Path, data) -> None:
 
 
 def _repo(tmp_path, monkeypatch):
-    library = tmp_path / "Library" / "Research"
-    library.mkdir(parents=True)
+    (tmp_path / "Library" / "Research").mkdir(parents=True)
+    (tmp_path / "Library" / "Practice").mkdir(parents=True)
+    (tmp_path / "wiki" / "research").mkdir(parents=True)
     (tmp_path / "wiki" / "research" / "papers").mkdir(parents=True)
+    (tmp_path / "wiki" / "practice").mkdir(parents=True)
+    (tmp_path / "wiki" / "practice" / "projects").mkdir(parents=True)
     (tmp_path / "extracted" / "mat_001" / "figures").mkdir(parents=True)
     (tmp_path / "indexes").mkdir()
     monkeypatch.setattr(read_mod, "get_project_root", lambda: tmp_path)
@@ -41,13 +44,62 @@ def test_health_endpoint(tmp_path, monkeypatch):
 def test_home_handles_missing_index(tmp_path, monkeypatch):
     root = _repo(tmp_path, monkeypatch)
     (root / "wiki" / "shared" / "glossary").mkdir(parents=True)
-    (root / "wiki" / "shared" / "glossary" / "_index.md").write_text("- [Alpha (main)](wiki/shared/bridge-concepts/alpha.md)\n", encoding="utf-8")
+    (root / "wiki" / "shared" / "glossary" / "_index.md").write_text("- [Alpha (main)](wiki/research/bridge-concepts/alpha.md)\n", encoding="utf-8")
     client = TestClient(serve_mod.create_app())
     response = client.get("/")
     assert response.status_code == 200
     assert "arq index rebuild" in response.text
-    assert "/wiki/shared/bridge-concepts/alpha" in response.text
+    assert "/wiki/research/bridge-concepts/alpha" in response.text
     assert "Alpha" in response.text
+
+
+def test_home_page_scopes_domain_navigation(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "shared" / "glossary").mkdir(parents=True)
+    (root / "wiki" / "shared" / "glossary" / "_index.md").write_text(
+        "- [Research Alpha (main)](wiki/research/bridge-concepts/research-alpha.md)\n"
+        "- [Practice Beta (main)](wiki/practice/bridge-concepts/practice-beta.md)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "list_domains_and_collections",
+        lambda domain=None: (
+            [{"domain": "research", "collection": "papers"}]
+            if domain == "research"
+            else [{"domain": "practice", "collection": "projects"}]
+            if domain == "practice"
+            else [
+                {"domain": "practice", "collection": "projects"},
+                {"domain": "research", "collection": "papers"},
+            ]
+        ),
+    )
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "recent_materials",
+        lambda limit=10, domain=None: [
+            {
+                "material_id": f"{domain or 'research'}_001",
+                "title": f"{(domain or 'research').title()} Material",
+                "summary": f"{domain or 'research'} summary",
+                "domain": domain or "research",
+                "collection": "projects" if domain == "practice" else "papers",
+                "document_type": "note",
+                "year": "2026",
+            }
+        ],
+    )
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/?domain=practice")
+    assert response.status_code == 200
+    assert 'href="/?domain=practice" class="active"' in response.text
+    assert "Practice Collections" in response.text
+    assert "/wiki/practice/projects" in response.text
+    assert "/wiki/research/papers" not in response.text
+    assert "/wiki/practice/bridge-concepts/practice-beta" in response.text
+    assert "/wiki/research/bridge-concepts/research-alpha" not in response.text
+    assert 'name="domain" type="hidden" value="practice"' in response.text
 
 
 def test_material_route_rewrites_links(tmp_path, monkeypatch):
@@ -176,6 +228,18 @@ def test_wiki_directory_listing_route(tmp_path, monkeypatch):
     assert "/wiki/research/papers/concepts" in response.text
 
 
+def test_wiki_root_scopes_active_domain(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "practice" / "_index.md").write_text("# Practice Wiki\n\nPractice root body.\n", encoding="utf-8")
+    (root / "wiki" / "research" / "_index.md").write_text("# Research Wiki\n\nResearch root body.\n", encoding="utf-8")
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/wiki?domain=practice")
+    assert response.status_code == 200
+    assert "Practice root body." in response.text
+    assert "Research root body." not in response.text
+    assert 'href="/wiki/practice" class="active"' in response.text
+
+
 def test_wiki_material_page_rewrites_figure_links(tmp_path, monkeypatch):
     root = _repo(tmp_path, monkeypatch)
     _write_json(root / "extracted" / "mat_001" / "meta.json", {
@@ -272,6 +336,30 @@ def test_search_route_renders_results(tmp_path, monkeypatch):
     assert "Musee Imaginaire" in response.text
     assert "/materials/mat_001?q=material&amp;depth=3&amp;scope=author" in response.text
     assert "/wiki/research/papers" in response.text
+
+
+def test_search_scopes_active_domain(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    captured = {}
+
+    class Result:
+        query = "material"
+        total = 0
+        collection_pages = []
+        canonical_clusters = []
+        results = []
+
+    def _fake_search(*args, **kwargs):
+        captured["facets"] = kwargs.get("facets")
+        return Result()
+
+    monkeypatch.setattr(serve_mod.search_mod, "search", _fake_search)
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/search?q=material&domain=practice&facet=year%3D%3D2024")
+    assert response.status_code == 200
+    assert captured["facets"] == ["year==2024", "domain==practice"]
+    assert "Practice domain" in response.text
+    assert 'name="domain" type="hidden" value="practice"' in response.text
 
 
 def test_search_route_renders_collection_and_concept_sections(tmp_path, monkeypatch):

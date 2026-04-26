@@ -14,6 +14,19 @@ _CONFIG_ENV_VAR = "ARQUIMEDES_CONFIG"
 _LOCAL_CACHE_ENV_VAR = "ARQUIMEDES_LOCAL_CACHE"
 
 
+def _existing_env_config_path() -> Path | None:
+    """Return `$ARQUIMEDES_CONFIG` when it points at a real file.
+
+    A stale shell export should not block normal cwd-based vault discovery.
+    Commands that need a specific config can still pass it explicitly.
+    """
+    env_config = os.environ.get(_CONFIG_ENV_VAR)
+    if not env_config:
+        return None
+    config_path = Path(env_config).expanduser()
+    return config_path if config_path.exists() else None
+
+
 def _find_project_root() -> Path:
     """Find the project root directory.
 
@@ -32,17 +45,14 @@ def _find_project_root() -> Path:
             f"{_ENV_VAR}={env_root} does not contain config/config.yaml"
         )
 
-    env_config = os.environ.get(_CONFIG_ENV_VAR)
-    if env_config:
-        config_path = Path(env_config).expanduser()
-        if config_path.exists():
-            for ancestor in config_path.parents:
-                if (ancestor / "config" / "config.yaml").exists():
-                    return ancestor
-            if config_path.parent.name == "config":
-                return config_path.parent.parent
-            return config_path.parent
-        raise FileNotFoundError(f"{_CONFIG_ENV_VAR}={env_config} does not exist")
+    config_path = _existing_env_config_path()
+    if config_path is not None:
+        for ancestor in config_path.parents:
+            if (ancestor / "config" / "config.yaml").exists():
+                return ancestor
+        if config_path.parent.name == "config":
+            return config_path.parent.parent
+        return config_path.parent
 
     # 2. Walk up from CWD
     current = Path.cwd()
@@ -86,8 +96,8 @@ def _resolve_config_path(config_path: str | Path) -> Path:
 
 def _config_stack(config_path: str | Path | None = None) -> list[Path]:
     if config_path is None:
-        env_config = os.environ.get(_CONFIG_ENV_VAR)
-        if env_config:
+        env_config = _existing_env_config_path()
+        if env_config is not None:
             config_path = env_config
 
     root = _find_project_root()

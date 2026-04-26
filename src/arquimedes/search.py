@@ -167,6 +167,7 @@ class CollectionPageHit:
 @dataclass
 class GlobalBridgeHit:
     bridge_id: str
+    domain: str
     canonical_name: str
     slug: str
     descriptor: str
@@ -178,6 +179,7 @@ class GlobalBridgeHit:
     def to_dict(self) -> dict:
         d: dict[str, Any] = {
             "bridge_id": self.bridge_id,
+            "domain": self.domain,
             "canonical_name": self.canonical_name,
             "slug": self.slug,
             "material_count": self.material_count,
@@ -1074,7 +1076,7 @@ def _search_global_bridges(
     try:
         rows = con.execute(
             """SELECT gbc.bridge_id, gbc.canonical_name, gbc.slug, gbc.descriptor,
-                      gbc.aliases, gbc.material_count, gbc.wiki_path,
+                      gbc.aliases, gbc.material_count, gbc.wiki_path, gbc.domain,
                       gbc.bridge_takeaways, gbc.bridge_tensions,
                       gbc.bridge_open_questions, gbc.why_this_bridge_matters
                FROM global_bridge_clusters_fts
@@ -1094,6 +1096,7 @@ def _search_global_bridges(
         seen.add(bridge_id)
         hits.append(GlobalBridgeHit(
             bridge_id=bridge_id,
+            domain=row["domain"] or "",
             canonical_name=row["canonical_name"],
             slug=row["slug"] or "",
             descriptor=row["descriptor"] or "",
@@ -1117,7 +1120,7 @@ def _search_global_bridges(
     try:
         rows = con.execute(
             """SELECT bridge_id, canonical_name, slug, descriptor, aliases,
-                      material_count, wiki_path, bridge_takeaways, bridge_tensions,
+                      material_count, wiki_path, domain, bridge_takeaways, bridge_tensions,
                       bridge_open_questions, helpful_new_sources, why_this_bridge_matters
                FROM global_bridge_clusters
                WHERE lower(canonical_name) LIKE lower(?)
@@ -1141,6 +1144,7 @@ def _search_global_bridges(
         seen.add(bridge_id)
         hits.append(GlobalBridgeHit(
             bridge_id=bridge_id,
+            domain=row["domain"] or "",
             canonical_name=row["canonical_name"],
             slug=row["slug"] or "",
             descriptor=row["descriptor"] or "",
@@ -1281,7 +1285,8 @@ def format_human(result: SearchResult) -> str:
         lines.append("Global bridges:")
         for br in result.global_bridges:
             alias_str = f"  (aliases: {', '.join(br.aliases[:3])})" if br.aliases else ""
-            lines.append(f"  • {br.canonical_name}{alias_str}  [{br.material_count} material(s)]")
+            domain_tag = f" [{br.domain}]" if br.domain else ""
+            lines.append(f"  • {br.canonical_name}{domain_tag}{alias_str}  [{br.material_count} material(s)]")
             if br.summary:
                 summary = br.summary[:100] + "…" if len(br.summary) > 100 else br.summary
                 lines.append(f"    {summary}")

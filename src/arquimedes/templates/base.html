@@ -8,8 +8,16 @@
 </head>
 <body>
   <header class="site-header">
-    <a class="brand" href="/">Arquimedes</a>
+    <div class="brand-cluster">
+      <a class="brand" href="{{ '/?domain=' ~ active_domain }}">Arquimedes</a>
+      <nav aria-label="Domain navigation" class="domain-tabs">
+        {% for tab in domain_tabs %}
+        <a href="{{ tab.url }}" {% if tab.active %}class="active"{% endif %}>{{ tab.label }}</a>
+        {% endfor %}
+      </nav>
+    </div>
     <form action="/search" class="nav-search" method="get">
+      <input name="domain" type="hidden" value="{{ active_domain }}">
       <input name="q" placeholder="Search the knowledge base…" autocomplete="off">
     </form>
   </header>
@@ -18,13 +26,13 @@
       {% set _path = request.url.path %}
       <section class="rail-section">
         <h2>Navigation</h2>
-        <a href="/" {% if _path == '/' %}class="active"{% endif %}>Home</a>
-        <a href="/wiki" {% if _path == '/wiki' %}class="active"{% endif %}>Wiki</a>
-        <a href="/search" {% if _path.startswith('/search') %}class="active"{% endif %}>Search</a>
+        <a href="{{ '/?domain=' ~ active_domain }}" {% if _path == '/' %}class="active"{% endif %}>Home</a>
+        <a href="/wiki/{{ active_domain }}" {% if _path == '/wiki' or _path.startswith('/wiki/') %}class="active"{% endif %}>Wiki</a>
+        <a href="{{ '/search?domain=' ~ active_domain }}" {% if _path.startswith('/search') %}class="active"{% endif %}>Search</a>
       </section>
       {% if nav_collections %}
       <section class="rail-section">
-        <h2>Collections</h2>
+        <h2>{{ active_domain_label }} Collections</h2>
         {% for item in nav_collections %}
         {% set _coll_url = wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') %}
         {% set _concepts_url = wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/concepts/_index.md') %}
@@ -39,7 +47,7 @@
       {% endif %}
       {% if nav_global_concepts %}
       <section class="rail-section">
-        <h2>Global Concepts</h2>
+        <h2>{{ active_domain_label }} Bridge Concepts</h2>
         {% for item in nav_global_concepts %}
         <a href="{{ wiki_url(item.path) }}">{{ item.name }}</a>
         {% endfor %}

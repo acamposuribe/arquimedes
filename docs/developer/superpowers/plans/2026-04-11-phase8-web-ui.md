@@ -229,12 +229,14 @@ Link rewrite implementation:
 Route: `GET /search`
 
 - query params: `q`, `depth` (default 2), `facet` (repeatable), `collection`, `limit`
+- supports `domain` as a first-class browse parameter and injects the matching `domain==...` facet for top-level search
 - calls `search.search()` with matching params
 - renders material cards with title, summary, domain, collection, year, keywords
 - at depth ≥ 2: shows chunk summaries, annotation highlights, figure thumbnails, concept hits
 - renders canonical cluster hits as a separate section
 - empty query shows the search form only
 - missing index shows a helpful error
+- preserves active-domain tab state in header/search controls
 
 The material card partial (`partials/material_card.html`) is reused on the home page and search page.
 
@@ -268,8 +270,9 @@ Routes:
 
 - `GET /` — home page:
   - freshness banner placeholder (populated by JS)
-  - recent materials (from `read.recent_materials()`)
-  - domain/collection navigation (from `read.list_domains_and_collections()`)
+  - high-level `Research` / `Practice` tabs beside the Arquimedes title
+  - recent materials for the active domain (from `read.recent_materials(domain=...)`)
+  - active-domain collection navigation (from `read.list_domains_and_collections(domain=...)`)
   - quick search form
   - if no index exists: show setup instructions instead
 - `GET /wiki` — wiki root, delegates to `GET /wiki/`
@@ -278,6 +281,7 @@ Routes:
   - if path resolves to a directory with `_index.md`: render that page
   - if path resolves to a directory without `_index.md`: render directory listing with `wiki_dir.html`
   - breadcrumbs in all cases
+  - keep the matching domain tab active from path inference or explicit selection
   - 404 for non-existent paths
 
 ### W8.7 — CLI wiring + static assets + polish
@@ -299,7 +303,7 @@ CLI:
 
 Static assets:
 
-- `style.css`: classless base typography + layout for nav, search, figures grid, freshness banner, breadcrumbs, material cards
+- `style.css`: classless base typography + layout for nav, search, figures grid, freshness banner, breadcrumbs, material cards, and domain tabs
 - `app.js`: async freshness check on load, update button handler
 
 Do not implement `arq read` / `arq figures` in this phase.
@@ -316,8 +320,10 @@ Required coverage:
 |---|---|
 | `test_health_endpoint` | `/health` returns 200 |
 | `test_home_page_renders` | `/` returns HTML with expected sections |
+| `test_home_page_scopes_domain_navigation` | active domain tab filters home collections/global concepts |
 | `test_home_page_no_index` | `/` degrades gracefully when no SQLite index |
 | `test_search_renders_results` | `/search?q=...` renders material cards |
+| `test_search_scopes_active_domain` | `/search?domain=...` injects the matching domain facet |
 | `test_search_empty_query` | `/search` with no `q` shows form only |
 | `test_material_page_renders` | `/materials/{id}` renders compiled wiki content |
 | `test_material_page_404` | `/materials/nonexistent` returns 404 |
@@ -326,6 +332,7 @@ Required coverage:
 | `test_figure_image_rejects_traversal` | `/figures/{id}/../../etc/passwd` returns 404 |
 | `test_source_streams_file` | `/source/{id}` serves the original file |
 | `test_wiki_page_renders` | `/wiki/research/Archives/_index` renders HTML |
+| `test_wiki_root_scopes_active_domain` | `/wiki?domain=practice` opens the practice wiki root/listing |
 | `test_wiki_links_rewritten` | rendered HTML has `/wiki/...` links, not `.md` links |
 | `test_update_endpoint` | `POST /update` returns structured status |
 | `test_freshness_endpoint` | `GET /api/freshness` returns JSON |
@@ -370,6 +377,7 @@ W8.1 and W8.2 are parallelizable. W8.4–W8.6 are independent route implementati
 - [x] left rail now expands with listed global concepts and the shell uses full window width
 - [x] bridge concept pages flatten contributing local clusters into clean rendered lists
 - [x] bridge concept links now rebuild correctly from the current global bridge cluster artifact
+- [ ] split the web UI into first-class `Research` / `Practice` browse modes with header tabs and domain-scoped rail/search/home views
 - [ ] broaden tests against more real-world wiki/index cases
 - [ ] manual browser pass and refinement cleanup
 
@@ -388,5 +396,6 @@ W8.1 and W8.2 are parallelizable. W8.4–W8.6 are independent route implementati
 - [x] the update path runs `ensure_index_and_memory()`
 - [x] missing index/data states degrade gracefully (helpful messages, not crashes)
 - [x] path traversal is rejected on all file-serving routes
+- [ ] top-level `Research` / `Practice` tabs keep the UI clearly domain-scoped
 - [x] all tests pass
 - [x] Phase 8 does not require Phase 7 MCP work to be useful

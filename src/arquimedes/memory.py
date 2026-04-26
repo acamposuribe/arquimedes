@@ -36,9 +36,10 @@ def _concept_wiki_path(slug: str) -> str:
     return f"wiki/shared/concepts/{slug}.md"
 
 
-def _bridge_concept_wiki_path(slug: str) -> str:
-    """wiki/shared/bridge-concepts/{slug}.md"""
-    return f"wiki/shared/bridge-concepts/{slug}.md"
+def _bridge_concept_wiki_path(domain: str, slug: str) -> str:
+    """wiki/{domain}/bridge-concepts/{slug}.md"""
+    d = (domain or "practice").strip() or "practice"
+    return f"wiki/{d}/bridge-concepts/{slug}.md"
 
 
 def _local_concept_wiki_path(domain: str, collection: str, slug: str) -> str:
@@ -78,6 +79,7 @@ CREATE TABLE IF NOT EXISTS global_bridge_members (
 
 CREATE TABLE IF NOT EXISTS global_bridge_clusters (
     bridge_id               TEXT PRIMARY KEY,
+    domain                  TEXT NOT NULL DEFAULT '',
     canonical_name          TEXT NOT NULL DEFAULT '',
     slug                    TEXT NOT NULL DEFAULT '',
     descriptor              TEXT NOT NULL DEFAULT '',
@@ -229,6 +231,7 @@ CREATE TABLE IF NOT EXISTS memory_bridge_state (
 """
 
 _BRIDGE_COLUMNS: list[tuple[str, str]] = [
+    ("global_bridge_clusters", "ALTER TABLE global_bridge_clusters ADD COLUMN domain TEXT NOT NULL DEFAULT ''"),
     ("concept_reflections", "ALTER TABLE concept_reflections ADD COLUMN helpful_new_sources TEXT NOT NULL DEFAULT '[]'"),
     ("collection_reflections", "ALTER TABLE collection_reflections ADD COLUMN helpful_new_sources TEXT NOT NULL DEFAULT '[]'"),
     ("collection_reflections", "ALTER TABLE collection_reflections ADD COLUMN why_this_collection_matters TEXT NOT NULL DEFAULT ''"),
@@ -322,7 +325,9 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
 
         material_count = len(unique_mids)
         wiki_path = c.get("wiki_path") or (
-            _bridge_concept_wiki_path(slug) if material_count > 1 else _concept_wiki_path(slug)
+            _bridge_concept_wiki_path(str(c.get("domain", "")).strip(), slug)
+            if material_count > 1
+            else _concept_wiki_path(slug)
         )
 
         # Concept wiki page only for bridge clusters (more than one material).
@@ -331,7 +336,14 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
                 """INSERT OR REPLACE INTO wiki_pages
                    (page_type, page_id, title, path, domain, collection)
                    VALUES (?,?,?,?,?,?)""",
-                ("concept", cluster_id, canonical_name, wiki_path, "shared", "bridge-concepts"),
+                (
+                    "concept",
+                    cluster_id,
+                    canonical_name,
+                    wiki_path,
+                    str(c.get("domain", "")).strip() or "shared",
+                    "bridge-concepts",
+                ),
             )
             n_concept_pages += 1
 
@@ -374,12 +386,13 @@ def _build_bridge(con: sqlite3.Connection, clusters: list[dict], local_clusters:
             why_this_bridge_matters = str(c.get("why_this_bridge_matters", "")).strip()
             con.execute(
                 """INSERT OR REPLACE INTO global_bridge_clusters
-                   (bridge_id, canonical_name, slug, descriptor, aliases, confidence,
+                   (bridge_id, domain, canonical_name, slug, descriptor, aliases, confidence,
                     wiki_path, material_count, bridge_takeaways, bridge_tensions,
                     bridge_open_questions, helpful_new_sources, why_this_bridge_matters)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     bridge_id,
+                    str(c.get("domain", "")).strip(),
                     canonical_name,
                     slug,
                     descriptor,
@@ -681,7 +694,9 @@ def _fingerprint_file(path: Path) -> str:
 
 
 def _cluster_fingerprint(root: Path) -> str:
-    global_bridge_path = root / "derived" / "global_bridge_clusters.jsonl"
+    from arquimedes.lint_global_bridge import global_bridge_artifact_paths
+
+    global_bridge_paths = global_bridge_artifact_paths(root)
     local_paths = sorted((root / "derived" / "collections").glob("*/local_concept_clusters.jsonl"))
     lint_dir = root / "derived" / "lint"
     lint_paths = [
@@ -690,13 +705,13 @@ def _cluster_fingerprint(root: Path) -> str:
         lint_dir / "collection_reflections.jsonl",
         lint_dir / "graph_findings.jsonl",
     ]
-    if not global_bridge_path.exists() and not local_paths and not any(path.exists() for path in lint_paths):
+    if not global_bridge_paths and not local_paths and not any(path.exists() for path in lint_paths):
         return ""
     hasher = hashlib.sha256()
     for path in local_paths:
         hasher.update(path.read_bytes())
-    if global_bridge_path.exists():
-        hasher.update(global_bridge_path.read_bytes())
+    for path in global_bridge_paths:
+        hasher.update(path.read_bytes())
     for path in lint_paths:
         if path.exists():
             hasher.update(path.read_bytes())
@@ -792,8 +807,10 @@ def memory_rebuild(config: dict | None = None) -> dict:
     root = get_project_root()
     index_path = get_index_path(config)
     manifest_path = root / "manifests" / "materials.jsonl"
+    from arquimedes.lint_global_bridge import global_bridge_artifact_paths, load_global_bridge_clusters
+
     cluster_paths = [
-        root / "derived" / "global_bridge_clusters.jsonl",
+        *global_bridge_artifact_paths(root),
         *sorted((root / "derived" / "collections").glob("*/local_concept_clusters.jsonl")),
     ]
 
@@ -802,12 +819,9 @@ def memory_rebuild(config: dict | None = None) -> dict:
             f"Search index not found at {index_path}. Run `arq index rebuild` first."
         )
     if not any(path.exists() for path in cluster_paths):
-        raise FileNotFoundError(
-            f"Cluster file not found at {cluster_paths[0]}. Run `arq cluster` first."
-        )
+        raise FileNotFoundError("Cluster files not found. Run `arq cluster` first.")
 
     from arquimedes.cluster import load_local_clusters
-    from arquimedes.lint_global_bridge import load_global_bridge_clusters
 
     local_clusters = load_local_clusters(root)
     clusters = load_global_bridge_clusters(root)

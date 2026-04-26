@@ -139,6 +139,7 @@ from arquimedes.lint_global_bridge import (
     _global_bridge_artifact_path,
     _global_bridge_due,
     _global_bridge_stamp_path,
+    global_bridge_stamp_paths,
     load_global_bridge_clusters,
 )
 
@@ -2009,10 +2010,20 @@ def _current_clustered_at(root: Path) -> str:
     local_clustered_at = _latest_local_clustered_at(root)
     if local_clustered_at:
         return local_clustered_at
-    stamp = _read_stamp(_global_bridge_stamp_path(root))
-    if not stamp:
-        return ""
-    return str(stamp.get("bridged_at", "") or stamp.get("clustered_at", "") or "")
+    bridge_times = []
+    for path in global_bridge_stamp_paths(root):
+        stamp = _read_stamp(path)
+        if not stamp:
+            continue
+        value = str(stamp.get("bridged_at", "") or stamp.get("clustered_at", "") or "")
+        if value:
+            bridge_times.append(value)
+    if not bridge_times:
+        stamp = _read_stamp(_global_bridge_stamp_path(root))
+        if not stamp:
+            return ""
+        return str(stamp.get("bridged_at", "") or stamp.get("clustered_at", "") or "")
+    return max(bridge_times)
 
 
 def _lint_stage_stamp(root: Path) -> dict:

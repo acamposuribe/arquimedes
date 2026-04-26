@@ -88,18 +88,23 @@ It owns:
 - collection reflection
 - material-to-home-concept relationships
 
-### Layer 2 — Global Bridge Graph
+### Layer 2 — Domain Bridge Graph
 
-The global bridge graph is the cross-collection integration layer.
+The bridge graph is the cross-collection integration layer **within one domain**.
 
-Its scope spans the whole corpus, but its inputs are **not** raw material-level concept candidates. Its inputs are compact outputs from the local collection graph.
+Each domain owns its own bridge graph. Research and Practice do not bridge into
+the same Step 2 graph.
+
+Its scope spans all collections inside one domain, but its inputs are **not**
+raw material-level concept candidates. Its inputs are compact outputs from the
+local collection graph.
 
 It owns:
 
-- cross-collection bridge concepts
-- bridge audit across collections
+- cross-collection bridge concepts inside one domain
+- bridge audit across collections inside one domain
 - bridge pages
-- graph-level cross-collection synthesis
+- graph-level synthesis within one domain
 
 ## Semantic Units
 
@@ -143,21 +148,24 @@ Suggested page path:
 
 - `wiki/<domain>/<collection>/concepts/<slug>.md`
 
-### Global bridge cluster
+### Domain bridge cluster
 
-This becomes the cross-collection concept layer.
+This becomes the cross-collection concept layer inside one domain.
 
-A global bridge cluster should connect two or more local collection clusters that express the same broader conceptual territory across collection boundaries.
+A domain bridge cluster should connect two or more local collection clusters
+from the same domain that express the same broader conceptual territory across
+collection boundaries.
 
 The atomic members of a global bridge are collection-local clusters only. Raw material-level concepts do not participate directly in Step 2 bridging.
 
 Suggested artifact:
 
-- `derived/global_bridge_clusters.jsonl`
+- `derived/domains/<domain>/global_bridge_clusters.jsonl`
 
 Suggested record fields:
 
 - `bridge_id`
+- `domain`
 - `canonical_name`
 - `slug`
 - `descriptor`
@@ -174,11 +182,15 @@ Suggested record fields:
 - `confidence`
 - `wiki_path`
 
-The bridge layer should be the place where cross-collection synthesis becomes visible. Collection reflections may still nominate important local materials and local clusters, but shared takeaways, tensions, and bridge-level open questions should be materialized on the global bridge rows/pages rather than being left implicit in collection-local prose.
+The bridge layer should be the place where cross-collection synthesis becomes
+visible inside one domain. Collection reflections may still nominate important
+local materials and local clusters, but shared takeaways, tensions, and
+bridge-level open questions should be materialized on the bridge rows/pages
+rather than being left implicit in collection-local prose.
 
 Suggested page path:
 
-- `wiki/shared/bridge-concepts/<slug>.md`
+- `wiki/<domain>/bridge-concepts/<slug>.md`
 
 ## Ownership Rules
 
@@ -192,17 +204,18 @@ That means:
 - collection pages should summarize local clusters first
 - local cluster audit should judge concept quality inside the collection
 
-### Global ownership
+### Bridge ownership
 
-The global bridge graph does not replace local homes.
+The domain bridge graph does not replace local homes.
 
-Its job is to explain cross-collection connection and synthesis.
+Its job is to explain cross-collection connection and synthesis inside one
+domain.
 
 That means:
 
 - bridge pages should cite contributing local cluster pages
 - bridge membership should be explainable in terms of local-cluster evidence
-- the global graph should not own all semantic identity by default
+- the domain bridge graph should not own all semantic identity by default
 
 ## Step 1 — Local Collection Graph
 
@@ -355,6 +368,32 @@ Until Step 2 exists, cross-collection connection may still rely on:
 
 Step 1 is intentionally collection-first before it is fully bridge-rich again.
 
+### Legacy shared-bridge migration
+
+When upgrading a pre-domain-scope vault that still has:
+
+- `derived/global_bridge_clusters.jsonl`
+- `derived/global_bridge_stamp.json`
+- `wiki/shared/bridge-concepts/*.md`
+
+the migration into per-domain bridge publication should be **explicit and operator-run**, not an implicit side effect of `compile`, `lint`, or `serve`.
+
+The migration contract is:
+
+- provide a deterministic CLI migrator: `arq migrate-global-bridges`
+- dry-run by default; write only on explicit `--apply`
+- backup every file it overwrites before applying changes
+- migrate only bridges whose member local clusters can be proven to belong to exactly one domain
+- refuse `--apply` when any bridge is ambiguous or mixed-domain
+- rewrite migrated bridge ids to the canonical domain-prefixed shape: `global_bridge__<domain>__<slug>`
+- write migrated bridge artifacts to `derived/domains/<domain>/global_bridge_clusters.jsonl`
+- write migrated bridge stamps to `derived/domains/<domain>/global_bridge_stamp.json`
+- copy legacy bridge pages into `wiki/<domain>/bridge-concepts/*.md`
+- rewrite `wiki/shared/glossary/_index.md` links from legacy shared bridge paths to the new domain-specific bridge paths
+- leave legacy shared bridge files in place as compatibility/backups until a later cleanup step
+
+This migrator is a structural rehoming tool, not a semantic recomputation pass. It must not call the LLM or reinterpret bridge membership.
+
 ## Step 2 — Global Bridge Graph
 
 Step 2 reintroduces large-scale conceptual connection as its own layer.
@@ -371,7 +410,17 @@ The intended Step 2 execution slice runs as:
 
 `cluster -> lint(global-bridge) -> compile -> memory rebuild`
 
-That stage should write `derived/global_bridge_clusters.jsonl` and `derived/global_bridge_stamp.json` by running an incremental LLM clustering pass over collection-local clusters plus compact hosting-collection context, with existing global bridges provided as memory. That memory should include the connected local-cluster reflections and collection signals needed to support substantial cross-collection bridge synthesis. It should only run when at least two collections are present in the repository; with fewer than two collections, the stage should skip. A dedicated `bridge-global` command can still be added later once compile, memory, and search consume this layer directly.
+That stage should write one artifact set per domain, for example
+`derived/domains/research/global_bridge_clusters.jsonl` and
+`derived/domains/research/global_bridge_stamp.json`, by running an
+incremental LLM clustering pass over collection-local clusters plus compact
+hosting-collection context, with existing same-domain bridges provided as
+memory. That memory should include the connected local-cluster reflections and
+collection signals needed to support substantial cross-collection synthesis
+inside the domain. The pass should run independently per domain and skip any
+domain that has fewer than two collections in scope. A dedicated
+`bridge-global` command can still be added later once compile, memory, and
+search consume this layer directly.
 
 Global bridge reflection should be part of this same Step 2 clustering pass. The bridge-clustering output should already include bridge takeaways, tensions, open questions, helpful new sources, and why the bridge matters, so a separate bridge concept-reflection pass is not needed. `why_this_bridge_matters` should be written as the main prose body of the bridge page rather than a short caption.
 
@@ -384,21 +433,31 @@ Current implemented entrypoint:
 
 No standalone `arq bridge-global` command is currently required.
 
-The Step 2 bridge layer is owned by lint because it depends on collection-local semantic outputs, collection reflection state, and existing global bridge memory rather than on the collection-local clustering command itself.
+The Step 2 bridge layer is owned by lint because it depends on
+collection-local semantic outputs, collection reflection state, and existing
+same-domain bridge memory rather than on the collection-local clustering
+command itself.
 
 Long-term, `arq cluster` may still orchestrate stale local clustering followed by stale global bridging indirectly, but that does not require a separate public bridge command.
 
 ### Bridge inputs
 
-The global bridge graph should consume collection-local clusters, not raw material-level candidates.
+The domain bridge graph should consume collection-local clusters, not raw
+material-level candidates.
 
 Required inputs for the Step 2 LLM pass:
 
 - pending collection-local clusters: canonical names, descriptors, aliases, hosting collection, and local-cluster reflection fields
 - compact hosting-collection context: collection title, main takeaways, main tensions, and why the collection matters
-- existing global bridge memory: current bridge canonicals, descriptors, aliases, member local clusters with their connected local-cluster reflections, supporting collection signals, and a compact subset of bridge synthesis fields needed for continuity rather than the full stored bridge row
+- existing same-domain bridge memory: current bridge canonicals, descriptors,
+  aliases, member local clusters with their connected local-cluster
+  reflections, supporting collection signals, and a compact subset of bridge
+  synthesis fields needed for continuity rather than the full stored bridge row
 
-Incrementality should work exactly like current clustering: only changed or newly eligible collection-local clusters enter the packet, and the LLM either links them to existing global bridges or creates new global bridges.
+Incrementality should work exactly like current clustering: only changed or
+newly eligible collection-local clusters enter the domain packet, and the LLM
+either links them to existing same-domain bridges or creates new same-domain
+bridges.
 
 ### Exact Step 2 input packet
 
@@ -523,26 +582,29 @@ Rules:
 
 The prompt should stay close to the current clustering prompt, but the target concept should be different.
 
-Instead of asking for cross-material umbrella clusters, Step 2 should ask for broad global bridge concepts that surface:
+Instead of asking for cross-material umbrella clusters, Step 2 should ask for
+broad domain bridge concepts that surface:
 
 - the main perspectives that organize multiple collection clusters
-- the main positions or debates that recur across the knowledge system
-- the main learnings or syntheses that should become first-class global bridge pages
+- the main positions or debates that recur across the domain
+- the main learnings or syntheses that should become first-class domain bridge pages
 
 The prompt should explicitly say:
 
-- you are grouping collection-local clusters into broader global bridge concepts
+- you are grouping collection-local clusters into broader same-domain bridge concepts
 - prefer bridges that connect multiple collections when the conceptual relation is real
-- it is acceptable to create a within-collection global bridge only when it synthesizes at least three local clusters into a meaningfully broader learning
+- it is acceptable to create a within-collection domain bridge only when it synthesizes at least three local clusters into a meaningfully broader learning
 - do not rely on name similarity alone; use descriptors, local-cluster reflections, and collection context to judge semantic fit
-- bridge canonicals should be broad, analytically meaningful, and useful as shared conceptual pages across the knowledge system
+- never bridge local clusters across domain boundaries
+- bridge canonicals should be broad, analytically meaningful, and useful as shared conceptual pages across one domain
 - the bridge output must already include bridge takeaways, tensions, open questions, suggested new sources, and why the bridge matters
 
 If graph maintenance is retained in Step 2, it should not consume collection-local audit threads directly. It should sit above the local graph and consume only collection reflections plus global bridge rows/pages, acting as a minimal global backlog rather than a second pass over local cluster quality.
 
 ### Membership thresholds
 
-Global bridges do not need to be cross-collection in every case, but cross-collection bridges are preferred.
+Domain bridges do not need to be cross-collection in every case, but
+cross-collection bridges are preferred.
 
 Creation thresholds:
 
@@ -551,8 +613,9 @@ Creation thresholds:
 
 ### Step 2 invariants
 
-- a global bridge cluster stores collection-local cluster members only
-- cross-collection bridges are preferred, but a strong within-collection synthesis may still become a global bridge if it generalizes at least three local clusters
+- a domain bridge cluster stores collection-local cluster members only
+- all member local clusters in one bridge must share the same domain
+- cross-collection bridges are preferred, but a strong within-collection synthesis may still become a domain bridge if it generalizes at least three local clusters
 - bridge pages should cite local clusters, not only raw materials
 - bridge audit should judge cross-collection coherence, not collection-internal quality
 
@@ -566,7 +629,9 @@ Step 1 should add:
 
 These pages are the semantic homes for materials in that collection.
 
-When Step 2 global bridges exist, local cluster pages should backlink to the shared bridge pages they participate in, so readers can move from a local home into the cross-collection bridge layer without losing scope.
+When Step 2 domain bridges exist, local cluster pages should backlink to the
+domain bridge pages they participate in, so readers can move from a local home
+into the cross-collection bridge layer without losing scope.
 
 ### Collection pages
 
@@ -580,13 +645,14 @@ They should render:
 - recent additions
 - collection reflection, including `main_takeaways`, `main_tensions`, `open_questions`, `helpful_new_sources`, and `why_this_collection_matters`
 
-### Global bridge pages
+### Domain bridge pages
 
 Step 2 should keep:
 
-- `wiki/shared/bridge-concepts/<slug>.md`
+- `wiki/<domain>/bridge-concepts/<slug>.md`
 
-But these pages should clearly act as cross-collection bridges rather than the default home for all canonical meaning.
+But these pages should clearly act as cross-collection bridges inside one
+domain rather than the default home for all canonical meaning.
 
 In the current implementation slice, bridge pages are compiled from `member_local_clusters[]` and render contributing local cluster pages as first-class members, rather than flattening the bridge back into raw material-level source concepts.
 

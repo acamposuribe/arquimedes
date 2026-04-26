@@ -3164,16 +3164,16 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
         ],
     )
     _write_jsonl(
-        root / "derived" / "collections" / "practice__projects" / "local_concept_clusters.jsonl",
+        root / "derived" / "collections" / "research__projects" / "local_concept_clusters.jsonl",
         [
             {
-                "cluster_id": "practice__projects__local_0001",
-                "domain": "practice",
+                "cluster_id": "research__projects__local_0001",
+                "domain": "research",
                 "collection": "projects",
                 "canonical_name": "Archive and Space",
                 "slug": "archive-and-space",
                 "aliases": ["Archive Spatial Memory"],
-                "descriptor": "Archive as a design memory scaffold.",
+                "descriptor": "Archive as a project-scale spatial memory scaffold.",
                 "material_ids": ["mat_010"],
                 "source_concepts": [{"material_id": "mat_010", "concept_name": "archive and space"}],
                 "confidence": 0.61,
@@ -3194,19 +3194,19 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
                 "open_questions": ["Which design archives should be compared next?"],
                 "why_this_collection_matters": "Papers define the theoretical archive frame.",
             },
-            {
-                "collection_key": "practice/projects",
-                "domain": "practice",
-                "collection": "projects",
-                "important_material_ids": [],
-                "important_cluster_ids": ["practice__projects__local_0001"],
-                "main_takeaways": ["Archive thinking recurs across projects."],
-                "main_tensions": [],
-                "open_questions": [],
-                "why_this_collection_matters": "Projects keep returning to archive as a spatial system.",
-            }
-        ],
-    )
+                {
+                    "collection_key": "research/projects",
+                    "domain": "research",
+                    "collection": "projects",
+                    "important_material_ids": [],
+                    "important_cluster_ids": ["research__projects__local_0001"],
+                    "main_takeaways": ["Archive thinking recurs across projects."],
+                    "main_tensions": [],
+                    "open_questions": [],
+                    "why_this_collection_matters": "Projects keep returning to archive as a research-scale spatial system.",
+                }
+            ],
+        )
 
     _write_jsonl(
         root / "derived" / "lint" / "concept_reflections.jsonl",
@@ -3220,12 +3220,12 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
                 "why_this_concept_matters": "It anchors the research side.",
             },
             {
-                "cluster_id": "practice__projects__local_0001",
-                "main_takeaways": ["Archive acts as design memory."],
-                "main_tensions": ["Memory vs delivery."],
-                "open_questions": ["How should design archives be maintained?"],
-                "helpful_new_sources": ["practice case studies"],
-                "why_this_concept_matters": "It grounds archive thinking in projects.",
+                "cluster_id": "research__projects__local_0001",
+                "main_takeaways": ["Archive acts as a project memory."],
+                "main_tensions": ["Memory vs execution."],
+                "open_questions": ["How should archive-driven projects be documented?"],
+                "helpful_new_sources": ["project archive case studies"],
+                "why_this_concept_matters": "It grounds archive thinking in a second research collection.",
             },
         ],
     )
@@ -3239,17 +3239,17 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
                     "new_clusters": [
                         {
                             "canonical_name": "Archive and Space",
-                            "descriptor": "A global bridge connecting archive theory and design-memory practice.",
+                            "descriptor": "A domain bridge connecting archive theory and project-scale memory work.",
                             "aliases": ["Archive as Spatial Framework"],
                             "member_local_clusters": [
                                 {"cluster_id": "research__papers__local_0001"},
-                                {"cluster_id": "practice__projects__local_0001"},
+                                {"cluster_id": "research__projects__local_0001"},
                             ],
-                            "bridge_takeaways": ["Archive thinking recurs across research and practice."],
-                            "bridge_tensions": ["Theory and practice frame archival space differently."],
+                            "bridge_takeaways": ["Archive thinking recurs across research collections."],
+                            "bridge_tensions": ["Theory and project method frame archival space differently."],
                             "bridge_open_questions": ["Which other collections should join this bridge?"],
-                            "helpful_new_sources": ["comparative archive design case studies"],
-                            "why_this_bridge_matters": "It turns archive into a shared cross-system perspective.",
+                            "helpful_new_sources": ["comparative archive project case studies"],
+                            "why_this_bridge_matters": "It turns archive into a shared research-domain perspective.",
                         }
                     ],
                     "_finished": True,
@@ -3267,7 +3267,7 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
 
     bridge_rows = [
         json.loads(line)
-        for line in (root / "derived" / "global_bridge_clusters.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
 
@@ -3275,19 +3275,23 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
     assert result["global_bridge_skipped"] is False
     assert len(bridge_rows) == 1
     assert bridge_rows[0]["canonical_name"] == "Archive and Space"
-    assert bridge_rows[0]["domain_collection_keys"] == ["practice/projects", "research/papers"]
-    assert bridge_rows[0]["bridge_takeaways"] == ["Archive thinking recurs across research and practice."]
-    assert bridge_rows[0]["bridge_tensions"] == ["Theory and practice frame archival space differently."]
+    assert bridge_rows[0]["domain"] == "research"
+    assert bridge_rows[0]["domain_collection_keys"] == ["research/papers", "research/projects"]
+    assert bridge_rows[0]["bridge_takeaways"] == ["Archive thinking recurs across research collections."]
+    assert bridge_rows[0]["bridge_tensions"] == ["Theory and project method frame archival space differently."]
     assert bridge_rows[0]["bridge_open_questions"] == ["Which other collections should join this bridge?"]
-    assert bridge_rows[0]["helpful_new_sources"] == ["comparative archive design case studies"]
-    assert bridge_rows[0]["why_this_bridge_matters"] == "It turns archive into a shared cross-system perspective."
-    assert bridge_rows[0]["supporting_collection_reflections"][0]["collection_key"] == "practice/projects"
-    assert {member["cluster_id"] for member in bridge_rows[0]["member_local_clusters"]} == {
-        "practice__projects__local_0001",
-        "research__papers__local_0001",
+    assert bridge_rows[0]["helpful_new_sources"] == ["comparative archive project case studies"]
+    assert bridge_rows[0]["why_this_bridge_matters"] == "It turns archive into a shared research-domain perspective."
+    assert {row["collection_key"] for row in bridge_rows[0]["supporting_collection_reflections"]} == {
+        "research/papers",
+        "research/projects",
     }
-    assert bridge_rows[0]["bridge_id"] == "global_bridge__archive-and-space"
-    assert (root / "derived" / "global_bridge_stamp.json").exists()
+    assert {member["cluster_id"] for member in bridge_rows[0]["member_local_clusters"]} == {
+        "research__papers__local_0001",
+        "research__projects__local_0001",
+    }
+    assert bridge_rows[0]["bridge_id"] == "global_bridge__research__archive-and-space"
+    assert (root / "derived" / "domains" / "research" / "global_bridge_stamp.json").exists()
 
     due, reason = _global_bridge_due(
         root,
@@ -3295,7 +3299,7 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
         lint_mod._load_jsonl(root / "derived" / "lint" / "collection_reflections.jsonl"),
     )
     assert due is False
-    assert reason == "global bridge unchanged"
+    assert reason == "research: global bridge unchanged"
 
 
 def test_global_bridge_memory_snapshot_includes_connected_cluster_reflections():
@@ -3366,11 +3370,12 @@ def test_global_bridge_memory_snapshot_includes_connected_cluster_reflections():
 def test_global_bridge_prompt_requests_page_worthy_bridge_essay():
     from arquimedes.lint_global_bridge import _global_bridge_prompt
 
-    system, user = _global_bridge_prompt(Path("packet.json"), Path("memory.json"))
+    system, user = _global_bridge_prompt(Path("packet.json"), Path("memory.json"), "research")
 
     assert "grounded mini-essay" in system
     assert "2 to 4 paragraphs" in system
     assert "full connected local-cluster reflections and collection signals" in system
+    assert "inside the Research domain" in system
     assert "page-worthy bridge synthesis" in user
 
 
@@ -3425,8 +3430,8 @@ def test_run_reflective_lint_global_bridge_stage_skips_with_fewer_than_two_colle
 
     assert result["global_bridges"] == 0
     assert result["global_bridge_skipped"] is True
-    assert result["global_bridge_skip_reason"] == "fewer than 2 collections"
-    assert not (root / "derived" / "global_bridge_clusters.jsonl").exists()
+    assert result["global_bridge_skip_reason"] == "research: fewer than 2 collections"
+    assert not (root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl").exists()
 
 
 def test_global_bridge_due_tracks_only_new_local_clusters(tmp_path, monkeypatch):
@@ -3452,13 +3457,13 @@ def test_global_bridge_due_tracks_only_new_local_clusters(tmp_path, monkeypatch)
             "confidence": 0.92,
         },
         {
-            "cluster_id": "practice__projects__local_0001",
-            "domain": "practice",
+            "cluster_id": "research__projects__local_0001",
+            "domain": "research",
             "collection": "projects",
             "canonical_name": "Archive and Space",
             "slug": "archive-and-space",
             "aliases": ["Archive Spatial Memory"],
-            "descriptor": "Archive as a design memory scaffold.",
+            "descriptor": "Archive as a project-scale spatial memory scaffold.",
             "material_ids": ["mat_010"],
             "source_concepts": [{"material_id": "mat_010", "concept_name": "archive and space"}],
             "confidence": 0.61,
@@ -3475,13 +3480,13 @@ def test_global_bridge_due_tracks_only_new_local_clusters(tmp_path, monkeypatch)
             "why_this_collection_matters": "Papers define the theoretical archive frame.",
         },
         {
-            "collection_key": "practice/projects",
-            "domain": "practice",
+            "collection_key": "research/projects",
+            "domain": "research",
             "collection": "projects",
             "main_takeaways": ["Archive thinking recurs across projects."],
             "main_tensions": [],
             "open_questions": [],
-            "why_this_collection_matters": "Projects keep returning to archive as a spatial system.",
+            "why_this_collection_matters": "Projects keep returning to archive as a research-scale spatial system.",
         },
     ]
 
@@ -3497,24 +3502,25 @@ def test_global_bridge_due_tracks_only_new_local_clusters(tmp_path, monkeypatch)
                 "why_this_concept_matters": "It anchors the research side.",
             },
             {
-                "cluster_id": "practice__projects__local_0001",
-                "main_takeaways": ["Archive acts as design memory."],
-                "main_tensions": ["Memory vs delivery."],
-                "open_questions": ["How should design archives be maintained?"],
-                "helpful_new_sources": ["practice case studies"],
-                "why_this_concept_matters": "It grounds archive thinking in projects.",
+                "cluster_id": "research__projects__local_0001",
+                "main_takeaways": ["Archive acts as a project memory."],
+                "main_tensions": ["Memory vs execution."],
+                "open_questions": ["How should archive-driven projects be documented?"],
+                "helpful_new_sources": ["project archive case studies"],
+                "why_this_concept_matters": "It grounds archive thinking in a second research collection.",
             },
         ],
     )
 
     _write_jsonl(
-        root / "derived" / "global_bridge_clusters.jsonl",
+        root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl",
         [
             {
-                "bridge_id": "global_bridge__archive-and-space",
+                "bridge_id": "global_bridge__research__archive-and-space",
+                "domain": "research",
                 "canonical_name": "Archive and Space",
                 "slug": "archive-and-space",
-                "descriptor": "A global bridge connecting archive theory and practice.",
+                "descriptor": "A domain bridge connecting archive theory and project work.",
                 "aliases": ["Archive as Spatial Framework"],
                 "member_local_clusters": [
                     {
@@ -3525,23 +3531,23 @@ def test_global_bridge_due_tracks_only_new_local_clusters(tmp_path, monkeypatch)
                         "canonical_name": "Archive and Space",
                     },
                     {
-                        "cluster_id": "practice__projects__local_0001",
-                        "domain": "practice",
+                        "cluster_id": "research__projects__local_0001",
+                        "domain": "research",
                         "collection": "projects",
-                        "collection_key": "practice/projects",
+                        "collection_key": "research/projects",
                         "canonical_name": "Archive and Space",
                     },
                 ],
-                "bridge_takeaways": ["Archive thinking recurs across research and practice."],
+                "bridge_takeaways": ["Archive thinking recurs across research collections."],
                 "bridge_open_questions": ["Which other collections should join this bridge?"],
-                "why_this_bridge_matters": "It turns archive into a shared cross-system perspective.",
+                "why_this_bridge_matters": "It turns archive into a shared research-domain perspective.",
                 "supporting_material_ids": ["mat_001", "mat_002", "mat_010"],
             }
         ],
     )
     initial_bundle = _global_bridge_inputs(root, local_clusters, collection_refs)
     _write_json(
-        root / "derived" / "global_bridge_stamp.json",
+        root / "derived" / "domains" / "research" / "global_bridge_stamp.json",
         {
             "input_fingerprint": "bootstrap",
             "local_cluster_fingerprints": initial_bundle["local_cluster_fingerprints"],
@@ -3550,7 +3556,7 @@ def test_global_bridge_due_tracks_only_new_local_clusters(tmp_path, monkeypatch)
     )
     bundle = _global_bridge_inputs(root, local_clusters, collection_refs)
     _write_json(
-        root / "derived" / "global_bridge_stamp.json",
+        root / "derived" / "domains" / "research" / "global_bridge_stamp.json",
         {
             "input_fingerprint": bundle["input_fingerprint"],
             "local_cluster_fingerprints": bundle["local_cluster_fingerprints"],
@@ -3560,19 +3566,19 @@ def test_global_bridge_due_tracks_only_new_local_clusters(tmp_path, monkeypatch)
 
     due, reason = _global_bridge_due(root, local_clusters, collection_refs)
     assert due is False
-    assert reason == "global bridge unchanged"
+    assert reason == "research: global bridge unchanged"
 
     changed_local_clusters = [dict(cluster) for cluster in local_clusters]
     changed_local_clusters[0]["descriptor"] = "Archive as a changed spatial ordering device."
     due, reason = _global_bridge_due(root, changed_local_clusters, collection_refs)
     assert due is True
-    assert reason == "new local clusters pending"
+    assert reason == "research: new local clusters pending"
 
     changed_collection_refs = [dict(row) for row in collection_refs]
     changed_collection_refs[0]["why_this_collection_matters"] = "Papers now frame archive as both theory and method."
     due, reason = _global_bridge_due(root, local_clusters, changed_collection_refs)
     assert due is False
-    assert reason == "global bridge unchanged"
+    assert reason == "research: global bridge unchanged"
 
 
 def test_global_bridge_input_fingerprint_ignores_collection_reflection_changes(tmp_path, monkeypatch):
@@ -3598,13 +3604,13 @@ def test_global_bridge_input_fingerprint_ignores_collection_reflection_changes(t
             "confidence": 0.92,
         },
         {
-            "cluster_id": "practice__projects__local_0001",
-            "domain": "practice",
+            "cluster_id": "research__projects__local_0001",
+            "domain": "research",
             "collection": "projects",
             "canonical_name": "Archive and Space",
             "slug": "archive-and-space",
             "aliases": ["Archive Spatial Memory"],
-            "descriptor": "Archive as a design memory scaffold.",
+            "descriptor": "Archive as a project-scale spatial memory scaffold.",
             "material_ids": ["mat_010"],
             "source_concepts": [{"material_id": "mat_010", "concept_name": "archive and space"}],
             "confidence": 0.61,
@@ -3621,13 +3627,13 @@ def test_global_bridge_input_fingerprint_ignores_collection_reflection_changes(t
             "why_this_collection_matters": "Papers define the theoretical archive frame.",
         },
         {
-            "collection_key": "practice/projects",
-            "domain": "practice",
+            "collection_key": "research/projects",
+            "domain": "research",
             "collection": "projects",
             "main_takeaways": ["Archive thinking recurs across projects."],
             "main_tensions": [],
             "open_questions": [],
-            "why_this_collection_matters": "Projects keep returning to archive as a spatial system.",
+            "why_this_collection_matters": "Projects keep returning to archive as a research-scale spatial system.",
         },
     ]
 
@@ -3643,12 +3649,12 @@ def test_global_bridge_input_fingerprint_ignores_collection_reflection_changes(t
                 "why_this_concept_matters": "It anchors the research side.",
             },
             {
-                "cluster_id": "practice__projects__local_0001",
-                "main_takeaways": ["Archive acts as design memory."],
-                "main_tensions": ["Memory vs delivery."],
-                "open_questions": ["How should design archives be maintained?"],
-                "helpful_new_sources": ["practice case studies"],
-                "why_this_concept_matters": "It grounds archive thinking in projects.",
+                "cluster_id": "research__projects__local_0001",
+                "main_takeaways": ["Archive acts as a project memory."],
+                "main_tensions": ["Memory vs execution."],
+                "open_questions": ["How should archive-driven projects be documented?"],
+                "helpful_new_sources": ["project archive case studies"],
+                "why_this_concept_matters": "It grounds archive thinking in a second research collection.",
             },
         ],
     )
@@ -3657,13 +3663,14 @@ def test_global_bridge_input_fingerprint_ignores_collection_reflection_changes(t
     assert bundle["packet"]["pending_local_clusters"]
 
     _write_jsonl(
-        root / "derived" / "global_bridge_clusters.jsonl",
+        root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl",
         [
             {
-                "bridge_id": "global_bridge__archive-and-space",
+                "bridge_id": "global_bridge__research__archive-and-space",
+                "domain": "research",
                 "canonical_name": "Archive and Space",
                 "slug": "archive-and-space",
-                "descriptor": "A global bridge connecting archive theory and practice.",
+                "descriptor": "A domain bridge connecting archive theory and project work.",
                 "aliases": ["Archive as Spatial Framework"],
                 "member_local_clusters": [
                     {
@@ -3674,22 +3681,22 @@ def test_global_bridge_input_fingerprint_ignores_collection_reflection_changes(t
                         "canonical_name": "Archive and Space",
                     },
                     {
-                        "cluster_id": "practice__projects__local_0001",
-                        "domain": "practice",
+                        "cluster_id": "research__projects__local_0001",
+                        "domain": "research",
                         "collection": "projects",
-                        "collection_key": "practice/projects",
+                        "collection_key": "research/projects",
                         "canonical_name": "Archive and Space",
                     },
                 ],
-                "bridge_takeaways": ["Archive thinking recurs across research and practice."],
+                "bridge_takeaways": ["Archive thinking recurs across research collections."],
                 "bridge_open_questions": ["Which other collections should join this bridge?"],
-                "why_this_bridge_matters": "It turns archive into a shared cross-system perspective.",
+                "why_this_bridge_matters": "It turns archive into a shared research-domain perspective.",
                 "supporting_material_ids": ["mat_001", "mat_002", "mat_010"],
             }
         ],
     )
     _write_json(
-        root / "derived" / "global_bridge_stamp.json",
+        root / "derived" / "domains" / "research" / "global_bridge_stamp.json",
         {
             "input_fingerprint": "stale-fingerprint",
             "local_cluster_fingerprints": bundle["local_cluster_fingerprints"],
@@ -3709,7 +3716,7 @@ def test_global_bridge_input_fingerprint_ignores_collection_reflection_changes(t
 
     due, reason = _global_bridge_due(root, local_clusters, changed_collection_refs)
     assert due is False
-    assert reason == "global bridge unchanged"
+    assert reason == "research: global bridge unchanged"
 
 
 def test_global_bridge_runner_skips_with_empty_pending_packet_even_with_stale_fingerprint(tmp_path, monkeypatch):
@@ -3736,13 +3743,13 @@ def test_global_bridge_runner_skips_with_empty_pending_packet_even_with_stale_fi
             "confidence": 0.92,
         },
         {
-            "cluster_id": "practice__projects__local_0001",
-            "domain": "practice",
+            "cluster_id": "research__projects__local_0001",
+            "domain": "research",
             "collection": "projects",
             "canonical_name": "Archive and Space",
             "slug": "archive-and-space",
             "aliases": ["Archive Spatial Memory"],
-            "descriptor": "Archive as a design memory scaffold.",
+            "descriptor": "Archive as a project-scale spatial memory scaffold.",
             "material_ids": ["mat_010"],
             "source_concepts": [{"material_id": "mat_010", "concept_name": "archive and space"}],
             "confidence": 0.61,
@@ -3759,13 +3766,13 @@ def test_global_bridge_runner_skips_with_empty_pending_packet_even_with_stale_fi
             "why_this_collection_matters": "Papers define the theoretical archive frame.",
         },
         {
-            "collection_key": "practice/projects",
-            "domain": "practice",
+            "collection_key": "research/projects",
+            "domain": "research",
             "collection": "projects",
             "main_takeaways": ["Archive thinking recurs across projects."],
             "main_tensions": [],
             "open_questions": [],
-            "why_this_collection_matters": "Projects keep returning to archive as a spatial system.",
+            "why_this_collection_matters": "Projects keep returning to archive as a research-scale spatial system.",
         },
     ]
 
@@ -3781,12 +3788,12 @@ def test_global_bridge_runner_skips_with_empty_pending_packet_even_with_stale_fi
                 "why_this_concept_matters": "It anchors the research side.",
             },
             {
-                "cluster_id": "practice__projects__local_0001",
-                "main_takeaways": ["Archive acts as design memory."],
-                "main_tensions": ["Memory vs delivery."],
-                "open_questions": ["How should design archives be maintained?"],
-                "helpful_new_sources": ["practice case studies"],
-                "why_this_concept_matters": "It grounds archive thinking in projects.",
+                "cluster_id": "research__projects__local_0001",
+                "main_takeaways": ["Archive acts as a project memory."],
+                "main_tensions": ["Memory vs execution."],
+                "open_questions": ["How should archive-driven projects be documented?"],
+                "helpful_new_sources": ["project archive case studies"],
+                "why_this_concept_matters": "It grounds archive thinking in a second research collection.",
             },
         ],
     )
@@ -3794,13 +3801,14 @@ def test_global_bridge_runner_skips_with_empty_pending_packet_even_with_stale_fi
     bundle = _global_bridge_inputs(root, local_clusters, collection_refs)
 
     _write_jsonl(
-        root / "derived" / "global_bridge_clusters.jsonl",
+        root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl",
         [
             {
-                "bridge_id": "global_bridge__archive-and-space",
+                "bridge_id": "global_bridge__research__archive-and-space",
+                "domain": "research",
                 "canonical_name": "Archive and Space",
                 "slug": "archive-and-space",
-                "descriptor": "A global bridge connecting archive theory and practice.",
+                "descriptor": "A domain bridge connecting archive theory and project work.",
                 "aliases": ["Archive as Spatial Framework"],
                 "member_local_clusters": [
                     {
@@ -3811,24 +3819,24 @@ def test_global_bridge_runner_skips_with_empty_pending_packet_even_with_stale_fi
                         "canonical_name": "Archive and Space",
                     },
                     {
-                        "cluster_id": "practice__projects__local_0001",
-                        "domain": "practice",
+                        "cluster_id": "research__projects__local_0001",
+                        "domain": "research",
                         "collection": "projects",
-                        "collection_key": "practice/projects",
+                        "collection_key": "research/projects",
                         "canonical_name": "Archive and Space",
                     },
                 ],
-                "bridge_takeaways": ["Archive thinking recurs across research and practice."],
-                "bridge_tensions": ["Theory and practice frame archival space differently."],
+                "bridge_takeaways": ["Archive thinking recurs across research collections."],
+                "bridge_tensions": ["Theory and project method frame archival space differently."],
                 "bridge_open_questions": ["Which other collections should join this bridge?"],
-                "helpful_new_sources": ["comparative archive design case studies"],
-                "why_this_bridge_matters": "It turns archive into a shared cross-system perspective.",
+                "helpful_new_sources": ["comparative archive project case studies"],
+                "why_this_bridge_matters": "It turns archive into a shared research-domain perspective.",
                 "supporting_material_ids": ["mat_001", "mat_002", "mat_010"],
             }
         ],
     )
     _write_json(
-        root / "derived" / "global_bridge_stamp.json",
+        root / "derived" / "domains" / "research" / "global_bridge_stamp.json",
         {
             "input_fingerprint": "stale-fingerprint",
             "local_cluster_fingerprints": bundle["local_cluster_fingerprints"],
@@ -3854,15 +3862,15 @@ def test_global_bridge_runner_skips_with_empty_pending_packet_even_with_stale_fi
 
     bridge_rows = [
         json.loads(line)
-        for line in (root / "derived" / "global_bridge_clusters.jsonl").read_text(encoding="utf-8").splitlines()
+        for line in (root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl").read_text(encoding="utf-8").splitlines()
         if line.strip()
     ]
 
     assert result["global_bridge_skipped"] is True
     assert result["global_bridges"] == 1
-    assert result["global_bridge_skip_reason"] == "global bridge unchanged"
+    assert result["global_bridge_skip_reason"] == "research: global bridge unchanged"
     assert len(bridge_rows) == 1
-    assert bridge_rows[0]["bridge_id"] == "global_bridge__archive-and-space"
+    assert bridge_rows[0]["bridge_id"] == "global_bridge__research__archive-and-space"
 
 
 def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):

@@ -4,9 +4,11 @@
 {% set concept_count = result.canonical_clusters|length if result and result.canonical_clusters is defined else 0 %}
 <div class="page-lead">
   <h1>Search</h1>
+  <p class="meta-line">{{ active_domain_label }} domain</p>
 </div>
 
 <form class="search-form" method="get">
+  <input name="domain" type="hidden" value="{{ active_domain }}">
   <input name="q" value="{{ query }}" placeholder="thermal mass, archive, courtyard…" autocomplete="off">
   <select name="scope" aria-label="Search scope">
     <option value="all" {% if scope == 'all' %}selected{% endif %}>All</option>
@@ -55,7 +57,7 @@
   </div>
   <div class="stack">
     {% for cluster in result.canonical_clusters %}
-    {% set cluster_scope = ('shared bridge' if '/bridge-concepts/' in (cluster.wiki_path or '') else (cluster.domain ~ '/' ~ cluster.collection if cluster.domain and cluster.collection else 'concept')) %}
+    {% set cluster_scope = ((cluster.domain ~ ' bridge') if '/bridge-concepts/' in (cluster.wiki_path or '') else (cluster.domain ~ '/' ~ cluster.collection if cluster.domain and cluster.collection else 'concept')) %}
     {% set item = {
       'url': wiki_url(cluster.wiki_path) if cluster.wiki_path else '#',
       'title': cluster.canonical_name,

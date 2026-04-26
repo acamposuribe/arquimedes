@@ -47,3 +47,19 @@ def test_explicit_config_overlays_shared_base_even_with_collaborator_local(tmp_p
     assert config["sync"]["pull_interval"] == 300
     assert config["enrichment"]["max_retries"] == 3
     assert config["llm"]["agent_cmd"] == "claude --print"
+
+
+def test_stale_env_config_falls_back_to_current_vault_defaults(tmp_path, monkeypatch):
+    root = tmp_path
+    stale = tmp_path / "missing-vault" / "config" / "maintainer" / "config.yaml"
+    monkeypatch.delenv("ARQUIMEDES_ROOT", raising=False)
+    monkeypatch.setenv("ARQUIMEDES_CONFIG", str(stale))
+    monkeypatch.chdir(root)
+
+    _write(root / "config" / "config.yaml", 'library_root: "~/Shared"\nsync:\n  pull_interval: 300\n')
+    _write(root / "config" / "maintainer" / "config.yaml", 'library_root: "~/Maintainer"\nllm:\n  agent_cmd: "codex exec"\n')
+
+    config = load_config()
+    assert config["library_root"].endswith("Maintainer")
+    assert config["sync"]["pull_interval"] == 300
+    assert config["llm"]["agent_cmd"] == "codex exec"

@@ -2,8 +2,10 @@
 {% block content %}
 <section class="home-hero">
   <h1>Arquimedes</h1>
+  <p class="home-hero-kicker">{{ active_domain_label }} domain</p>
   <p class="home-hero-desc">Architecture knowledge base — browse the compiled wiki, search materials, and explore extracted figures.</p>
   <form action="/search" class="home-search" method="get">
+    <input name="domain" type="hidden" value="{{ active_domain }}">
     <input name="q" placeholder="Search materials, concepts, annotations…" autocomplete="off">
     <button type="submit">Search</button>
   </form>
@@ -17,7 +19,7 @@
 
 <div class="home-grid">
   <section class="home-section">
-    <h2>Collections</h2>
+    <h2>{{ active_domain_label }} Collections</h2>
     {% if collections %}
     <ul class="wiki-list">
       {% for item in collections %}
@@ -32,7 +34,7 @@
   </section>
 
   <section class="home-section">
-    <h2>Recent materials</h2>
+    <h2>{{ active_domain_label }} Recent Materials</h2>
     {% if recent_materials %}
     <div class="stack">
       {% for item in recent_materials %}

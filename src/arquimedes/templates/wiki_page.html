@@ -145,6 +145,7 @@
       <h2>{{ page_search.label }}</h2>
       <form class="material-search-form" method="get">
         <div class="material-search-bar">
+          <input name="domain" type="hidden" value="{{ active_domain }}">
           <input name="q" value="{{ page_search.query or '' }}" placeholder="Musee Imaginaire">
           {% if page_search.query %}
           <a

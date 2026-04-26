@@ -150,22 +150,22 @@ Notes:
 
 ### S2.1 Bridge input contract
 
-- [x] Define canonical global bridge artifact paths
-- [x] Define a global bridge stamp file
+- [x] Define canonical per-domain bridge artifact paths
+- [x] Define per-domain bridge stamp files
 - [x] Define the bridge-member schema using local clusters as members
-- [x] Define the Step 2 bridge input around collection-local clusters plus compact hosting-collection context
+- [x] Define the Step 2 bridge input around collection-local clusters plus compact hosting-collection context, scoped per domain
 - [x] Define the Step 2 bridge output to include bridge-level synthesis and suggested new sources
-- [x] Define the exact incremental input packet and response schema for bridge clustering
-- [x] Define the bridge prompt goals and thresholds
+- [x] Define the exact incremental input packet and response schema for per-domain bridge clustering
+- [x] Define the bridge prompt goals, same-domain guardrails, and thresholds
 
 ### S2.2 Global bridging command
 
 - [x] Run the first Step 2 execution boundary as `arq lint --stage global-bridge`
 - [x] Keep global bridging owned by the lint `global-bridge` stage; no standalone `arq bridge-global` command
-- [x] Replace deterministic bridge promotion with an incremental LLM bridge pass over collection-local clusters
-- [x] Load existing global bridge memory independently from local-cluster memory
-- [x] Make stale detection depend on changed collection-local clusters and changed collection reflections, not all raw materials
-- [x] Skip the Step 2 pass entirely when fewer than two collections are in scope
+- [x] Replace deterministic bridge promotion with an incremental LLM bridge pass over collection-local clusters, run independently per domain
+- [x] Load existing same-domain bridge memory independently from local-cluster memory
+- [x] Make stale detection depend on changed same-domain local clusters and changed same-domain collection reflections, not all raw materials
+- [x] Skip the Step 2 pass entirely for any domain with fewer than two collections in scope
 
 ### S2.3 Bridge projection
 
@@ -176,7 +176,7 @@ Notes:
 
 ### S2.4 Compile changes
 
-- [x] Keep `wiki/shared/bridge-concepts/` as the bridge publication area
+- [x] Move bridge publication to `wiki/<domain>/bridge-concepts/`
 - [x] Update bridge pages to cite local cluster pages as members
 - [x] Add backlinks from local cluster pages to bridge memberships where useful
 - [x] Distinguish local clusters from bridge concepts in shared indexes
@@ -206,7 +206,7 @@ Notes:
 
 ### S2.7 Verification
 
-- [x] Test that global bridge clusters contain members from multiple collection scopes
+- [x] Test that domain bridge clusters contain members from multiple collection scopes inside one domain
 - [x] Test local concept -> bridge traversal
 - [x] Test bridge-page compilation from local-cluster inputs
 - [x] Test bridge stale detection using promoted local-cluster changes
@@ -238,6 +238,7 @@ Notes:
 - [x] Provide deterministic migration for old bridge-memory tables where possible
 - [x] Decide what the existing `derived/bridge_concept_clusters.jsonl` means during Step 1
 - [x] Add upgrade notes for existing repos
+- [x] Add explicit operator-run migrator for legacy shared global bridges into per-domain bridge artifacts/pages
 
 Migration requirements for Step 1:
 
@@ -245,6 +246,14 @@ Migration requirements for Step 1:
 - `derived/lint/cluster_reviews.jsonl` and `derived/lint/collection_reflections.jsonl` should be rebased to local ids and local paths without semantic reinterpretation
 - the migration should be deterministic and LLM-free
 - the migration should not require re-enrichment, re-extraction, re-indexing, re-clustering, or re-reflection merely to preserve current semantics
+
+Legacy shared global-bridge migration requirements for the domain-scoped Step 2 rollout:
+
+- implement `arq migrate-global-bridges` as a dry-run-by-default CLI
+- refuse `--apply` if any legacy bridge cannot be proven single-domain
+- backup overwritten files before applying
+- migrate legacy shared bridge pages and shared glossary links alongside artifacts/stamps
+- preserve legacy shared files until a later manual cleanup step
 
 ### Operational safety
 

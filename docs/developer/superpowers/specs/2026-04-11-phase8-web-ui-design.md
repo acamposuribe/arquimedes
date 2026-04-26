@@ -28,6 +28,13 @@ That means:
 - the web app should compose existing deterministic outputs, not invent new ones
 - freshness must be explicit and visible before read operations, not hidden behind a daemon
 
+The web UI must also preserve the top-level separation between the two corpus domains:
+
+- `Research`
+- `Practice`
+
+Domain switching is a browse concern, not a semantic rewrite. The UI should expose the two domains as first-class top-level tabs and keep wiki/search/navigation scoped to the selected domain wherever possible.
+
 ## Scope
 
 Phase 8 covers four collaborator-facing jobs:
@@ -192,8 +199,9 @@ Minimum route set:
 - `GET /`
   - home page
   - freshness banner / update CTA
-  - recent materials
-  - domain/collection navigation
+  - high-level `Research` / `Practice` domain tabs beside the Arquimedes title
+  - recent materials for the selected domain
+  - domain-scoped collection navigation
   - quick links into wiki/search
 
 - `GET /search`
@@ -203,10 +211,12 @@ Minimum route set:
     - `facet`
     - `collection`
     - `limit`
+    - `domain`
   - renders:
     - material cards
     - optional chunks/annotations/figures/concepts
     - canonical cluster hits
+  - when a domain tab is active, search is restricted to that domain unless a narrower page-local scope already applies
   - if no index exists, renders a helpful setup state instead of crashing
 
 - `GET /materials/{material_id}`
@@ -228,12 +238,13 @@ Minimum route set:
   - restricted to image extensions only
 
 - `GET /wiki`
-  - root wiki browser
+  - selected-domain wiki root browser
 
 - `GET /wiki/{path:path}`
   - renders any markdown page under `wiki/`
   - directory paths should prefer `_index.md`
   - directories without `_index.md` may render a deterministic listing page
+  - pages under `wiki/research/...` and `wiki/practice/...` should keep the matching domain tab active
 
 - `GET /source/{material_id}`
   - read-only source-file streaming endpoint
@@ -319,6 +330,7 @@ Suggested responsibilities:
 - provide small read models for:
   - recent materials
   - domain/collection navigation
+  - domain-scoped bridge/glossary navigation
 
 This helper layer is intentionally Phase 8-safe and Phase 7-useful:
 
@@ -333,8 +345,9 @@ This helper layer is intentionally Phase 8-safe and Phase 7-useful:
 Show:
 
 - freshness banner
-- recent materials
-- domain/collection entry points
+- `Research` / `Practice` tabs beside the Arquimedes title
+- recent materials for the active domain
+- active-domain collection entry points
 - quick search form
 
 Preferred data sources:
@@ -348,6 +361,7 @@ If the index does not exist yet, the home page should render a setup/helpful emp
 
 Show:
 
+- active domain tab state and explicit domain scope
 - query box
 - facet filters as plain form controls / chips
 - material results
@@ -358,6 +372,7 @@ Show:
 
 Show:
 
+- active domain tab state
 - breadcrumbs
 - rendered markdown
 - sidebar or header actions where available:
@@ -381,6 +396,7 @@ Show:
 
 When a wiki directory has no `_index.md`, the UI may render a deterministic directory listing page with:
 
+- active domain tab state
 - child directories
 - child pages
 - breadcrumbs
@@ -440,6 +456,8 @@ No additional Phase 8 configuration is required beyond host/port unless implemen
 Minimum Phase 8 checks:
 
 - `arq serve` starts and serves HTML
+- the header exposes `Research` / `Practice` tabs and marks the active domain correctly
+- `/`, `/wiki`, and `/search` keep navigation scoped to the selected domain
 - `/search` returns the same search content the CLI would surface for equivalent inputs
 - `/materials/{id}` renders the compiled material page
 - `/wiki/...` browsing works across relative links

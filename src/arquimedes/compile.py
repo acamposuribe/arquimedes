@@ -24,7 +24,7 @@ from arquimedes.config import (
     get_wiki_root,
     load_config,
 )
-from arquimedes.lint_global_bridge import load_global_bridge_clusters
+from arquimedes.lint_global_bridge import global_bridge_artifact_paths, load_global_bridge_clusters
 
 logger = logging.getLogger(__name__)
 
@@ -104,11 +104,17 @@ def _bridge_feedback_for_material(mid: str, bridge_clusters: list[dict]) -> list
         mids = c.get("supporting_material_ids") or c.get("material_ids", []) or []
         if mid not in mids:
             continue
+        domain = str(c.get("domain", "")).strip()
+        default_wiki_path = (
+            f"wiki/{domain}/bridge-concepts/{c.get('slug', '')}.md"
+            if domain
+            else f"wiki/shared/bridge-concepts/{c.get('slug', '')}.md"
+        )
         refs.append({
             "cluster_id": c.get("cluster_id") or c.get("bridge_id", ""),
             "canonical_name": c.get("canonical_name", ""),
             "slug": c.get("slug", ""),
-            "wiki_path": c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c.get('slug', '')}.md",
+            "wiki_path": c.get("wiki_path") or default_wiki_path,
             "material_count": len(dict.fromkeys(mids)),
             "confidence": c.get("confidence", 0.0),
         })
@@ -237,7 +243,12 @@ def _render_graph_maintenance_page(
     cluster_lookup = {
         str(cluster.get("cluster_id", "")).strip(): {
             "name": str(cluster.get("canonical_name", "")).strip() or str(cluster.get("cluster_id", "")).strip(),
-            "path": cluster.get("wiki_path") or f"wiki/shared/bridge-concepts/{cluster.get('slug', '')}.md",
+            "path": cluster.get("wiki_path")
+            or (
+                f"wiki/{str(cluster.get('domain', '')).strip()}/bridge-concepts/{cluster.get('slug', '')}.md"
+                if str(cluster.get("domain", "")).strip()
+                else f"wiki/shared/bridge-concepts/{cluster.get('slug', '')}.md"
+            ),
         }
         for cluster in bridge_clusters
         if str(cluster.get("cluster_id", "")).strip()
@@ -341,9 +352,9 @@ def _write_compile_stamp(
 
 def _cluster_file_stamp(project_root: Path) -> str:
     local_paths = sorted((project_root / "derived" / "collections").glob("*/local_concept_clusters.jsonl"))
-    global_bridge_path = project_root / "derived" / "global_bridge_clusters.jsonl"
     parts = [path.read_text(encoding="utf-8") for path in local_paths]
-    parts.append(global_bridge_path.read_text(encoding="utf-8") if global_bridge_path.exists() else "")
+    for path in global_bridge_artifact_paths(project_root):
+        parts.append(path.read_text(encoding="utf-8"))
     return enrich_stamps.canonical_hash(*parts)
 
 
@@ -482,7 +493,7 @@ def _remove_orphans(
 
         rel_wiki_path = f"wiki/{rel.as_posix()}"
 
-        # Concept page: shared/concepts/{slug}.md or shared/bridge-concepts/{slug}.md
+        # Concept page: shared/concepts/{slug}.md or {domain}/bridge-concepts/{slug}.md
         if len(parts) == 3 and parts[0] == "shared" and parts[1] in {"concepts", "bridge-concepts"}:
             slug = parts[2].replace(".md", "")
             if slug.startswith("_"):
@@ -492,6 +503,16 @@ def _remove_orphans(
             else:
                 remove = slug not in (current_slugs or set())
             if remove:
+                logger.info("Removing orphan concept page: %s", md_file)
+                md_file.unlink()
+                removed.append(str(md_file))
+            continue
+
+        if len(parts) == 3 and parts[1] == "bridge-concepts":
+            slug = parts[2].replace(".md", "")
+            if slug.startswith("_"):
+                continue
+            if current_concept_paths is not None and rel_wiki_path not in current_concept_paths:
                 logger.info("Removing orphan concept page: %s", md_file)
                 md_file.unlink()
                 removed.append(str(md_file))
@@ -744,7 +765,12 @@ def compile_wiki(
                     related_concepts.append({
                         "canonical_name": other["canonical_name"],
                         "slug": other["slug"],
-                        "wiki_path": other.get("wiki_path") or f"wiki/shared/bridge-concepts/{other['slug']}.md",
+                        "wiki_path": other.get("wiki_path")
+                        or (
+                            f"wiki/{str(other.get('domain', '')).strip()}/bridge-concepts/{other['slug']}.md"
+                            if str(other.get("domain", "")).strip()
+                            else f"wiki/shared/bridge-concepts/{other['slug']}.md"
+                        ),
                     })
             content = compile_pages.render_concept_page(
                 c,
@@ -755,7 +781,14 @@ def compile_wiki(
                 cluster_reviews_by_cluster.get(str(c.get("cluster_id", "")).strip(), []),
                 bridge_memberships_by_local_cluster.get(cluster_id, []),
             )
-            page_path = wiki_root / Path(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md").relative_to("wiki")
+            page_path = wiki_root / Path(
+                c.get("wiki_path")
+                or (
+                    f"wiki/{str(c.get('domain', '')).strip()}/bridge-concepts/{c['slug']}.md"
+                    if str(c.get("domain", "")).strip()
+                    else f"wiki/shared/bridge-concepts/{c['slug']}.md"
+                )
+            ).relative_to("wiki")
             _write_page(page_path, content)
             concept_pages_written += 1
             if cluster_id:
@@ -783,7 +816,12 @@ def compile_wiki(
                     related_concepts.append({
                         "canonical_name": other["canonical_name"],
                         "slug": other["slug"],
-                        "wiki_path": other.get("wiki_path") or f"wiki/shared/bridge-concepts/{other['slug']}.md",
+                        "wiki_path": other.get("wiki_path")
+                        or (
+                            f"wiki/{str(other.get('domain', '')).strip()}/bridge-concepts/{other['slug']}.md"
+                            if str(other.get("domain", "")).strip()
+                            else f"wiki/shared/bridge-concepts/{other['slug']}.md"
+                        ),
                     })
             content = compile_pages.render_concept_page(
                 c,
@@ -794,7 +832,14 @@ def compile_wiki(
                 cluster_reviews_by_cluster.get(bridge_id, []),
                 None,
             )
-            page_path = wiki_root / Path(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md").relative_to("wiki")
+            page_path = wiki_root / Path(
+                c.get("wiki_path")
+                or (
+                    f"wiki/{str(c.get('domain', '')).strip()}/bridge-concepts/{c['slug']}.md"
+                    if str(c.get("domain", "")).strip()
+                    else f"wiki/shared/bridge-concepts/{c['slug']}.md"
+                )
+            ).relative_to("wiki")
             _write_page(page_path, content)
             concept_pages_written += 1
 
@@ -836,7 +881,14 @@ def compile_wiki(
 
     # 11. Orphan removal
     current_concept_paths = {
-        str(c.get("wiki_path") or f"wiki/shared/bridge-concepts/{c['slug']}.md")
+        str(
+            c.get("wiki_path")
+            or (
+                f"wiki/{str(c.get('domain', '')).strip()}/bridge-concepts/{c['slug']}.md"
+                if str(c.get("domain", "")).strip()
+                else f"wiki/shared/bridge-concepts/{c['slug']}.md"
+            )
+        )
         for c in [*concept_page_clusters, *bridge_page_clusters]
     }
     orphans = _remove_orphans(wiki_root, set(all_metas.keys()), current_concept_paths=current_concept_paths)
@@ -886,6 +938,11 @@ def _render_index_pages(
 ) -> int:
     """Render master, domain, collection, and concept index pages. Returns count."""
     written = 0
+    bridge_by_domain: dict[str, list[dict]] = {}
+    for cluster in bridge_clusters or []:
+        domain = (str(cluster.get("domain", "")).strip() or "").strip()
+        if domain:
+            bridge_by_domain.setdefault(domain, []).append(cluster)
 
     # ingested_at lookup
     ingested_at: dict[str, str] = {}
@@ -961,7 +1018,11 @@ def _render_index_pages(
                 ),
             ):
                 c = concept_info[slug]
-                dest = c.get("wiki_path") or f"wiki/shared/bridge-concepts/{slug}.md"
+                dest = c.get("wiki_path") or (
+                    f"wiki/{str(c.get('domain', '')).strip()}/bridge-concepts/{slug}.md"
+                    if str(c.get("domain", "")).strip()
+                    else f"wiki/shared/bridge-concepts/{slug}.md"
+                )
                 rel = compile_pages._relative_link(coll_index, dest)
                 name = c["canonical_name"]
                 if "/bridge-concepts/" in dest:
@@ -1019,6 +1080,37 @@ def _render_index_pages(
             _write_page(
                 wiki_root / domain / collection / "concepts" / "_index.md",
                 compile_pages.render_index_page(f"{friendly_title} Concepts", collection_concept_entries),
+            )
+            written += 1
+
+        bridge_entries = []
+        bridge_index = f"wiki/{domain}/bridge-concepts/_index.md"
+        for cluster in sorted(
+            bridge_by_domain.get(domain, []),
+            key=lambda row: (str(row.get("canonical_name", "")).casefold(), str(row.get("bridge_id", "")).casefold()),
+        ):
+            bridge_entries.append(
+                {
+                    "name": str(cluster.get("canonical_name", "")).strip() or str(cluster.get("bridge_id", "")).strip(),
+                    "path": compile_pages._relative_link(
+                        bridge_index,
+                        str(cluster.get("wiki_path", "")).strip(),
+                    ),
+                    "summary": str(cluster.get("descriptor", "")).strip()
+                    or str(cluster.get("why_this_bridge_matters", "")).strip()[:120],
+                }
+            )
+        if bridge_entries:
+            domain_entries.append(
+                {
+                    "name": "Bridge Concepts",
+                    "path": compile_pages._relative_link(domain_index, bridge_index),
+                    "summary": f"{len(bridge_entries)} bridge concepts",
+                }
+            )
+            _write_page(
+                wiki_root / domain / "bridge-concepts" / "_index.md",
+                compile_pages.render_index_page(f"{domain.title()} Bridge Concepts", bridge_entries),
             )
             written += 1
 

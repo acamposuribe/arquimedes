@@ -12,6 +12,13 @@ from arquimedes.compile_pages import _material_wiki_path
 from arquimedes.config import get_library_root, get_project_root
 from arquimedes.index import get_index_path
 
+_DOMAINS = ("research", "practice")
+
+
+def _normalized_domain(domain: str | None) -> str | None:
+    value = str(domain or "").strip().lower()
+    return value if value in _DOMAINS else None
+
 
 def _material_dir(material_id: str) -> Path:
     material_id = material_id.strip()
@@ -225,7 +232,7 @@ def wiki_page_record(path: Path) -> dict | None:
         rows = _index_rows(
             """
             SELECT 'global_bridge' AS page_type, bridge_id AS page_id, canonical_name AS title,
-                   wiki_path AS path, 'shared' AS domain, 'bridge-concepts' AS collection
+                   wiki_path AS path, domain, 'bridge-concepts' AS collection
             FROM global_bridge_clusters
             WHERE wiki_path = ?
             LIMIT 1
@@ -301,19 +308,34 @@ def materials_for_concept_page(path: Path, body: str) -> list[dict]:
     return materials
 
 
-def list_domains_and_collections() -> list[dict]:
-    rows = _index_rows(
-        "SELECT DISTINCT domain, collection FROM materials ORDER BY domain, collection"
-    )
+def list_domains_and_collections(domain: str | None = None) -> list[dict]:
+    scoped_domain = _normalized_domain(domain)
+    if scoped_domain:
+        rows = _index_rows(
+            "SELECT DISTINCT domain, collection FROM materials WHERE domain = ? ORDER BY domain, collection",
+            (scoped_domain,),
+        )
+    else:
+        rows = _index_rows(
+            "SELECT DISTINCT domain, collection FROM materials ORDER BY domain, collection"
+        )
     return [{"domain": row["domain"], "collection": row["collection"]} for row in rows]
 
 
-def list_glossary_concepts() -> list[dict]:
+def list_glossary_concepts(domain: str | None = None) -> list[dict]:
     try:
         _, body = load_wiki_page("shared/glossary")
     except FileNotFoundError:
         return []
-    return [{"name": name.removesuffix(" (main)"), "path": path} for name, path in re.findall(r"\[([^\]]+)\]\((wiki/shared/bridge-concepts/[^)]+\.md)\)", body)]
+    scoped_domain = _normalized_domain(domain)
+    rows = [
+        {"name": name.removesuffix(" (main)"), "path": path}
+        for name, path in re.findall(r"\[([^\]]+)\]\((wiki/[^/]+/bridge-concepts/[^)]+\.md)\)", body)
+    ]
+    if not scoped_domain:
+        return rows
+    prefix = f"wiki/{scoped_domain}/bridge-concepts/"
+    return [row for row in rows if str(row.get("path") or "").startswith(prefix)]
 
 
 def materials_for_collection(domain: str, collection: str) -> list[dict]:
@@ -324,11 +346,18 @@ def materials_for_collection(domain: str, collection: str) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def recent_materials(limit: int = 10) -> list[dict]:
-    rows = _index_rows(
-        "SELECT material_id, title, summary, domain, collection, document_type, year FROM materials ORDER BY rowid DESC LIMIT ?",
-        (limit,),
-    )
+def recent_materials(limit: int = 10, domain: str | None = None) -> list[dict]:
+    scoped_domain = _normalized_domain(domain)
+    if scoped_domain:
+        rows = _index_rows(
+            "SELECT material_id, title, summary, domain, collection, document_type, year FROM materials WHERE domain = ? ORDER BY rowid DESC LIMIT ?",
+            (scoped_domain, limit),
+        )
+    else:
+        rows = _index_rows(
+            "SELECT material_id, title, summary, domain, collection, document_type, year FROM materials ORDER BY rowid DESC LIMIT ?",
+            (limit,),
+        )
     return [dict(row) for row in rows]
 
 
@@ -540,8 +569,17 @@ def build_corpus_overview() -> dict:
     stamps = {
         "compile": _read_json_if_exists(derived_dir / "compile_stamp.json"),
         "memory_bridge": None,
-        "global_bridge": _read_json_if_exists(derived_dir / "global_bridge_stamp.json"),
+        "global_bridge": {},
     }
+    domain_stamp_paths = sorted((derived_dir / "domains").glob("*/global_bridge_stamp.json"))
+    if domain_stamp_paths:
+        stamps["global_bridge"] = {
+            path.parent.name: _read_json_if_exists(path)
+            for path in domain_stamp_paths
+        }
+    else:
+        legacy_bridge_stamp = _read_json_if_exists(derived_dir / "global_bridge_stamp.json")
+        stamps["global_bridge"] = legacy_bridge_stamp
     try:
         from arquimedes.memory import read_memory_bridge_stamp
 

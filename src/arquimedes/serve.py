@@ -22,6 +22,8 @@ from arquimedes.index import get_index_path
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_HERE / "templates"))
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
+_DOMAINS = ("research", "practice")
+_DOMAIN_LABELS = {"research": "Research", "practice": "Practice"}
 
 
 def _label(part: str) -> str:
@@ -61,6 +63,81 @@ def truncate_words(text: str, limit: int = 42) -> str:
     if len(words) <= limit:
         return compact
     return " ".join(words[:limit]).rstrip(".,;: ") + "..."
+
+
+def _normalized_domain(domain: str | None) -> str | None:
+    value = str(domain or "").strip().lower()
+    return value if value in _DOMAINS else None
+
+
+def _domain_label(domain: str) -> str:
+    return _DOMAIN_LABELS.get(domain, domain.title())
+
+
+def _path_domain(path: str) -> str | None:
+    rel = path.strip().strip("/")
+    parts = [part for part in rel.split("/") if part]
+    if len(parts) >= 2 and parts[0] == "wiki" and parts[1] in _DOMAINS:
+        return parts[1]
+    return None
+
+
+def _page_domain_from_wiki_path(path: Path | None) -> str | None:
+    if path is None:
+        return None
+    try:
+        rel_parts = path.relative_to(read_mod.get_project_root() / "wiki").parts
+    except ValueError:
+        return None
+    if rel_parts and rel_parts[0] in _DOMAINS:
+        return rel_parts[0]
+    return None
+
+
+def _active_domain(request: Request, explicit_domain: str | None = None, page_domain: str | None = None) -> str:
+    return (
+        _normalized_domain(page_domain)
+        or _normalized_domain(explicit_domain)
+        or _path_domain(request.url.path)
+        or "research"
+    )
+
+
+def _domain_home_url(domain: str) -> str:
+    return f"/?{urlencode({'domain': domain})}"
+
+
+def _domain_search_url(domain: str) -> str:
+    return f"/search?{urlencode({'domain': domain})}"
+
+
+def _domain_wiki_url(domain: str) -> str:
+    return f"/wiki/{domain}"
+
+
+def _domain_tab_url(request: Request, target_domain: str, active_domain: str) -> str:
+    path = request.url.path
+    if path == "/":
+        return _domain_home_url(target_domain)
+    if path.startswith("/search"):
+        items: list[tuple[str, str]] = []
+        for key, value in request.query_params.multi_items():
+            if key == "domain":
+                continue
+            if key == "facet" and str(value).startswith("domain=="):
+                continue
+            if key == "collection":
+                continue
+            items.append((key, value))
+        items.append(("domain", target_domain))
+        query = urlencode(items, doseq=True)
+        return f"/search?{query}" if query else "/search"
+    if path.startswith("/wiki"):
+        return _domain_wiki_url(target_domain)
+    if target_domain == active_domain:
+        query = request.url.query
+        return f"{path}?{query}" if query else path
+    return _domain_wiki_url(target_domain)
 
 
 def breadcrumbs(path: str) -> list[dict]:
@@ -229,6 +306,7 @@ def _material_sidebar_context(material_id: str) -> dict:
     return {
         "material_id": material_id,
         "title": str(meta.get("title") or material_id),
+        "domain": str(meta.get("domain") or ""),
         "collection_url": wiki_url(f"wiki/{meta.get('domain')}/{meta.get('collection')}/_index.md") if meta.get("domain") and meta.get("collection") else "",
         "collection_label": f"{meta.get('domain')}/{meta.get('collection')}" if meta.get("domain") and meta.get("collection") else "",
         "source_url": f"/source/{material_id}" if read_mod.material_source_path(material_id) else "",
@@ -451,9 +529,40 @@ def _allowed_hosts(config: dict | None) -> list[str]:
     return [str(item).strip() for item in raw if str(item).strip()]
 
 
-def _base_context(*, page_title: str, **extra) -> dict:
-    collections = read_mod.list_domains_and_collections()
-    return {"page_title": page_title, "nav_collections": collections, "nav_global_concepts": read_mod.list_glossary_concepts(), **extra}
+def _search_facets_for_domain(facets: list[str], domain: str) -> list[str]:
+    scoped = [str(item).strip() for item in facets if str(item).strip()]
+    scoped = [item for item in scoped if not item.startswith("domain==")]
+    scoped.append(f"domain=={domain}")
+    return scoped
+
+
+def _base_context(
+    request: Request,
+    *,
+    page_title: str,
+    active_domain: str | None = None,
+    page_domain: str | None = None,
+    **extra,
+) -> dict:
+    resolved_domain = _active_domain(request, active_domain, page_domain)
+    collections = read_mod.list_domains_and_collections(resolved_domain)
+    return {
+        "page_title": page_title,
+        "active_domain": resolved_domain,
+        "active_domain_label": _domain_label(resolved_domain),
+        "domain_tabs": [
+            {
+                "key": domain,
+                "label": _domain_label(domain),
+                "url": _domain_tab_url(request, domain, resolved_domain),
+                "active": domain == resolved_domain,
+            }
+            for domain in _DOMAINS
+        ],
+        "nav_collections": collections,
+        "nav_global_concepts": read_mod.list_glossary_concepts(resolved_domain),
+        **extra,
+    }
 
 
 def create_app(config: dict | None = None) -> FastAPI:
@@ -483,7 +592,7 @@ def create_app(config: dict | None = None) -> FastAPI:
         return _TEMPLATES.TemplateResponse(
             request,
             "error.html",
-            {"request": request, **_base_context(page_title="Not found", status_code=404, message=str(exc.detail or "Not found"))},
+            {"request": request, **_base_context(request, page_title="Not found", status_code=404, message=str(exc.detail or "Not found"))},
             status_code=404,
         )
 
@@ -501,12 +610,23 @@ def create_app(config: dict | None = None) -> FastAPI:
             return JSONResponse(freshness_mod.update_workspace())
 
     @app.get("/", response_class=HTMLResponse)
-    def home(request: Request):
+    def home(request: Request, domain: str = ""):
+        active_domain = _active_domain(request, domain)
         index_missing = not get_index_path().exists()
         return _TEMPLATES.TemplateResponse(
             request,
             "home.html",
-            {"request": request, **_base_context(page_title="Arquimedes", index_missing=index_missing, recent_materials=read_mod.recent_materials(), collections=read_mod.list_domains_and_collections())},
+            {
+                "request": request,
+                **_base_context(
+                    request,
+                    page_title="Arquimedes",
+                    active_domain=active_domain,
+                    index_missing=index_missing,
+                    recent_materials=read_mod.recent_materials(domain=active_domain),
+                    collections=read_mod.list_domains_and_collections(active_domain),
+                ),
+            },
         )
 
     @app.get("/search", response_class=HTMLResponse)
@@ -518,22 +638,39 @@ def create_app(config: dict | None = None) -> FastAPI:
         facet: list[str] = Query(default=[]),
         collection: str | None = None,
         limit: int = 20,
+        domain: str = "",
     ):
+        active_domain = _active_domain(request, domain)
+        scoped_facets = _search_facets_for_domain(facet, active_domain)
         result = None
         index_missing = False
         if q.strip():
             try:
-                result = search_mod.search(q, depth=depth, scope=scope, facets=facet, collection=collection, limit=limit)
+                result = search_mod.search(q, depth=depth, scope=scope, facets=scoped_facets, collection=collection, limit=limit)
             except FileNotFoundError:
                 index_missing = True
         return _TEMPLATES.TemplateResponse(
             request,
             "search.html",
-            {"request": request, **_base_context(page_title="Search", query=q, depth=depth, scope=scope, facets=facet, collection=collection or "", result=result, index_missing=index_missing)},
+            {
+                "request": request,
+                **_base_context(
+                    request,
+                    page_title="Search",
+                    active_domain=active_domain,
+                    query=q,
+                    depth=depth,
+                    scope=scope,
+                    facets=scoped_facets,
+                    collection=collection or "",
+                    result=result,
+                    index_missing=index_missing,
+                ),
+            },
         )
 
     @app.get("/materials/{material_id}", response_class=HTMLResponse)
-    def material_page(request: Request, material_id: str, q: str = "", depth: int = 3, scope: str = "all"):
+    def material_page(request: Request, material_id: str, q: str = "", depth: int = 3, scope: str = "all", domain: str = ""):
         try:
             path = read_mod.material_wiki_path(material_id)
             body = read_mod.load_material_wiki(material_id)
@@ -569,7 +706,7 @@ def create_app(config: dict | None = None) -> FastAPI:
             "wiki_page.html",
             {
                 "request": request,
-                **_base_context(page_title=material["title"]),
+                **_base_context(request, page_title=material["title"], active_domain=domain, page_domain=material.get("domain")),
                 **_wiki_context(
                     path,
                     material["content_body"],
@@ -592,7 +729,11 @@ def create_app(config: dict | None = None) -> FastAPI:
             "figures.html",
             {
                 "request": request,
-                **_base_context(page_title=f"Figures · {meta.get('title') or material_id}"),
+                **_base_context(
+                    request,
+                    page_title=f"Figures · {meta.get('title') or material_id}",
+                    page_domain=str(meta.get("domain") or ""),
+                ),
                 "material_id": material_id,
                 "figures": _figure_view_models(material_id, figures),
                 "empty_message": "No extracted figures were found for this material." if not figures else "",
@@ -619,24 +760,42 @@ def create_app(config: dict | None = None) -> FastAPI:
         return FileResponse(path)
 
     @app.get("/wiki", response_class=HTMLResponse)
-    def wiki_root(request: Request):
+    def wiki_root(request: Request, domain: str = ""):
+        active_domain = _active_domain(request, domain)
         try:
-            path, body = read_mod.load_wiki_page("")
+            path, body = read_mod.load_wiki_page(active_domain)
         except FileNotFoundError:
-            listing = read_mod.list_wiki_dir("")
+            listing = read_mod.list_wiki_dir(active_domain)
             return _TEMPLATES.TemplateResponse(
                 request,
                 "wiki_dir.html",
-                {"request": request, **_base_context(page_title="Wiki", breadcrumbs=breadcrumbs("wiki/_index.md"), listing=listing)},
+                {
+                    "request": request,
+                    **_base_context(
+                        request,
+                        page_title=f"{_domain_label(active_domain)} Wiki",
+                        active_domain=active_domain,
+                        breadcrumbs=breadcrumbs(f"wiki/{active_domain}/_index.md"),
+                        listing=listing,
+                    ),
+                },
             )
         return _TEMPLATES.TemplateResponse(
             request,
             "wiki_page.html",
-            {"request": request, **_base_context(page_title="Wiki"), **_wiki_context(path, body, title="Wiki", material_id=read_mod.material_id_for_wiki_path(path))},
+            {
+                "request": request,
+                **_base_context(
+                    request,
+                    page_title=f"{_domain_label(active_domain)} Wiki",
+                    page_domain=active_domain,
+                ),
+                **_wiki_context(path, body, title=f"{_domain_label(active_domain)} Wiki", material_id=read_mod.material_id_for_wiki_path(path)),
+            },
         )
 
     @app.get("/wiki/{path:path}", response_class=HTMLResponse)
-    def wiki_page(request: Request, path: str, q: str = "", depth: int = 3):
+    def wiki_page(request: Request, path: str, q: str = "", depth: int = 3, domain: str = ""):
         try:
             page_path, body = read_mod.load_wiki_page(path)
         except FileNotFoundError:
@@ -644,13 +803,25 @@ def create_app(config: dict | None = None) -> FastAPI:
                 listing = read_mod.list_wiki_dir(path)
             except FileNotFoundError as exc:
                 raise HTTPException(status_code=404, detail=str(exc)) from exc
+            listing_domain = _page_domain_from_wiki_path(read_mod.get_project_root() / "wiki" / path)
             return _TEMPLATES.TemplateResponse(
                 request,
                 "wiki_dir.html",
-                {"request": request, **_base_context(page_title=_label(PurePosixPath(path).name), breadcrumbs=breadcrumbs(f"wiki/{path}/_index.md"), listing=listing)},
+                {
+                    "request": request,
+                    **_base_context(
+                        request,
+                        page_title=_label(PurePosixPath(path).name),
+                        active_domain=domain,
+                        page_domain=listing_domain,
+                        breadcrumbs=breadcrumbs(f"wiki/{path}/_index.md"),
+                        listing=listing,
+                    ),
+                },
             )
 
         material_id = read_mod.material_id_for_wiki_path(page_path)
+        page_domain = _page_domain_from_wiki_path(page_path)
         page_search = None
         if material_id:
             material = _material_page_context(material_id, body)
@@ -737,7 +908,12 @@ def create_app(config: dict | None = None) -> FastAPI:
             "wiki_page.html",
             {
                 "request": request,
-                **_base_context(page_title=_label(page_path.stem if page_path.name != "_index.md" else page_path.parent.name)),
+                **_base_context(
+                    request,
+                    page_title=_label(page_path.stem if page_path.name != "_index.md" else page_path.parent.name),
+                    active_domain=domain,
+                    page_domain=page_domain or extra.get("domain"),
+                ),
                 **_wiki_context(page_path, content_body, **extra),
                 "collection_material_cards": collection_material_cards,
                 "collection_after_html": collection_after_html,
@@ -764,7 +940,11 @@ def create_app(config: dict | None = None) -> FastAPI:
             "wiki_page.html",
             {
                 "request": request,
-                **_base_context(page_title=f"Extracted text · {material_id}"),
+                **_base_context(
+                    request,
+                    page_title=f"Extracted text · {material_id}",
+                    page_domain=str(read_mod.load_material_meta(material_id).get("domain") or ""),
+                ),
                 "breadcrumbs": [{"label": "Home", "url": "/"}, {"label": _label(material_id), "url": f"/materials/{material_id}"}, {"label": "Extracted text", "url": f"/extracted/{material_id}/text"}],
                 "content_html": render_wiki_markdown(path.read_text(encoding="utf-8"), f"extracted/{material_id}/text.md", material_id),
                 "page_title": f"Extracted text · {material_id}",

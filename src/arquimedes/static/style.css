@@ -55,6 +55,13 @@ img { max-width: 100%; display: block; }
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 }
 
+.brand-cluster {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  flex-shrink: 0;
+}
+
 .brand {
   color: var(--header-text);
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
@@ -66,6 +73,45 @@ img { max-width: 100%; display: block; }
 }
 .brand:visited { color: var(--header-text); }
 .brand:hover { text-decoration: none; opacity: 0.8; }
+
+.domain-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.domain-tabs a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.28rem 0.7rem;
+  border: 1px solid rgba(221, 228, 244, 0.18);
+  border-radius: 999px;
+  color: rgba(221, 228, 244, 0.78);
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  transition: border-color 0.08s, background 0.08s, color 0.08s;
+}
+
+.domain-tabs a:visited {
+  color: rgba(221, 228, 244, 0.78);
+}
+
+.domain-tabs a:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: rgba(255, 255, 255, 0.24);
+  color: #fff;
+  text-decoration: none;
+}
+
+.domain-tabs a.active {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
 
 .nav-search {
   flex: 1;
@@ -955,6 +1001,17 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
   text-transform: uppercase;
   font-size: 0.9rem;
 }
+
+.home-hero-kicker {
+  margin: 0 0 0.35rem;
+  color: rgba(221, 228, 244, 0.62);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
 .home-hero-desc {
   margin: 0 0 1rem;
   color: rgba(221, 228, 244, 0.7);
@@ -1167,9 +1224,28 @@ body.lightbox-open { overflow: hidden; }
   .site-header {
     padding: 0 1rem;
     gap: 0.75rem;
+    height: auto;
+    min-height: 3.25rem;
+    flex-wrap: wrap;
+    padding-top: 0.7rem;
+    padding-bottom: 0.7rem;
   }
 
-  .nav-search { max-width: none; }
+  .brand-cluster {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .domain-tabs {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+
+  .nav-search {
+    max-width: none;
+    width: 100%;
+    margin-left: 0;
+  }
 
   .freshness-banner {
     flex-direction: column;
@@ -1178,4 +1254,5 @@ body.lightbox-open { overflow: hidden; }
   }
 
   .home-grid { grid-template-columns: 1fr; }
+  .home-search { flex-direction: column; }
 }

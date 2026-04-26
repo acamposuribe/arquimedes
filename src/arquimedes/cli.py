@@ -1255,6 +1255,54 @@ def compile(full: bool, force_cluster: bool, recompile_pages: bool):
     click.echo("Done. wiki/ updated.")
 
 
+@cli.command("migrate-global-bridges")
+@click.option("--root", "root_path", type=click.Path(path_type=Path, file_okay=False, dir_okay=True), help="Vault root to migrate. Defaults to the active project root.")
+@click.option("--apply", is_flag=True, help="Write migrated per-domain bridge artifacts/pages. Default is dry-run preview.")
+@click.option("--force", is_flag=True, help="Overwrite existing per-domain bridge files if they already exist.")
+@click.option("--json", "as_json", is_flag=True, help="Emit machine-readable JSON.")
+def migrate_global_bridges_cmd(root_path: Path | None, apply: bool, force: bool, as_json: bool):
+    """Migrate legacy shared global bridges into per-domain bridge artifacts."""
+    from arquimedes.lint_global_bridge import migrate_legacy_global_bridges
+
+    summary = migrate_legacy_global_bridges(root_path, apply=apply, force=force)
+
+    if as_json:
+        click.echo(json.dumps(summary, ensure_ascii=False, indent=2))
+    else:
+        click.echo(f"Root: {summary['root']}")
+        click.echo(f"Legacy bridges: {summary['legacy_bridges']}")
+        click.echo(f"Migrated bridges: {summary['migrated_bridges']}")
+        if summary["migrated_domains"]:
+            click.echo("Domains:")
+            for domain, count in sorted(summary["migrated_domains"].items()):
+                click.echo(f"  {domain}: {count}")
+        if summary["ambiguous_bridges"]:
+            click.echo(f"Ambiguous bridges: {len(summary['ambiguous_bridges'])}")
+            for item in summary["ambiguous_bridges"][:10]:
+                click.echo(f"  - {item.get('bridge_id')}: {item.get('reason')}")
+        if summary["warnings"]:
+            click.echo(f"Warnings: {len(summary['warnings'])}")
+            for item in summary["warnings"][:10]:
+                click.echo(f"  - {item.get('bridge_id')}: {item.get('reason')}")
+        if summary["collisions"]:
+            click.echo(f"Collisions: {len(summary['collisions'])}")
+            for path in summary["collisions"][:10]:
+                click.echo(f"  - {path}")
+        click.echo(f"Page copies: {summary['page_copies']}")
+        click.echo(f"Glossary replacements: {summary['glossary_replacements']}")
+        if summary.get("backup_root"):
+            click.echo(f"Backup: {summary['backup_root']}")
+        if apply:
+            click.echo("Applied." if summary["applied"] else "Not applied.")
+        else:
+            click.echo("Dry run only. Re-run with --apply to write files.")
+        for step in summary.get("next_steps", []):
+            click.echo(f"Next: {step}")
+
+    if apply and not summary["applied"]:
+        raise click.ClickException("Migration preview found collisions or ambiguous bridges; nothing was written.")
+
+
 @cli.command()
 @click.option("--quick", is_flag=True, help="Deterministic checks only (no LLM)")
 @click.option("--full", is_flag=True, help="Deterministic checks plus reflective LLM passes")

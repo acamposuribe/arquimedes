@@ -148,6 +148,20 @@ class TestCardSearch:
         result = search("thermal", limit=1)
         assert len(result.results) <= 1
 
+    def test_hyphenated_query_does_not_break_fts(self, index_repo, monkeypatch):
+        mat_dir = index_repo / "extracted" / "aabb001122"
+        meta = json.loads((mat_dir / "meta.json").read_text())
+        meta["summary"]["value"] = "A non-European reference in Mediterranean buildings."
+        meta["keywords"]["value"] = ["non-European", "thermal mass"]
+        (mat_dir / "meta.json").write_text(json.dumps(meta))
+        monkeypatch.chdir(index_repo)
+        rebuild_index()
+
+        result = search("non-European")
+
+        ids = [r.material_id for r in result.results]
+        assert "aabb001122" in ids
+
 
 class TestFacetFiltering:
     def test_domain_filter_research(self, index_repo):

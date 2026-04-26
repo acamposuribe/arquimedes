@@ -297,6 +297,17 @@ class MaterialEvidence:
 # --- FTS query sanitization ---
 
 _FTS5_SPECIAL = re.compile(r'["\(\)\*\:\^]')
+_FTS_TOKEN_NEEDS_QUOTE = re.compile(r"[^\w]")
+
+
+def _fts_term(token: str) -> str:
+    token = str(token or "").strip()
+    if not token:
+        return '""'
+    escaped = token.replace('"', '""')
+    if _FTS_TOKEN_NEEDS_QUOTE.search(token):
+        return f'"{escaped}"'
+    return token
 
 
 def safe_fts_query(query: str) -> str:
@@ -304,10 +315,12 @@ def safe_fts_query(query: str) -> str:
 
     - Empty → empty phrase match.
     - Contains FTS5 special chars or bare AND/OR/NOT → phrase search (quoted).
-    - Single token → passed through as-is.
+    - Single token → passed through as-is unless it contains punctuation such
+      as hyphens, in which case it is quoted as a phrase token.
     - Multiple plain tokens → stop words filtered out, remainder OR-expanded.
       BM25 naturally ranks full-match documents highest.
       e.g. "buildings for the thermal mass" → "buildings OR thermal OR mass"
+      e.g. "non-Western architecture" → "\"non-Western\" OR architecture"
     - If filtering removes all tokens → fall back to phrase search on original.
     """
     stripped = query.strip()
@@ -319,13 +332,13 @@ def safe_fts_query(query: str) -> str:
         return f'"{escaped}"'
     tokens = stripped.split()
     if len(tokens) == 1:
-        return stripped
+        return _fts_term(stripped)
     meaningful = [t for t in tokens if t.lower() not in STOP_WORDS]
     if not meaningful:
         # All tokens were stop words — phrase search on the original
         escaped = stripped.replace('"', '""')
         return f'"{escaped}"'
-    return " OR ".join(meaningful)
+    return " OR ".join(_fts_term(token) for token in meaningful)
 
 
 def _safe_fts_query(query: str) -> str:

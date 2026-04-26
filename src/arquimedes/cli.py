@@ -56,6 +56,7 @@ def _mcp_server_from_config(config_path: str | None):
     mount_path = str(mcp_cfg.get("mount_path") or "/")
     sse_path = str(mcp_cfg.get("sse_path") or "/sse")
     streamable_http_path = str(mcp_cfg.get("streamable_http_path") or "/mcp")
+    debug_http_log = bool(mcp_cfg.get("debug_http_log", False))
     transport = str(mcp_cfg.get("transport") or "streamable-http")
     if transport not in {"stdio", "sse", "streamable-http"}:
         raise click.ClickException("mcp.transport must be one of: stdio, sse, streamable-http")
@@ -70,6 +71,7 @@ def _mcp_server_from_config(config_path: str | None):
         sse_path=sse_path,
         streamable_http_path=streamable_http_path,
         auth_config=auth_config,
+        debug_http_log=debug_http_log,
     )
     return server, transport, mount_path
 

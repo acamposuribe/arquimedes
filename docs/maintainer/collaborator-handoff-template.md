@@ -27,5 +27,5 @@ Notes for the collaborator:
 - Your agent should follow `Setup.md` and use the local key file in this folder when configuring SSH.
 - After setup, your agent should keep using `Agent Handbook.md` for future Arquimedes work.
 - If MCP is unavailable but shell access exists, your agent may fall back to `Agent Handbook (CLI).md`.
-- If your local agent app cannot run shell commands but supports MCP, configure it to run `arq-mcp --config <vault>/config/collaborator/config.local.yaml` after setup. That MCP surface also includes `serve_local_ui` for the local browser UI fallback.
+- If your local agent app cannot run shell commands but supports MCP, configure it to run `arq-mcp --config <vault>/config/collaborator/config.local.yaml` after setup.
 - The only machine-specific input your agent should need from you is the absolute path to the shared library folder on this machine, unless something fails.

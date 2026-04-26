@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import types
 
@@ -222,6 +223,62 @@ def test_tool_materials_for_concept(monkeypatch):
     assert payload["materials"][0]["title"] == "Archive"
 
 
+def test_wrap_http_logging_writes_one_line(monkeypatch, tmp_path: Path):
+    lines: list[dict[str, object]] = []
+
+    monkeypatch.setattr(mcp_server, "_append_mcp_http_log", lambda cfg, payload: lines.append(payload))
+
+    async def app(scope, receive, send):
+        await send({"type": "http.response.start", "status": 406, "headers": []})
+        await send({"type": "http.response.body", "body": b"{}", "more_body": False})
+
+    wrapped = mcp_server._wrap_http_logging(app)
+
+    async def receive():
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    sent: list[dict[str, object]] = []
+
+    async def send(message):
+        sent.append(message)
+
+    asyncio.run(
+        wrapped(
+            {
+                "type": "http",
+                "method": "GET",
+                "path": "/mcp",
+                "query_string": b"",
+                "headers": [
+                    (b"host", b"mcp.example.com"),
+                    (b"accept", b"text/event-stream"),
+                    (b"user-agent", b"ChatGPT"),
+                    (b"cf-access-jwt-assertion", b"token"),
+                ],
+            },
+            receive,
+            send,
+        )
+    )
+
+    assert sent[0]["status"] == 406
+    assert lines[0]["path"] == "/mcp"
+    assert lines[0]["cf_access_jwt_present"] is True
+    assert lines[0]["status"] == 406
+
+
+def test_enable_http_logging_wraps_streamable_http_app():
+    class FakeServer:
+        def streamable_http_app(self):
+            return "app"
+
+    server = FakeServer()
+    mcp_server._enable_http_logging(server)
+
+    wrapped = server.streamable_http_app()
+    assert callable(wrapped)
+
+
 def test_build_server_passes_remote_settings(monkeypatch):
     captured: dict[str, object] = {}
 
@@ -265,6 +322,7 @@ def test_build_server_passes_remote_settings(monkeypatch):
     assert captured["kwargs"]["port"] == 9000
     assert captured["kwargs"]["sse_path"] == "/events"
     assert captured["kwargs"]["streamable_http_path"] == "/mcp-test"
+    assert "Start with overview" in captured["kwargs"]["instructions"]
     assert captured["kwargs"]["auth"] is None
     assert captured["kwargs"]["token_verifier"] is None
 

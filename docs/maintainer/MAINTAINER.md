@@ -125,8 +125,6 @@ arq-mcp --config <vault>/config/collaborator/config.local.yaml
 
 That server exposes the collaborator-safe read surface without granting Bash access.
 
-It also includes `serve_local_ui`, so collaborators using MCP-only agents can start a loopback-only browser UI without needing shell access.
-
 ## Remote MCP for ChatGPT
 
 If you want ChatGPT developer mode to use Arquimedes without requiring each collaborator to clone a vault locally, run `arq-mcp` as a remote streamable HTTP server and expose it through an HTTPS tunnel.

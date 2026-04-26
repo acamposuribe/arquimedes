@@ -15,11 +15,13 @@ import subprocess
 import sys
 import time
 from typing import Any
+import types
 
 
 _SKIP_FRESHNESS_ENV = "ARQ_SKIP_FRESHNESS"
 _LOCAL_UI_HOST = "127.0.0.1"
 _LOCAL_UI_START_TIMEOUT_SECONDS = 5.0
+_MCP_INSTRUCTIONS = """Use read-only tools only. Start with overview, list_domains_and_collections, or recent_materials to orient cheaply. Search before reading. Read the card view before page, chunk, or full text. Use figures, annotations, and read(detail=...) only after you have a concrete material. Use related, cluster, collection, and wiki navigation tools only after a concrete hit. Prefer the smallest tool and smallest payload that answers the question. Avoid full text unless wording-level evidence is required. Refresh only when you need the latest collaborator state."""
 
 
 def _csvish(values: list[str] | None) -> tuple[str, ...]:
@@ -84,6 +86,97 @@ def _truthy(value: str | None) -> bool:
 def _configure(config_path: str | None = None) -> None:
     if config_path:
         os.environ["ARQUIMEDES_CONFIG"] = config_path
+
+
+def _mcp_http_log_path(config: dict[str, Any] | None = None) -> Path:
+    from arquimedes.config import get_logs_root
+
+    logs_root = get_logs_root(config)
+    logs_root.mkdir(parents=True, exist_ok=True)
+    return logs_root / "mcp-http.log"
+
+
+def _scope_header_map(scope: dict[str, Any]) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for raw_key, raw_value in scope.get("headers", []):
+        headers[raw_key.decode("latin-1").lower()] = raw_value.decode("latin-1")
+    return headers
+
+
+def _append_mcp_http_log(config: dict[str, Any] | None, payload: dict[str, Any]) -> None:
+    path = _mcp_http_log_path(config)
+    line = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(line + "\n")
+
+
+def _wrap_http_logging(app, *, config: dict[str, Any] | None = None):
+    async def wrapped(scope, receive, send):
+        if scope.get("type") != "http":
+            return await app(scope, receive, send)
+
+        headers = _scope_header_map(scope)
+        started_at = time.time()
+        status_code = 500
+
+        async def send_wrapper(message):
+            nonlocal status_code
+            if message.get("type") == "http.response.start":
+                status_code = int(message.get("status", 500))
+            await send(message)
+
+        try:
+            await app(scope, receive, send_wrapper)
+            _append_mcp_http_log(
+                config,
+                {
+                    "ts": int(started_at),
+                    "method": scope.get("method"),
+                    "path": scope.get("path"),
+                    "query_string": scope.get("query_string", b"").decode("latin-1"),
+                    "status": status_code,
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "host": headers.get("host"),
+                    "accept": headers.get("accept"),
+                    "content_type": headers.get("content-type"),
+                    "user_agent": headers.get("user-agent"),
+                    "authorization_present": bool(headers.get("authorization")),
+                    "cf_access_jwt_present": bool(headers.get("cf-access-jwt-assertion")),
+                    "cf_ray": headers.get("cf-ray"),
+                },
+            )
+        except Exception as exc:
+            _append_mcp_http_log(
+                config,
+                {
+                    "ts": int(started_at),
+                    "method": scope.get("method"),
+                    "path": scope.get("path"),
+                    "query_string": scope.get("query_string", b"").decode("latin-1"),
+                    "status": status_code,
+                    "duration_ms": int((time.time() - started_at) * 1000),
+                    "host": headers.get("host"),
+                    "accept": headers.get("accept"),
+                    "content_type": headers.get("content-type"),
+                    "user_agent": headers.get("user-agent"),
+                    "authorization_present": bool(headers.get("authorization")),
+                    "cf_access_jwt_present": bool(headers.get("cf-access-jwt-assertion")),
+                    "cf_ray": headers.get("cf-ray"),
+                    "error": f"{exc.__class__.__name__}: {exc}",
+                },
+            )
+            raise
+
+    return wrapped
+
+
+def _enable_http_logging(server, *, config: dict[str, Any] | None = None) -> None:
+    original = server.streamable_http_app
+
+    def logged_streamable_http_app(self):
+        return _wrap_http_logging(original(), config=config)
+
+    server.streamable_http_app = types.MethodType(logged_streamable_http_app, server)
 
 
 def _ensure_fresh() -> None:
@@ -460,6 +553,7 @@ def build_server(
     sse_path: str = "/sse",
     streamable_http_path: str = "/mcp",
     auth_config=None,
+    debug_http_log: bool = False,
 ):
     """Build the FastMCP server lazily so tests don't require the SDK."""
     _configure(config_path)
@@ -488,6 +582,7 @@ def build_server(
 
     mcp = FastMCP(
         "Arquimedes",
+        instructions=_MCP_INSTRUCTIONS,
         json_response=True,
         auth=auth_settings,
         token_verifier=token_verifier,
@@ -497,6 +592,8 @@ def build_server(
         sse_path=sse_path,
         streamable_http_path=streamable_http_path,
     )
+    if debug_http_log:
+        _enable_http_logging(mcp)
 
     @mcp.tool()
     def refresh() -> dict[str, Any]:
@@ -614,11 +711,6 @@ def build_server(
         """List materials linked to one local concept cluster id."""
         return tool_materials_for_concept(cluster_id)
 
-    @mcp.tool()
-    def serve_local_ui(port: int = 8420) -> dict[str, Any]:
-        """Start the local-only web UI in the background and return its URL and pid."""
-        return tool_serve_local_ui(port=port)
-
     return mcp
 
 
@@ -636,6 +728,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--mount-path", default="/", help="Mount path for SSE transport.")
     parser.add_argument("--sse-path", default="/sse", help="SSE endpoint path.")
     parser.add_argument("--streamable-http-path", default="/mcp", help="Streamable HTTP endpoint path.")
+    parser.add_argument("--debug-http-log", action="store_true", help="Append one JSON line per HTTP request to logs/mcp-http.log.")
     parser.add_argument("--resource-server-url", help="Public HTTPS MCP URL for OAuth resource metadata.")
     parser.add_argument("--auth-issuer-url", help="OIDC issuer URL for remote OAuth.")
     parser.add_argument("--auth-jwks-url", help="Override JWKS URL if discovery is unavailable.")
@@ -679,6 +772,7 @@ def main(argv: list[str] | None = None) -> None:
         sse_path=args.sse_path,
         streamable_http_path=args.streamable_http_path,
         auth_config=auth_config,
+        debug_http_log=args.debug_http_log,
     )
     server.run(transport=args.transport, mount_path=args.mount_path)
 

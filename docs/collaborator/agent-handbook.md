@@ -15,7 +15,6 @@ Tool groups:
 - `read`, `figures`, `annotations`: drill into one material
 - `related`, `material_clusters`, `collection_clusters`, `concepts`, `materials_for_collection`, `materials_for_concept`, `list_wiki_dir`, `wiki_page_record`: traverse outward from one hit
 - `refresh`: explicit freshness when you need the latest collaborator state
-- `serve_local_ui`: local browser fallback only
 
 Prefer the smallest tool that answers the question.
 
@@ -46,16 +45,6 @@ Start from the index, not from raw files.
 - Prefer `read(detail=chunks|figures|annotations)` before requesting bodies.
 - Use navigation tools instead of repeated broad searches.
 - Avoid full text unless the question truly needs wording-level evidence.
-
-## Web UI
-
-LAN default:
-
-- `http://<maintainer-hostname>.local:8420`
-
-Off-LAN fallback:
-
-- use `serve_local_ui`
 
 ## Boundaries
 

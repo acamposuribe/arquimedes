@@ -96,7 +96,7 @@ arq --version
 
 Upgrades later: `pipx upgrade arquimedes`.
 
-If the collaborator's agent client cannot run shell commands but supports MCP, this install also provides `arq-mcp`, a read-only stdio MCP server exposing the collaborator-safe tools (`refresh`, `overview`, `search`, `read`, `figures`, `annotations`, `related`, `material_clusters`, `collection_clusters`, `concepts`, `list_domains_and_collections`, `list_wiki_dir`, `wiki_page_record`, `recent_materials`, `materials_for_collection`, `materials_for_concept`, `serve_local_ui`).
+If the collaborator's agent client cannot run shell commands but supports MCP, this install also provides `arq-mcp`, a read-only stdio MCP server exposing the collaborator-safe tools (`refresh`, `overview`, `search`, `read`, `figures`, `annotations`, `related`, `material_clusters`, `collection_clusters`, `concepts`, `list_domains_and_collections`, `list_wiki_dir`, `wiki_page_record`, `recent_materials`, `materials_for_collection`, `materials_for_concept`).
 
 ## Deploy key
 
@@ -261,7 +261,7 @@ Default remote endpoint:
 http://<host>:8000/mcp
 ```
 
-This MCP server exposes the same collaborator-safe read surface as the CLI: `refresh`, `overview`, `search`, `read`, `figures`, `annotations`, `related`, `material_clusters`, `collection_clusters`, and `concepts`. It also adds MCP-only navigation helpers for shell-less agents: `list_domains_and_collections`, `list_wiki_dir`, `wiki_page_record`, `recent_materials`, `materials_for_collection`, and `materials_for_concept`. Finally, it exposes `serve_local_ui`, which starts the local-only web UI on `127.0.0.1` in the background and returns the URL.
+This MCP server exposes the same collaborator-safe read surface as the CLI: `refresh`, `overview`, `search`, `read`, `figures`, `annotations`, `related`, `material_clusters`, `collection_clusters`, and `concepts`. It also adds MCP-only navigation helpers for shell-less agents: `list_domains_and_collections`, `list_wiki_dir`, `wiki_page_record`, `recent_materials`, `materials_for_collection`, and `materials_for_concept`.
 
 ## About `arq refresh` and freshness
 

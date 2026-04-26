@@ -12,7 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from arquimedes import enrich_stamps
-from arquimedes.config import get_project_root, load_config
+from arquimedes.config import (
+    get_indexes_root,
+    get_logs_root,
+    get_project_root,
+    load_config,
+)
 from arquimedes.llm import (
     EnrichmentError,
     LlmFn,
@@ -604,7 +609,7 @@ def local_cluster_fingerprint(
     if config is None:
         config = load_config()
     root = get_project_root()
-    db_path = root / "indexes" / "search.sqlite"
+    db_path = get_indexes_root(config) / "search.sqlite"
     if not db_path.exists():
         return ""
     con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
@@ -646,7 +651,7 @@ def is_local_clustering_stale(
     if clustered_at is None:
         return True
     manifest_index = _load_manifest_index(root)
-    db_path = root / "indexes" / "search.sqlite"
+    db_path = get_indexes_root(config) / "search.sqlite"
     if not db_path.exists():
         return True
     material_ids = _collection_material_ids(manifest_index, domain, collection)
@@ -994,7 +999,7 @@ def cluster_concepts(
     if config is None:
         config = load_config()
     root = get_project_root()
-    log_path = root / "logs" / "cluster.log"
+    log_path = get_logs_root(config) / "cluster.log"
     cluster_start_time = datetime.now()
 
     def _log_value(value) -> str:
@@ -1013,7 +1018,7 @@ def cluster_concepts(
     _append_log(cluster_start_time.isoformat(), "START", "local", domain_filter or "*", collection_filter or "*", force)
 
     try:
-        db_path = root / "indexes" / "search.sqlite"
+        db_path = get_indexes_root(config) / "search.sqlite"
         if not db_path.exists():
             raise FileNotFoundError(f"Search index not found at {db_path}. Run `arq index rebuild` first.")
 

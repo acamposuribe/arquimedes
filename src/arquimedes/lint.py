@@ -55,7 +55,7 @@ from arquimedes.compile_pages import (
     _meta_val,
     render_collection_page,
 )
-from arquimedes.config import get_project_root, load_config
+from arquimedes.config import get_logs_root, get_project_root, load_config
 from arquimedes.enrich import _is_chunk_stale, _is_document_stale, _is_figure_stale
 from arquimedes.llm import EnrichmentError, LlmFn, get_model_id, make_cli_llm_fn, parse_json_or_repair
 from arquimedes.enrich_stamps import canonical_hash
@@ -2491,7 +2491,7 @@ def run_lint(
     import datetime
     lint_start_time = datetime.datetime.now()
     root = get_project_root()
-    log_path = root / "logs" / "lint.log"
+    log_path = get_logs_root() / "lint.log"
 
     def _log_value(value) -> str:
         return str(value).replace("\t", " ").replace("\n", " ").strip()

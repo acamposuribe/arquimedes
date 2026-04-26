@@ -12,7 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterable
 
-from arquimedes.config import get_library_root, get_project_root, load_config
+from arquimedes.config import (
+    get_library_root,
+    get_logs_root,
+    get_project_root,
+    load_config,
+)
 from arquimedes.ingest import SUPPORTED_EXTENSIONS, load_manifest
 from arquimedes.models import compute_file_hash, compute_material_id
 from arquimedes.removal import RemovalReport, cascade_delete
@@ -72,7 +77,7 @@ def _append_log(payload: dict) -> None:
 
 
 def _write_batch_log(project_root: Path, payload: dict) -> None:
-    logs = project_root / "logs"
+    logs = get_logs_root()
     logs.mkdir(parents=True, exist_ok=True)
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     (logs / f"watch-{stamp}.log").write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")

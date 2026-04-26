@@ -17,7 +17,13 @@ from pathlib import Path
 from arquimedes import cluster as cluster_mod
 from arquimedes import compile_pages
 from arquimedes import enrich_stamps
-from arquimedes.config import get_project_root, load_config
+from arquimedes.config import (
+    get_extracted_root,
+    get_indexes_root,
+    get_project_root,
+    get_wiki_root,
+    load_config,
+)
 from arquimedes.lint_global_bridge import load_global_bridge_clusters
 
 logger = logging.getLogger(__name__)
@@ -538,9 +544,9 @@ def compile_wiki(
     if config is None:
         config = load_config()
     root = get_project_root()
-    wiki_root = root / "wiki"
-    extracted_root = root / "extracted"
-    db_path = root / "indexes" / "search.sqlite"
+    wiki_root = get_wiki_root()
+    extracted_root = get_extracted_root()
+    db_path = get_indexes_root(config) / "search.sqlite"
 
     # 1. Ensure search index
     if not db_path.exists():

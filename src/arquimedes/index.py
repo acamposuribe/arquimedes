@@ -344,10 +344,16 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
     if config is None:
         config = load_config()
 
+    from arquimedes.config import (
+        get_extracted_root,
+        get_indexes_root,
+        get_manifests_root,
+    )
+
     root = get_project_root()
-    extracted_dir = root / "extracted"
-    manifests_dir = root / "manifests"
-    indexes_dir = root / "indexes"
+    extracted_dir = get_extracted_root()
+    manifests_dir = get_manifests_root()
+    indexes_dir = get_indexes_root(config)
     indexes_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = manifests_dir / "materials.jsonl"
@@ -606,10 +612,15 @@ def ensure_index(config: dict | None = None) -> tuple[bool, IndexStats | None]:
     if config is None:
         config = load_config()
 
+    from arquimedes.config import (
+        get_extracted_root,
+        get_manifests_root,
+    )
+
     root = get_project_root()
-    index_path = root / "indexes" / "search.sqlite"
-    manifests_dir = root / "manifests"
-    extracted_dir = root / "extracted"
+    index_path = get_index_path(config)
+    manifests_dir = get_manifests_root()
+    extracted_dir = get_extracted_root()
     manifest_path = manifests_dir / "materials.jsonl"
 
     # Fast path: no index
@@ -777,5 +788,6 @@ def _newest_input_mtime(extracted_dir: Path) -> float | None:
 
 
 def get_index_path(config: dict | None = None) -> Path:
-    root = get_project_root()
-    return root / "indexes" / "search.sqlite"
+    from arquimedes.config import get_indexes_root
+
+    return get_indexes_root(config) / "search.sqlite"

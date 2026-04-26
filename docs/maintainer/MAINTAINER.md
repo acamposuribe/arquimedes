@@ -2,11 +2,33 @@
 
 This is the operational handbook for the Mac Mini that publishes the shared knowledge system.
 
+## The vault model (Phase 10)
+
+`arq` itself is one piece of code (the public `arquimedes` package, installed via pipx). Each knowledge base lives in its own private git repo called a **vault**. A maintainer machine owns exactly one vault and is the only writer for it.
+
+Three trees, three lifecycles:
+
+- **Code** — the `arquimedes` Python package (this repo). Public, versioned, upgraded via `pipx install --upgrade arquimedes`.
+- **Vault** — a private git repo containing `extracted/`, `manifests/`, `derived/`, `wiki/`, and the vault's own `config/`. Maintainer pushes; collaborators pull read-only via deploy keys. **One vault per maintainer machine.**
+- **Local cache** — per-machine, regenerable runtime state (`indexes/search.sqlite`, `logs/`). Defaults to the vault root for back-compat; can be moved out of the vault tree by setting `ARQUIMEDES_LOCAL_CACHE` or `local_cache_root` in the active config.
+
+Pointing `arq` at a vault:
+
+- `--config <path>` global flag on every subcommand
+- `$ARQUIMEDES_CONFIG` env var
+- cwd-walk for `config/config.yaml` (legacy default)
+
+Manual one-off operations on a different vault: `arq --config ~/Vaults/office/config/maintainer/config.yaml watch --once`.
+
+Inspect the active vault any time with `arq vault info --human`.
+
 ## Roles
 
 The maintainer machine is the only semantic publisher. It owns ingest, extraction, clustering, compile, lint, memory rebuild, commits, and pushes.
 
 Collaborator clones consume the published result and rebuild local query artifacts only.
+
+The freshness path (`git fetch && git reset --hard && git clean -fd`) only runs on collaborator machines (detected by presence of `config/collaborator/config.local.yaml` and absence of `config/maintainer/config.yaml`). Maintainer and developer machines skip the destructive steps so in-flight work is never wiped.
 
 ## Cadence
 
@@ -16,18 +38,41 @@ Collaborator clones consume the published result and rebuild local query artifac
 
 ## Setup
 
-Install from the repo root on the maintainer machine:
+Install code globally:
+
+```bash
+pipx install arquimedes
+# or, until PyPI is set up:
+pipx install git+https://github.com/<user>/arquimedes.git
+```
+
+Either point at an existing vault or create one:
+
+```bash
+# new vault (this machine becomes its maintainer)
+arq init ~/Vaults/personal
+# or clone a vault you already own
+git clone git@github.com:<user>/arq-vault-personal.git ~/Vaults/personal
+```
+
+Pin this shell — and every launchd job installed below — to the active vault:
+
+```bash
+export ARQUIMEDES_CONFIG=~/Vaults/personal/config/maintainer/config.yaml
+```
+
+Install launchd jobs (each one embeds the current `$ARQUIMEDES_CONFIG` into its plist via `_arq_program_args()`, so the job stays pinned to this vault even after reboot):
 
 ```bash
 arq watch --install
 arq lint --install-full
-arq serve --install --config config/maintainer/config.yaml
+arq serve --install
 ```
 
-Use the maintainer config profile for maintainer commands:
+Verify the vault was resolved correctly:
 
 ```bash
-export ARQUIMEDES_CONFIG=config/maintainer/config.yaml
+arq vault info --human
 ```
 
 Check launchd state:
@@ -105,7 +150,17 @@ If a deletion cascade needs undoing, revert the removal commit. The next scan re
 
 - `~/.arquimedes/watch.log` records scheduled scan outcomes.
 - `~/.arquimedes/sync.log` records sync outcomes when sync is used.
-- `logs/` contains per-stage and per-batch run details.
+- `<local-cache-root>/logs/` contains per-stage and per-batch run details (defaults to `<vault-root>/logs/` unless `ARQUIMEDES_LOCAL_CACHE` or `local_cache_root` is set).
+
+## Multi-vault on one human
+
+A maintainer can own multiple vaults across multiple machines (e.g., personal vault on the Mac Mini, office vault on a different host). Constraints:
+
+- Each vault gets its own private GitHub repo.
+- Each maintainer machine owns exactly one vault and runs exactly one set of `arq watch / arq lint / arq serve` launchd jobs.
+- For one-off operations against a non-resident vault from any machine, point `arq` at it manually: `arq --config /path/to/other-vault/config/maintainer/config.yaml overview`.
+
+Do not try to install two `arq watch` launchd jobs on one machine — the labels collide.
 
 ## References
 

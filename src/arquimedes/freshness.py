@@ -10,6 +10,24 @@ from arquimedes.config import get_project_root
 from arquimedes.index import ensure_index_and_memory
 
 
+def _is_collaborator_machine(root: Path) -> bool:
+    """Return True only on collaborator machines.
+
+    The freshness path's ``git reset --hard`` + ``git clean -fd`` is destructive
+    and is only safe where the local repo is a read-only mirror of upstream
+    (collaborator role). Maintainers and developers routinely have uncommitted
+    work; for them this function returns False and the destructive steps are
+    skipped.
+
+    Heuristic: a machine is a collaborator iff a collaborator overlay exists
+    AND no maintainer overlay exists. If neither exists (developer working in
+    a fresh clone of the code repo), this also returns False.
+    """
+    collaborator_overlay = root / "config" / "collaborator" / "config.local.yaml"
+    maintainer_overlay = root / "config" / "maintainer" / "config.yaml"
+    return collaborator_overlay.exists() and not maintainer_overlay.exists()
+
+
 def _checked_at() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -78,7 +96,7 @@ def workspace_freshness_status() -> dict:
 def update_workspace() -> dict:
     root = get_project_root()
     status = workspace_freshness_status()
-    if status["repo_applicable"] and status["has_upstream"]:
+    if status["repo_applicable"] and status["has_upstream"] and _is_collaborator_machine(root):
         status["pull_attempted"] = True
         fetch = _git(root, "fetch", "--prune")
         if fetch.returncode == 0:
@@ -106,6 +124,8 @@ def update_workspace() -> dict:
         else:
             status["pull_result"] = "error"
             status["message"] = (fetch.stderr or fetch.stdout or "git fetch failed").strip()
+    elif status["repo_applicable"] and not _is_collaborator_machine(root):
+        status["message"] = "Maintainer/developer machine; skipping destructive git restore."
     index_rebuilt, _stats, memory_rebuilt, _counts = ensure_index_and_memory()
     status["index_rebuilt"] = index_rebuilt
     status["memory_rebuilt"] = memory_rebuilt

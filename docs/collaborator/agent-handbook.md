@@ -2,15 +2,15 @@
 
 You are investigating a knowledge base you did **not** build. Your job is to answer questions using the `arq` CLI; never edit the index, wiki, or `derived/` artifacts.
 
-**Precondition:** this handbook assumes setup is already done and the project virtualenv is activated (Windows: `.\.venv\Scripts\Activate.ps1`, macOS/Linux: `source .venv/bin/activate`) before running any `arq` command — verify with `arq overview --human`; if `arq` is not found or the command fails, stop and follow `docs/collaborator/setup.md`.
+**Precondition (install check):** before anything else, run `arq --version`. If it returns a version, you're good. If it fails ("command not found" / "not recognized"), stop and follow `docs/collaborator/setup.md`.
 
 ## Mental model
 
-Three layers, all derived from PDFs in `Library/`:
+Three layers, all derived from PDFs in the shared library folder (`Library/`):
 
 - `extracted/<material_id>/` — per-material artifacts: `meta.json`, `pages.jsonl`, `chunks.jsonl`, `annotations.jsonl`, `figures/fig_*.json`, `text.md`
 - `wiki/<domain>/<collection>/` — human-readable pages per material, plus `shared/` for cross-collection bridge concepts
-- `indexes/search.sqlite` + `derived/*.jsonl` — FTS5 index and cluster/bridge projections
+- `derived/*.jsonl` — committed cluster/bridge projections
 
 A `material_id` is a 12-char sha256 prefix. Domains are `research` and `practice`.
 
@@ -25,7 +25,8 @@ A `material_id` is a 12-char sha256 prefix. Domains are `research` and `practice
    - `arq read <id> --page <N>` — one page's text
    - `arq read <id> --full` — full `text.md` (heavy)
 5. **Traverse.** `arq related <id>`, `arq material-clusters <id>`, `arq collection-clusters <domain> <collection>`, `arq concepts`.
-6. **Refresh.** `arq refresh` — fetches upstream, restores tracked files to the canonical repo state, removes untracked non-ignored scratch files, and ensures index + memory are current. Other agent commands already run the same freshness path first; set `ARQ_SKIP_FRESHNESS=1` to opt out.
+
+Every command keeps itself fresh automatically — no manual refresh needed.
 
 ## Command quick reference (read-only)
 
@@ -40,7 +41,6 @@ A `material_id` is a 12-char sha256 prefix. Domains are `research` and `practice
 | `arq material-clusters <id>` | Local clusters this material belongs to |
 | `arq collection-clusters <domain> <collection>` | Local clusters in a collection |
 | `arq concepts` | Concept candidates across the corpus |
-| `arq refresh` | Restore canonical repo state + ensure index/memory |
 
 Every command emits JSON by default; add `--human` for short human-readable text. Exit code is non-zero on unambiguous error (missing id, bad flag combo) and zero with an empty-but-valid result when a query matches nothing.
 
@@ -56,4 +56,4 @@ The maintainer machine serves the web UI on the local network at `http://<mainta
 
 ## Maintainer-only commands — do not call - out of bounds!
 
-`arq ingest`, `arq extract`, `arq extract-raw`, `arq enrich`, `arq cluster`, `arq compile`, `arq memory`, `arq lint`, `arq index`, `arq watch`, `arq sync`, `arq serve`. These mutate artifacts or kick off long-running pipelines. If you think one is needed, ask the human maintainer. (`arq serve` is read-only but long-running and is owned by the maintainer's launchd job — never start a second instance.)
+`arq init`, `arq ingest`, `arq extract`, `arq extract-raw`, `arq enrich`, `arq cluster`, `arq compile`, `arq memory`, `arq lint`, `arq index`, `arq watch`, `arq sync`, `arq serve`. These mutate artifacts or kick off long-running pipelines. If you think one is needed, ask the human maintainer.

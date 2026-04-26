@@ -11,6 +11,7 @@ import yaml
 # Environment variable to explicitly set the project root
 _ENV_VAR = "ARQUIMEDES_ROOT"
 _CONFIG_ENV_VAR = "ARQUIMEDES_CONFIG"
+_LOCAL_CACHE_ENV_VAR = "ARQUIMEDES_LOCAL_CACHE"
 
 
 def _find_project_root() -> Path:
@@ -53,8 +54,12 @@ def _find_project_root() -> Path:
             return parent
 
     raise FileNotFoundError(
-        "Cannot find config/config.yaml. Either run from inside the arquimedes repo, "
-        f"or set {_ENV_VAR} to the repo root."
+        "No vault found. Looked for config/config.yaml by walking up from the "
+        "current directory and from the installed arquimedes package, and found "
+        "none. To proceed, do one of: (a) `cd` into a vault folder; (b) pass "
+        "`--config <path-to-vault-config>`; (c) export "
+        f"{_ENV_VAR}=<vault-root> or {_CONFIG_ENV_VAR}=<vault-config>; (d) "
+        "create a new vault with `arq init <path>`."
     )
 
 
@@ -141,5 +146,57 @@ def get_library_root(config: dict[str, Any] | None = None) -> Path:
 
 
 def get_project_root() -> Path:
-    """Get the project root directory."""
+    """Get the project root directory.
+
+    Back-compat alias for ``get_vault_root()``. New code should call
+    ``get_vault_root()`` (data tree) or ``get_local_cache_root()`` (per-machine
+    runtime tree) explicitly.
+    """
     return _find_project_root()
+
+
+def get_vault_root() -> Path:
+    """Return the vault root: directory containing extracted/, wiki/, etc."""
+    return _find_project_root()
+
+
+def get_local_cache_root(config: dict[str, Any] | None = None) -> Path:
+    """Return the per-machine cache root for runtime artifacts.
+
+    Resolution order:
+    1. ``ARQUIMEDES_LOCAL_CACHE`` environment variable
+    2. ``local_cache_root`` key in the active config
+    3. Vault root (back-compat default — runtime artifacts colocated with data)
+    """
+    env_cache = os.environ.get(_LOCAL_CACHE_ENV_VAR)
+    if env_cache:
+        return Path(env_cache).expanduser()
+    if config is not None:
+        explicit = config.get("local_cache_root")
+        if explicit:
+            return Path(explicit).expanduser()
+    return get_vault_root()
+
+
+def get_extracted_root() -> Path:
+    return get_vault_root() / "extracted"
+
+
+def get_wiki_root() -> Path:
+    return get_vault_root() / "wiki"
+
+
+def get_derived_root() -> Path:
+    return get_vault_root() / "derived"
+
+
+def get_manifests_root() -> Path:
+    return get_vault_root() / "manifests"
+
+
+def get_indexes_root(config: dict[str, Any] | None = None) -> Path:
+    return get_local_cache_root(config) / "indexes"
+
+
+def get_logs_root(config: dict[str, Any] | None = None) -> Path:
+    return get_local_cache_root(config) / "logs"

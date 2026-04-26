@@ -12,7 +12,7 @@ from pathlib import Path
 
 from arquimedes import enrich_stamps
 from arquimedes.llm import get_model_id
-from arquimedes.config import get_project_root, load_config
+from arquimedes.config import get_logs_root, get_project_root, load_config
 from arquimedes.enrich_document import enrich_document_stage
 from arquimedes.enrich_chunks import enrich_chunks_stage
 from arquimedes.enrich_figures import enrich_figures_stage
@@ -262,7 +262,7 @@ def enrich(
     """
 
     import datetime
-    log_path = get_project_root() / "logs" / "enrich.log"
+    log_path = get_logs_root() / "enrich.log"
 
     enrich_start_time = datetime.datetime.now()
 

@@ -757,7 +757,10 @@ def read_memory_bridge_stamp(config: dict | None = None, *, project_root: Path |
     tracked ``derived/`` artifacts. Collaborator clones can then rebuild local
     DB state without inheriting a stale tracked readiness marker from Git.
     """
-    index_path = (project_root or get_project_root()) / "indexes" / "search.sqlite"
+    if project_root is not None:
+        index_path = project_root / "indexes" / "search.sqlite"
+    else:
+        index_path = get_index_path()
     if not index_path.exists():
         return {}
     try:

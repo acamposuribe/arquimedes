@@ -3,12 +3,39 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 
 import click
 
 from arquimedes import __version__
+
+
+def _resolved_config_path() -> str | None:
+    """Return the active vault config path for embedding into a launchd plist.
+
+    Honors `$ARQUIMEDES_CONFIG` (which the global `--config` flag on the cli
+    group sets when used). Returns None when nothing explicit is in effect, in
+    which case the launchd job will fall back to cwd-walk under
+    `working_directory`.
+    """
+    explicit = os.environ.get("ARQUIMEDES_CONFIG")
+    return explicit or None
+
+
+def _arq_program_args(*subcommand: str) -> list[str]:
+    """Build a `python -m arquimedes.cli [--config <path>] <subcommand>` list.
+
+    Used by every `--install` path so the launchd job is pinned to the vault
+    config the maintainer was using when they ran `--install`.
+    """
+    base = [sys.executable, "-m", "arquimedes.cli"]
+    cfg = _resolved_config_path()
+    if cfg:
+        base.extend(["--config", cfg])
+    base.extend(subcommand)
+    return base
 
 
 def _commit_and_push_if_changed(message: str) -> dict:
@@ -30,9 +57,92 @@ def _commit_and_push_if_changed(message: str) -> dict:
 
 @click.group()
 @click.version_option(version=__version__, prog_name="arquimedes")
-def cli():
+@click.option(
+    "--config",
+    "global_config_path",
+    default=None,
+    type=click.Path(),
+    help="Path to a vault config file (overrides $ARQUIMEDES_CONFIG). Applies to every subcommand.",
+)
+@click.pass_context
+def cli(ctx: click.Context, global_config_path: str | None):
     """Arquimedes — Collaborative LLM knowledge base for architecture."""
-    pass
+    ctx.ensure_object(dict)
+    ctx.obj["global_config_path"] = global_config_path
+    if global_config_path:
+        os.environ["ARQUIMEDES_CONFIG"] = global_config_path
+
+
+@cli.command("init")
+@click.argument("path", type=click.Path())
+@click.option(
+    "--from",
+    "from_url",
+    default=None,
+    help="Clone an existing vault from a git URL instead of scaffolding a new one.",
+)
+@click.option(
+    "--no-git",
+    is_flag=True,
+    help="(scaffold mode only) Do not run `git init` in the new vault.",
+)
+@click.option(
+    "--human",
+    is_flag=True,
+    help="Emit a short human-readable summary instead of JSON.",
+)
+def init_cmd(path: str, from_url: str | None, no_git: bool, human: bool):
+    """Scaffold a new vault at <path>, or clone one with --from <git-url>."""
+    from arquimedes.vault import VaultExistsError, clone_vault, init_vault
+
+    try:
+        if from_url:
+            result = clone_vault(from_url, path)
+        else:
+            result = init_vault(path, init_git=not no_git)
+    except VaultExistsError as exc:
+        raise click.ClickException(str(exc))
+    except RuntimeError as exc:
+        raise click.ClickException(str(exc))
+
+    if human:
+        verb = "Cloned" if from_url else "Initialized"
+        click.echo(f"{verb} vault at {result.root}")
+        if result.git_initialized:
+            click.echo("git: initialized")
+        click.echo(f"files: {len(result.files_created)} written")
+        if from_url:
+            click.echo("Next: write config/collaborator/config.local.yaml with library_root, then run `arq overview`.")
+        else:
+            click.echo("Next: edit config/config.yaml, drop PDFs into the library, run `arq ingest`.")
+    else:
+        click.echo(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+
+
+@cli.group("vault")
+def vault_group():
+    """Vault inspection and lifecycle commands."""
+
+
+@vault_group.command("info")
+@click.option(
+    "--human",
+    is_flag=True,
+    help="Emit a short human-readable summary instead of JSON.",
+)
+def vault_info_cmd(human: bool):
+    """Show the resolved vault root, library, cache, config sources, and git remote."""
+    from arquimedes.vault import format_vault_info_human, vault_info
+
+    try:
+        info = vault_info()
+    except FileNotFoundError as exc:
+        raise click.ClickException(str(exc))
+
+    if human:
+        click.echo(format_vault_info_human(info))
+    else:
+        click.echo(json.dumps(info.to_dict(), ensure_ascii=False, indent=2))
 
 
 @cli.command()
@@ -661,7 +771,7 @@ def lint(quick: bool, full: bool, stages: tuple[str, ...], report: bool, fix: bo
         minute, hour, *_ = cron.split()
         plist = render_plist(
             "com.arquimedes.lint-full",
-            [sys.executable, "-m", "arquimedes.cli", "lint", "--full", "--commit-push"],
+            _arq_program_args("lint", "--full", "--commit-push"),
             working_directory=str(get_project_root()),
             start_calendar_interval={"Hour": int(hour), "Minute": int(minute)},
         )
@@ -796,8 +906,8 @@ def watch(config_path: str | None, install: bool, uninstall: bool, show_status: 
                 return
             config = load_config(config_path)
             interval = int(config.get("watch", {}).get("scan_interval_minutes", 30) or 30) * 60
-            args = [sys.executable, "-m", "arquimedes.cli", "watch", "--once"]
-            if config_path:
+            args = _arq_program_args("watch", "--once")
+            if config_path and "--config" not in args:
                 args.extend(["--config", config_path])
             plist = render_plist(
                 label,
@@ -893,7 +1003,7 @@ def sync(install: bool, uninstall: bool, show_status: bool, once: bool):
             interval = int(config.get("sync", {}).get("pull_interval", 300) or 300)
             plist = render_plist(
                 label,
-                [sys.executable, "-m", "arquimedes.cli", "sync", "--once"],
+                _arq_program_args("sync", "--once"),
                 working_directory=str(get_project_root()),
                 start_interval=interval,
                 run_at_load=True,
@@ -938,12 +1048,12 @@ def serve(host: str | None, port: int | None, config_path: str | None, install: 
             if show_status:
                 click.echo(json.dumps(launchd_status(label), indent=2))
                 return
-            args = [sys.executable, "-m", "arquimedes.cli", "serve"]
+            args = _arq_program_args("serve")
             if host:
                 args.extend(["--host", host])
             if port is not None:
                 args.extend(["--port", str(port)])
-            if config_path:
+            if config_path and "--config" not in args:
                 args.extend(["--config", config_path])
             plist = render_plist(
                 label,

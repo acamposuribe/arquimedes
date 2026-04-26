@@ -17,6 +17,7 @@ dependencies = [
     "uvicorn>=0.32",
     "jinja2>=3.1",
     "mistune>=3.0",
+    "mcp>=1.0",
     "watchdog>=5.0",
     "pytesseract>=0.3",
     "Pillow>=10.0",
@@ -31,6 +32,7 @@ dev = [
 
 [project.scripts]
 arq = "arquimedes.cli:cli"
+arq-mcp = "arquimedes.mcp_server:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

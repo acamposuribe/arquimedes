@@ -1,75 +1,60 @@
 # Arquimedes Agent Handbook
 
-You are investigating a knowledge base you did **not** build. Your job is to answer questions using the `arq` CLI; never edit the index, wiki, or `derived/` artifacts.
+You are investigating a knowledge base you did **not** build. Use the **read-only MCP tools** when available. Do not modify the vault, index, wiki, or derived artifacts.
 
-**Precondition (tool check):** before anything else, run `pipx upgrade arquimedes`, then `arq --version`. If `arq --version` fails ("command not found" / "not recognized"), stop and follow `docs/collaborator/setup.md`.
+## Surface
 
-## Mental model
+Default surface: `arq-mcp`
 
-Three layers, all derived from PDFs in the shared library folder (`Library/`):
+Tool groups:
 
-- `extracted/<material_id>/` — per-material artifacts: `meta.json`, `pages.jsonl`, `chunks.jsonl`, `annotations.jsonl`, `figures/fig_*.json`, `text.md`
-- `wiki/<domain>/<collection>/` — human-readable pages per material, plus `shared/` for cross-collection bridge concepts
-- `derived/*.jsonl` — committed cluster/bridge projections
+- `overview`, `list_domains_and_collections`, `recent_materials`: orient the corpus before searching
+- `search`: find materials, passages, figures, annotations, clusters, and bridges
+- `read`, `figures`, `annotations`: drill into one material
+- `related`, `material_clusters`, `collection_clusters`, `concepts`, `materials_for_collection`, `materials_for_concept`, `list_wiki_dir`, `wiki_page_record`: traverse outward from one hit
+- `refresh`: explicit freshness when you need the latest collaborator state
+- `serve_local_ui`: local browser fallback only
 
-A `material_id` is a 12-char sha256 prefix. Domains are `research` and `practice`.
+Prefer the smallest tool that answers the question.
 
-## Investigation recipe
+CLI is fallback only: use it only if MCP is unavailable.
 
-1. **Orient.** `arq overview` → corpus shape and freshness stamps.
-2. **Find.** `arq search "<query>"` → ranked hits across materials, chunks, figures, annotations, local clusters, global bridges.
-3. **Locate a material.** `arq read <material_id>` → compact card (meta + counts + wiki path).
-4. **Drill in** (in order of cost):
-   - `arq read <id> --detail chunks|figures|annotations` — compact index of one aspect
-   - `arq read <id> --chunk <chunk_id>` — one chunk's text
-   - `arq read <id> --page <N>` — one page's text
-   - `arq read <id> --full` — full `text.md` (heavy)
-5. **Traverse.** `arq related <id>`, `arq material-clusters <id>`, `arq collection-clusters <domain> <collection>`, `arq concepts`.
+## Mental Model
 
-Every command keeps itself fresh automatically — no manual refresh needed.
+Three layers:
 
-## Command quick reference (read-only)
+- materials
+- published wiki pages
+- indexed search / cluster / bridge projections
 
-| Command | Purpose |
-|---|---|
-| `arq overview` | Corpus counts, collections, derived-artifact stamps |
-| `arq search <q>` | FTS ranked hits across all layers |
-| `arq read <id>` | Material card; `--page/--chunk/--full/--detail` drill-in |
-| `arq figures <id>` | Figure index; `--visual-type`, `--figure <id>` |
-| `arq annotations <id>` | Reader highlights/notes; `--page`, `--type` |
-| `arq related <id>` | Materials linked via concepts/keywords/authors |
-| `arq material-clusters <id>` | Local clusters this material belongs to |
-| `arq collection-clusters <domain> <collection>` | Local clusters in a collection |
-| `arq concepts` | Concept candidates across the corpus |
+Start from the index, not from raw files.
 
-Every command emits JSON by default; add `--human` for short human-readable text. Exit code is non-zero on unambiguous error (missing id, bad flag combo) and zero with an empty-but-valid result when a query matches nothing.
+## Recipe
 
-## Token hygiene
+1. Orient with `overview`, `list_domains_and_collections`, or `recent_materials`.
+2. Search with `search`.
+3. Open one material with `read`.
+4. Drill down only as needed with `read(detail=...)`, `figures`, or `annotations`.
+5. Traverse with relation or navigation tools only after you have a concrete hit.
 
-- Start with `--detail <aspect>` before asking for full page/chunk text.
-- `arq search` already returns compact snippets — you rarely need `--full`.
-- Filter figures with `--visual-type` and annotations with `--page`/`--type`.
+## Token Hygiene
+
+- Prefer `overview` or `recent_materials` over broad search when orienting.
+- Prefer `read` card output before page, chunk, or full text.
+- Prefer `read(detail=chunks|figures|annotations)` before requesting bodies.
+- Use navigation tools instead of repeated broad searches.
+- Avoid full text unless the question truly needs wording-level evidence.
 
 ## Web UI
 
-The maintainer machine serves the web UI on the local network at `http://<maintainer-hostname>.local:8420`. If the human collaborator wants to browse visually and is on that LAN, point them there.
+LAN default:
 
-If the human collaborator is away from the maintainer's LAN but explicitly wants the browser UI on their own machine, it is acceptable to run a local-only server from their vault clone:
+- `http://<maintainer-hostname>.local:8420`
 
-```bash
-arq refresh
-arq serve --host 127.0.0.1 --port 8420
-```
+Off-LAN fallback:
 
-Then have them open `http://127.0.0.1:8420`.
+- use `serve_local_ui`
 
-Guardrails:
+## Boundaries
 
-- use this only as an explicit off-LAN fallback, not the default workflow
-- do not use `arq serve --install`
-
-## Maintainer-only commands — do not call - out of bounds!
-
-`arq init`, `arq ingest`, `arq extract`, `arq extract-raw`, `arq enrich`, `arq cluster`, `arq compile`, `arq memory`, `arq lint`, `arq index`, `arq watch`, `arq sync`. These mutate artifacts or kick off long-running pipelines. If you think one is needed, ask the human maintainer. 
-
-`arq serve` is also maintainer-oriented by default, except for the explicit off-LAN local-only fallback described above.
+Do not run maintainer workflows. If a task appears to require publishing, ingest, extraction, clustering, compile, lint, sync, or watch behavior, stop and ask the human maintainer.

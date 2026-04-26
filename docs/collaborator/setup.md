@@ -89,6 +89,8 @@ arq --version
 
 Upgrades later: `pipx upgrade arquimedes`.
 
+If the collaborator's agent client cannot run shell commands but supports MCP, this install also provides `arq-mcp`, a read-only stdio MCP server exposing the collaborator-safe tools (`refresh`, `overview`, `search`, `read`, `figures`, `annotations`, `related`, `material_clusters`, `collection_clusters`, `concepts`, `list_domains_and_collections`, `list_wiki_dir`, `wiki_page_record`, `recent_materials`, `materials_for_collection`, `materials_for_concept`, `serve_local_ui`).
+
 ## Deploy key
 
 The vault is a private git repo. The maintainer issues you a per-collaborator read-only **deploy key** — an SSH key registered only on the vault repo. You install the private half of the key on this machine; the maintainer keeps it revocable from the GitHub side without affecting other collaborators.
@@ -214,6 +216,33 @@ Useful read-only commands:
 - `arq annotations <material_id>`
 
 Do **not** run `arq serve` locally — the web UI is served by the maintainer (see "Optional: web UI" below). Running a second instance just confuses bookmarks.
+
+## Optional: MCP for shell-less agents
+
+Some local agent apps can use MCP tools but cannot run arbitrary shell commands. For those clients, configure the packaged read-only MCP server instead of teaching the agent to call `arq` directly.
+
+Command:
+
+```text
+arq-mcp
+```
+
+Args:
+
+```text
+--config <vault>/config/collaborator/config.local.yaml
+```
+
+Minimal stdio MCP config shape:
+
+```json
+{
+  "command": "arq-mcp",
+  "args": ["--config", "/absolute/path/to/vault/config/collaborator/config.local.yaml"]
+}
+```
+
+This MCP server exposes the same collaborator-safe read surface as the CLI: `refresh`, `overview`, `search`, `read`, `figures`, `annotations`, `related`, `material_clusters`, `collection_clusters`, and `concepts`. It also adds MCP-only navigation helpers for shell-less agents: `list_domains_and_collections`, `list_wiki_dir`, `wiki_page_record`, `recent_materials`, `materials_for_collection`, and `materials_for_concept`. Finally, it exposes `serve_local_ui`, which starts the local-only web UI on `127.0.0.1` in the background and returns the URL.
 
 ## About `arq refresh` and freshness
 

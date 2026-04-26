@@ -116,6 +116,16 @@ git@arq-vault:<user>/arq-vault-personal.git
 
 The collaborator's agent should be told to read the setup guide first, use the private key file from the same handoff folder, and then treat the agent handbook as the default guide for future Arquimedes sessions. If the agent supports persistent memory, it should store a reminder to reopen the handbook at the start of future Arquimedes work. The reusable template for that note lives at `docs/maintainer/collaborator-handoff-template.md`.
 
+If the collaborator uses an agent client without shell permissions but with MCP support, the maintainer should point them at the packaged read-only MCP server:
+
+```text
+arq-mcp --config <vault>/config/collaborator/config.local.yaml
+```
+
+That server exposes the collaborator-safe read surface without granting Bash access.
+
+It also includes `serve_local_ui`, so collaborators using MCP-only agents can start a loopback-only browser UI without needing shell access.
+
 If you are using an agent to prepare the handoff, the agent should:
 
 1. generate the per-collaborator deploy keypair

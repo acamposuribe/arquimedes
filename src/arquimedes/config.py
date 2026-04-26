@@ -36,6 +36,9 @@ def _find_project_root() -> Path:
     if env_config:
         config_path = Path(env_config).expanduser()
         if config_path.exists():
+            for ancestor in config_path.parents:
+                if (ancestor / "config" / "config.yaml").exists():
+                    return ancestor
             if config_path.parent.name == "config":
                 return config_path.parent.parent
             return config_path.parent

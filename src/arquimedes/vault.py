@@ -82,6 +82,20 @@ _MAINTAINER_PROFILE = """\
 #     enabled: true
 #     tunnel_name: "arquimedes-example"
 #     binary_path: "/opt/homebrew/bin/cloudflared"
+
+# Optional: expose the read-only web UI publicly through Cloudflare Tunnel
+# + Cloudflare Access. Enable per vault — leave off for vaults you only
+# want on LAN. When public_exposure is true:
+#   - the /api/freshness and /update endpoints are not registered
+#   - the freshness banner is hidden
+#   - Host header is enforced against `allowed_hosts`
+# Auth (email allowlist + persistent sessions) is handled by Cloudflare
+# Access — see docs/maintainer/MAINTAINER.md for the dashboard recipe.
+#
+# serve:
+#   public_exposure: true
+#   allowed_hosts:
+#     - "vault.example.com"
 """
 
 _VAULT_SUBDIRS = ("extracted", "manifests", "derived", "wiki", "config")

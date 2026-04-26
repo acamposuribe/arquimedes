@@ -358,8 +358,101 @@ arq serve --uninstall
 
 Caveats:
 
-- The web UI has no authentication. Only expose it on a trusted LAN. Do not port-forward to the public internet.
+- The web UI has no authentication of its own. Only expose it on a trusted LAN, OR put it behind Cloudflare Access (next section). Do not port-forward to the public internet directly.
 - The Mac Mini must not sleep. Energy Saver → "Prevent automatic sleeping when the display is off" must be on (also required for `arq watch`).
+
+## Public Web UI through Cloudflare Tunnel + Access (per-vault opt-in)
+
+The web UI can be exposed publicly on a per-vault basis, gated by Cloudflare Access (email allowlist, persistent sessions). Enable it for the personal vault, leave it off for the office vault.
+
+What changes when `serve.public_exposure: true`:
+
+- the `/api/freshness` and `/update` endpoints are not registered (so no remote actor can trigger workspace work)
+- the freshness banner is hidden in the rendered pages
+- a `TrustedHostMiddleware` rejects any request whose `Host` header is not in `serve.allowed_hosts` (returns `400 Invalid host header`)
+- read routes (`/`, `/wiki/...`, `/materials/...`, `/figures/...`, `/source/...`, `/extracted/.../text`, `/search`, `/health`) keep working unchanged
+
+The web UI is read-only by design (no write endpoints exist), so once mutating routes are unregistered the public surface is purely a viewer.
+
+### One-time Cloudflare setup (per vault you want to expose)
+
+This assumes you already followed the MCP runbook above for the same vault — i.e. you have a tunnel (e.g. `arquimedes-personal`), a `~/.cloudflared/config.yml`, and the `cloudflared` launchd agent running. The web UI rides on the same tunnel; **no second tunnel and no second launchd agent**.
+
+1. **Pick a public hostname** in the same Cloudflare zone you used for the MCP (e.g. `vault-personal.arqtistic.com`).
+
+2. **Add an ingress rule** to `~/.cloudflared/config.yml`. Add the new hostname *before* the catch-all `service: http_status:404` line:
+
+   ```yaml
+   tunnel: arquimedes-personal
+   credentials-file: /Users/<you>/.cloudflared/<tunnel-uuid>.json
+
+   ingress:
+     - hostname: mcp-personal.arqtistic.com
+       service: http://127.0.0.1:8000
+     - hostname: vault-personal.arqtistic.com
+       service: http://127.0.0.1:8420
+     - service: http_status:404
+   ```
+
+3. **Route DNS** for the new hostname to the tunnel:
+
+   ```bash
+   cloudflared tunnel route dns arquimedes-personal vault-personal.arqtistic.com
+   ```
+
+4. **Restart the cloudflared agent** so it picks up the new ingress:
+
+   ```bash
+   launchctl kickstart -k gui/$(id -u)/com.arquimedes.cloudflared-tunnel
+   ```
+
+5. **Add a Cloudflare Access policy** for the new hostname. In the Cloudflare Zero Trust dashboard:
+
+   - Access → Applications → Add an application → Self-hosted
+   - **Application name**: `Arquimedes Vault — Personal`
+   - **Subdomain / Domain**: `vault-personal` / `arqtistic.com`
+   - **Path**: leave blank (covers the whole site)
+   - **Session duration**: pick `1 month` (or `24 hours` if you want shorter). This is what gives you "persistent sessions" — collaborators authenticate once and stay logged in for that duration on that browser.
+   - Identity providers: enable "One-time PIN" (email magic-link) at minimum. Optionally also Google.
+   - Add a policy:
+     - **Policy name**: `Allowed collaborators`
+     - **Action**: `Allow`
+     - **Include** → `Emails` → enter each collaborator's email address (comma-separated or one per line)
+   - Save.
+
+6. **Enable on the maintainer side.** Edit `config/maintainer/config.yaml` in the vault (`~/Vaults/personal/config/maintainer/config.yaml`):
+
+   ```yaml
+   serve:
+     host: 0.0.0.0       # or 127.0.0.1 — both work behind cloudflared
+     port: 8420
+     public_exposure: true
+     allowed_hosts:
+       - "vault-personal.arqtistic.com"
+   ```
+
+   Then restart the serve job so it picks up the new config:
+
+   ```bash
+   launchctl kickstart -k gui/$(id -u)/com.arquimedes.serve
+   ```
+
+### Verification
+
+1. From a browser logged in as an allowed email: open `https://vault-personal.arqtistic.com`. You should see the Cloudflare Access login page once, then the vault home with no freshness banner.
+2. From an incognito window with a non-allowed email: Cloudflare Access denies you before any request hits the maintainer machine.
+3. `curl https://vault-personal.arqtistic.com/api/freshness` from anywhere → returns the Cloudflare Access HTML challenge page (request never reaches the app). Even if it somehow bypassed Access, the route is unregistered, so the app would return 404.
+4. `curl -H 'Host: attacker.example.com' http://127.0.0.1:8420/health` from the maintainer machine → `400 Invalid host header`.
+
+### Disabling for a given vault (e.g. office)
+
+Simply leave `serve.public_exposure` unset (or `false`) and don't add an ingress rule for that vault's hostname. The LAN-only behavior described in the previous section is the default.
+
+### Caveats
+
+- This exposes raw PDFs and figure images at `/source/...` and `/figures/...`. Anyone in your Access allowlist can download them. If a collaborator should see only part of the vault, this is not the right tool — keep that material out of the vault.
+- Upstream bandwidth: the tunnel is free, but the maintainer machine's upload link carries every byte.
+- Cloudflare Access cookies are scoped per-hostname, so the vault UI and ChatGPT MCP each prompt for login once on first visit.
 
 ## Recovery
 

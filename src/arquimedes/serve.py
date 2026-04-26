@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from arquimedes import freshness as freshness_mod
 from arquimedes import read as read_mod
@@ -434,6 +435,22 @@ def _wiki_context(path: Path, body: str, *, material_id: str | None = None, titl
     }
 
 
+def _serve_config(config: dict | None) -> dict:
+    cfg = (config or {}).get("serve") or {}
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _public_exposure(config: dict | None) -> bool:
+    return bool(_serve_config(config).get("public_exposure", False))
+
+
+def _allowed_hosts(config: dict | None) -> list[str]:
+    raw = _serve_config(config).get("allowed_hosts") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
 def _base_context(*, page_title: str, **extra) -> dict:
     collections = read_mod.list_domains_and_collections()
     return {"page_title": page_title, "nav_collections": collections, "nav_global_concepts": read_mod.list_glossary_concepts(), **extra}
@@ -442,6 +459,16 @@ def _base_context(*, page_title: str, **extra) -> dict:
 def create_app(config: dict | None = None) -> FastAPI:
     app = FastAPI(title="Arquimedes")
     app.state.config = config or {}
+    public_exposure = _public_exposure(config)
+    app.state.public_exposure = public_exposure
+    if public_exposure:
+        hosts = _allowed_hosts(config)
+        if not hosts:
+            raise RuntimeError(
+                "serve.public_exposure is true but serve.allowed_hosts is empty. "
+                "Set serve.allowed_hosts to the public hostname(s) before exposing the UI."
+            )
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
     _TEMPLATES.env.globals.update(
         breadcrumbs=breadcrumbs,
@@ -449,6 +476,7 @@ def create_app(config: dict | None = None) -> FastAPI:
         material_url=material_url,
         truncate_words=truncate_words,
     )
+    _TEMPLATES.env.globals["public_exposure"] = public_exposure
 
     @app.exception_handler(404)
     async def not_found(request: Request, exc: HTTPException):
@@ -463,13 +491,14 @@ def create_app(config: dict | None = None) -> FastAPI:
     def health():
         return {"ok": True}
 
-    @app.get("/api/freshness")
-    def freshness():
-        return JSONResponse(freshness_mod.workspace_freshness_status())
+    if not public_exposure:
+        @app.get("/api/freshness")
+        def freshness():
+            return JSONResponse(freshness_mod.workspace_freshness_status())
 
-    @app.post("/update")
-    def update():
-        return JSONResponse(freshness_mod.update_workspace())
+        @app.post("/update")
+        def update():
+            return JSONResponse(freshness_mod.update_workspace())
 
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request):

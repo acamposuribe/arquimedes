@@ -62,6 +62,14 @@ enrichment:
 serve:
   host: 0.0.0.0
   port: 8420
+  # Set to true to expose the UI publicly through Cloudflare Tunnel + Access.
+  # When enabled, /api/freshness and /update are unregistered, the freshness
+  # banner is hidden, and the Host header is enforced against allowed_hosts.
+  # Auth (email allowlist + persistent sessions) is provided by Cloudflare
+  # Access — see docs/maintainer/MAINTAINER.md for the dashboard recipe.
+  # public_exposure: false
+  # allowed_hosts:
+  #   - "vault.example.com"
 
 # Optional remote MCP profile for ChatGPT / other remote MCP clients.
 # Bind to loopback, then expose via Cloudflare Tunnel + Access (see

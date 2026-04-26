@@ -321,6 +321,49 @@ def test_update_and_freshness_endpoints(tmp_path, monkeypatch):
     assert client.post("/update").json()["message"] == "Updated"
 
 
+def test_public_exposure_unregisters_mutating_routes(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    config = {"serve": {"public_exposure": True, "allowed_hosts": ["vault.example.com"]}}
+    client = TestClient(serve_mod.create_app(config), base_url="http://vault.example.com")
+    assert client.get("/api/freshness").status_code == 404
+    assert client.post("/update").status_code == 404
+    assert client.get("/health").json() == {"ok": True}
+
+
+def test_public_exposure_enforces_trusted_host(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    config = {"serve": {"public_exposure": True, "allowed_hosts": ["vault.example.com"]}}
+    client = TestClient(serve_mod.create_app(config), base_url="http://attacker.example.com")
+    assert client.get("/health").status_code == 400
+
+
+def test_public_exposure_requires_allowed_hosts(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    import pytest
+    with pytest.raises(RuntimeError, match="allowed_hosts"):
+        serve_mod.create_app({"serve": {"public_exposure": True}})
+
+
+def test_public_exposure_hides_freshness_banner(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "shared" / "glossary").mkdir(parents=True)
+    (root / "wiki" / "shared" / "glossary" / "_index.md").write_text("", encoding="utf-8")
+    config = {"serve": {"public_exposure": True, "allowed_hosts": ["vault.example.com"]}}
+    client = TestClient(serve_mod.create_app(config), base_url="http://vault.example.com")
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "freshness-banner" not in response.text
+
+
+def test_default_serve_keeps_freshness_banner(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "shared" / "glossary").mkdir(parents=True)
+    (root / "wiki" / "shared" / "glossary" / "_index.md").write_text("", encoding="utf-8")
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/")
+    assert "freshness-banner" in response.text
+
+
 def test_material_route_renders_search_hits(tmp_path, monkeypatch):
     root = _repo(tmp_path, monkeypatch)
     _write_json(root / "extracted" / "mat_001" / "meta.json", {

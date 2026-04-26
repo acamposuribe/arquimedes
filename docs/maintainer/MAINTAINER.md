@@ -135,28 +135,19 @@ Recommended shape:
 
 - keep the tool surface read-only
 - expose the server through a stable HTTPS URL such as `https://mcp.example.com/mcp`
-- use OAuth / OIDC for identity
 - use Cloudflare Tunnel for public HTTPS reachability if you already manage the domain there
+- let Cloudflare Access manage OAuth for ChatGPT on the protected hostname
 
 Configure the remote MCP in `config/maintainer/config.yaml`:
 
 ```yaml
 mcp:
   transport: "streamable-http"
-  host: "127.0.0.1"
+  host: "0.0.0.0"
   port: 8000
   streamable_http_path: "/mcp"
   keep_alive: true
-  auth:
-    issuer_url: "https://auth.example.com"
-    resource_server_url: "https://mcp.example.com/mcp"
-    required_scopes: ["arq.read"]
 ```
-
-Two common restriction patterns:
-
-- personal vault: add `allowed_emails: ["you@example.com"]` or `allowed_subjects: ["<oidc-sub>"]` so the same OAuth identity works across all of your devices
-- org vault: add `allowed_email_domains: ["yourorg.com"]` so multiple collaborators in the same tenant can authenticate separately
 
 Run in the foreground for testing:
 
@@ -173,13 +164,13 @@ arq mcp --status
 
 Important:
 
-- this restriction is based on the OAuth / OIDC identity provider, not on a ChatGPT account identifier exposed to Arquimedes
-- `mcp.auth.resource_server_url` must be the public HTTPS MCP URL ChatGPT reaches, not the local bind URL
-- Cloudflare Tunnel solves HTTPS reachability; your OAuth provider still needs to issue access tokens with refresh support (`offline_access`) if you want ChatGPT to stay connected cleanly
+- `mcp` itself stays read-only; identity and login happen at the Cloudflare Access layer
+- the public MCP URL ChatGPT sees is the Cloudflare hostname, not the local bind URL
+- if you want a second layer of auth for non-Cloudflare clients later, `arq-mcp` still has optional OIDC/JWT support, but ChatGPT did not need it in the working setup below
 
 ### Cloudflare Tunnel + Access runbook (tested on macOS)
 
-This is the operator path we have actually validated on the maintainer machine. It publishes the MCP over HTTPS and then places Cloudflare Access in front of it.
+This is the operator path we actually validated on the maintainer machine. It publishes the MCP over HTTPS, protects it with a self-hosted Access app, and lets ChatGPT authenticate through Cloudflare Managed OAuth.
 
 1. Start the MCP locally and keep it bound to loopback. For first testing, running it in the foreground is fine:
 
@@ -290,7 +281,15 @@ launchctl list | grep arquimedes.cloudflared-tunnel
 - For a personal vault, allow only the specific email addresses you want to use
 - Session duration: `24 hours`
 
-9. Smoke test after Access is added:
+9. In that same self-hosted app, enable `Managed OAuth` and set:
+
+- `Allowed redirect URIs`: `https://chatgpt.com/connector/oauth/*`
+- keep `Allow localhost clients` on
+- keep `Allow loopback clients` on
+- keep `Grant session duration` as `Same as session duration`
+- keep `Access token lifetime` as `Default`
+
+10. Smoke test after Access is added:
 
 ```bash
 curl -i https://mcp-personal.example.com/mcp
@@ -311,19 +310,27 @@ That proves:
 - Access is enforcing login
 - authenticated traffic reaches the real MCP server
 
-10. Repeat the same shape for an office/org vault on its own maintainer server:
+11. Connect ChatGPT:
+
+- ChatGPT web -> Settings -> Apps / Connectors -> add remote MCP server
+- MCP URL: `https://mcp-personal.example.com/mcp`
+- Authentication: `OAuth`
+- ChatGPT should now autodetect OAuth, redirect through Cloudflare login, and finish connected without any manual OAuth field entry
+
+12. Repeat the same shape for an office/org vault on its own maintainer server:
 
 - choose a different tunnel name, such as `arquimedes-office`
 - choose a different hostname, such as `mcp-office.example.com`
 - point the tunnel ingress to that server's local MCP port
 - in the Access policy, allow the office collaborators' identities instead of the maintainer's personal emails
+- enable `Managed OAuth` on that office hostname too
 
 Current status:
 
 - HTTPS publication is verified
 - Cloudflare Access protection is verified
 - browser login through Access is verified
-- ChatGPT as the MCP client still needs its own end-to-end verification against this protected endpoint
+- ChatGPT remote MCP connection through Cloudflare Managed OAuth is verified
 
 If you are using an agent to prepare the handoff, the agent should:
 

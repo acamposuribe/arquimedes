@@ -1,0 +1,84 @@
+# Arquimedes maintainer profile (example)
+# Copy to config/maintainer/config.yaml inside a vault and tune to taste.
+# `arq init` writes a starter version automatically.
+
+library_root: "~/Arquimedes-Library"
+
+llm:
+  agent_cmd:
+    - "claude --print"
+    - "codex exec"
+
+extraction:
+  chunk_size: 500
+  generate_thumbnails: true
+  ocr_fallback: true
+  figure_extraction:
+    embedded: true
+    rasterize: true
+    rasterize_dpi: 200
+
+enrichment:
+  prompt_version: "enrich-v1.0"
+  enrichment_schema_version: "1"
+  chunk_batch_target: 25
+  chunk_parallel_requests: 8
+  figure_batch_size: 3
+  figure_parallel_requests: 5
+  max_retries: 3
+  parallel: 8
+  llm_routes:
+    document:
+      - provider: claude
+        command: "claude"
+        model: sonnet
+        effort: medium
+    metadata:
+      - provider: claude
+        command: "claude"
+        model: sonnet
+        effort: medium
+    chunk:
+      - provider: claude
+        command: "claude"
+        model: sonnet
+        effort: low
+    figure:
+      - provider: claude
+        command: "claude"
+        model: sonnet
+        effort: medium
+    cluster:
+      - provider: claude
+        command: "claude"
+        model: sonnet
+        effort: medium
+    lint:
+      - provider: claude
+        command: "claude"
+        model: sonnet
+        effort: low
+
+serve:
+  host: 0.0.0.0
+  port: 8420
+
+watch:
+  scan_interval_minutes: 30
+  batch_commit: true
+  enrich_retries: 1
+
+lint_full:
+  schedule_cron: "0 2 * * *"
+
+clustering:
+  parallel_collections: 4
+
+lint:
+  post_compile_quick: true
+  parallel_collection_audits: 4
+  full_schedule_min_hours: 168
+  graph_schedule:
+    min_interval_hours: 168
+    min_cluster_delta: 3
+    min_material_delta: 5

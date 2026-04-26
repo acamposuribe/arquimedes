@@ -1,0 +1,15 @@
+# Arquimedes shared configuration (example)
+# Copy to config/config.yaml inside a vault and edit. `arq init` writes a
+# similar file automatically when you scaffold a new vault.
+
+library_root: "~/Arquimedes-Library"
+
+sync:
+  pull_interval: 300
+  auto_start: false
+  auto_index: true
+  reset_tracked: true
+
+serve:
+  host: "0.0.0.0"
+  port: 8420

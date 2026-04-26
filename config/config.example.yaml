@@ -1,8 +1,7 @@
-# Arquimedes shared configuration (example)
-# Copy to config/config.yaml inside a vault and edit. `arq init` writes a
-# similar file automatically when you scaffold a new vault.
+# Arquimedes vault shared configuration (example).
+# `arq init` writes the same shape automatically when you scaffold a new vault.
 
-library_root: "~/Arquimedes-Library"
+library_root: "~/Library/Mobile Documents/com~apple~CloudDocs/Arquimedes"
 
 sync:
   pull_interval: 300

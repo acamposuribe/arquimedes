@@ -411,14 +411,17 @@ def test_auth_config_from_mapping_parses_yaml_shape():
 
 def test_mcp_cli_install_uses_config_profile(monkeypatch):
     calls: dict[str, object] = {}
+    config = {"mcp": {"keep_alive": True}}
 
     monkeypatch.setattr(
         "arquimedes.config.load_config",
-        lambda config_path=None: {
-            "mcp": {"keep_alive": True},
-        },
+        lambda config_path=None: config,
     )
     monkeypatch.setattr("arquimedes.config.get_project_root", lambda: Path("/repo"))
+    monkeypatch.setattr(
+        "arquimedes.cli._ensure_mcp_install_config",
+        lambda cfg, config_path=None: (cfg, Path("/repo/config/maintainer/config.yaml")),
+    )
     monkeypatch.setattr(
         "arquimedes.launchd.render_plist",
         lambda label, program_arguments, **kwargs: calls.setdefault(
@@ -491,21 +494,25 @@ def test_mcp_cloudflare_tunnel_config_parses_enabled_block():
 
 
 def test_mcp_cli_install_also_installs_cloudflare_tunnel(monkeypatch):
-    real_exists = Path.exists
-
-    monkeypatch.setattr(
-        "arquimedes.config.load_config",
-        lambda config_path=None: {
-            "mcp": {
-                "keep_alive": True,
-                "cloudflare_tunnel": {
-                    "enabled": True,
-                    "tunnel_name": "arquimedes-personal",
-                    "binary_path": "/opt/homebrew/bin/cloudflared",
-                },
-            }
+    config = {
+        "mcp": {
+            "keep_alive": True,
+            "allowed_hosts": ["mcp.example.com"],
+            "allowed_origins": ["https://mcp.example.com", "https://chatgpt.com"],
+            "cloudflare_tunnel": {
+                "enabled": True,
+                "tunnel_name": "arquimedes-personal",
+                "binary_path": "/opt/homebrew/bin/cloudflared",
+            },
         },
-    )
+        "serve": {
+            "public_exposure": True,
+            "allowed_hosts": ["vault.example.com"],
+            "port": 8420,
+        },
+    }
+
+    monkeypatch.setattr("arquimedes.config.load_config", lambda config_path=None: config)
     monkeypatch.setattr("arquimedes.config.get_project_root", lambda: Path("/repo"))
     monkeypatch.setattr("arquimedes.launchd.render_plist", lambda *args, **kwargs: "<plist />")
     monkeypatch.setattr(
@@ -513,10 +520,49 @@ def test_mcp_cli_install_also_installs_cloudflare_tunnel(monkeypatch):
         lambda label, plist_text: {"label": label, "plist": plist_text},
     )
     monkeypatch.setattr(
-        Path,
-        "exists",
-        lambda self: True if str(self) == "/opt/homebrew/bin/cloudflared" else real_exists(self),
+        "arquimedes.cli._ensure_mcp_install_config",
+        lambda cfg, config_path=None: (cfg, Path("/repo/config/maintainer/config.yaml")),
     )
+    monkeypatch.setattr(
+        "arquimedes.cli._ensure_cloudflared_binary",
+        lambda binary_path: {"binary_path": binary_path, "installed": False},
+    )
+    monkeypatch.setattr(
+        "arquimedes.cli._ensure_cloudflared_login",
+        lambda binary_path: {"logged_in": False, "cert_path": "/Users/test/.cloudflared/cert.pem"},
+    )
+    monkeypatch.setattr(
+        "arquimedes.cli._ensure_cloudflare_tunnel",
+        lambda binary_path, tunnel_name: {
+            "tunnel_name": tunnel_name,
+            "tunnel_id": "tunnel-123",
+            "credentials_file": "/Users/test/.cloudflared/tunnel-123.json",
+            "created": False,
+        },
+    )
+    monkeypatch.setattr(
+        "arquimedes.cli._write_cloudflared_config",
+        lambda cfg, tunnel_id, credentials_file: {
+            "path": "/Users/test/.cloudflared/config.yml",
+            "ingress": [
+                {"hostname": "mcp.example.com", "service": "http://127.0.0.1:8000"},
+                {"hostname": "vault.example.com", "service": "http://127.0.0.1:8420"},
+            ],
+        },
+    )
+    monkeypatch.setattr(
+        "arquimedes.cli._cloudflare_ingress_entries",
+        lambda cfg: [
+            {"hostname": "mcp.example.com", "service": "http://127.0.0.1:8000"},
+            {"hostname": "vault.example.com", "service": "http://127.0.0.1:8420"},
+        ],
+    )
+    monkeypatch.setattr(
+        "arquimedes.cli._ensure_cloudflare_dns_route",
+        lambda binary_path, tunnel_name, hostname: {"hostname": hostname, "created": False},
+    )
+    monkeypatch.setattr("arquimedes.cli._load_yaml_file", lambda path: config)
+    monkeypatch.setattr("arquimedes.cli._write_yaml_file", lambda path, payload: None)
 
     result = CliRunner().invoke(cli, ["mcp", "--install"])
 
@@ -524,6 +570,9 @@ def test_mcp_cli_install_also_installs_cloudflare_tunnel(monkeypatch):
     payload = json.loads(result.output)
     assert payload["mcp"]["label"] == "com.arquimedes.mcp"
     assert payload["cloudflare_tunnel"]["label"] == "com.arquimedes.cloudflared-tunnel"
+    assert payload["cloudflare_named_tunnel"]["tunnel_id"] == "tunnel-123"
+    assert payload["cloudflare_dns"][0]["hostname"] == "mcp.example.com"
+    assert payload["cloudflare_dns"][1]["hostname"] == "vault.example.com"
 
 
 def test_mcp_cli_status_includes_cloudflare_tunnel(monkeypatch):

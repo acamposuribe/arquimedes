@@ -5,12 +5,16 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
+import shutil
 import subprocess
 import sys
 
 import click
+import yaml
 
 from arquimedes import __version__
+from arquimedes.vault import DEFAULT_CLOUDFLARED_BINARY, DEFAULT_LIBRARY_ROOT
 
 
 def _resolved_config_path() -> str | None:
@@ -121,6 +125,320 @@ def _mcp_cloudflare_tunnel_config(config: dict) -> dict | None:
     }
 
 
+def _slugify(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "vault"
+
+
+def _is_tty() -> bool:
+    return sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def _cloudflared_default_binary() -> str:
+    return shutil.which("cloudflared") or DEFAULT_CLOUDFLARED_BINARY
+
+
+def _maintainer_config_file(config_path: str | None = None) -> Path:
+    from arquimedes.config import get_vault_root
+
+    if config_path:
+        path = Path(config_path).expanduser()
+        if not path.is_absolute():
+            path = (Path.cwd() / path).resolve()
+        return path
+    return get_vault_root() / "config" / "maintainer" / "config.yaml"
+
+
+def _load_yaml_file(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    with open(path, encoding="utf-8") as handle:
+        payload = yaml.safe_load(handle) or {}
+    if not isinstance(payload, dict):
+        raise click.ClickException(f"{path} must contain a YAML mapping")
+    return payload
+
+
+def _write_yaml_file(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=False).strip()
+    path.write_text(f"{text}\n", encoding="utf-8")
+
+
+def _serve_hostnames(config: dict) -> list[str]:
+    serve_cfg = config.get("serve") or {}
+    if not isinstance(serve_cfg, dict):
+        raise click.ClickException("serve config must be a mapping in config.yaml")
+    if not bool(serve_cfg.get("public_exposure", False)):
+        return []
+    return _string_list(serve_cfg.get("allowed_hosts"))
+
+
+def _cloudflare_ingress_entries(config: dict) -> list[dict[str, str]]:
+    entries: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    mcp_cfg = _mcp_config(config)
+    mcp_port = int(mcp_cfg.get("port") or 8000)
+    for host in _string_list(mcp_cfg.get("allowed_hosts")):
+        if host not in seen:
+            entries.append({"hostname": host, "service": f"http://127.0.0.1:{mcp_port}"})
+            seen.add(host)
+
+    serve_cfg = config.get("serve") or {}
+    if not isinstance(serve_cfg, dict):
+        raise click.ClickException("serve config must be a mapping in config.yaml")
+    serve_port = int(serve_cfg.get("port") or 8420)
+    for host in _serve_hostnames(config):
+        if host not in seen:
+            entries.append({"hostname": host, "service": f"http://127.0.0.1:{serve_port}"})
+            seen.add(host)
+
+    return entries
+
+
+def _ensure_cloudflared_binary(binary_path: str) -> dict:
+    path = Path(binary_path)
+    if path.exists():
+        return {"binary_path": str(path), "installed": False}
+
+    resolved = shutil.which("cloudflared")
+    if resolved:
+        return {"binary_path": resolved, "installed": False}
+
+    brew = shutil.which("brew")
+    if not brew:
+        raise click.ClickException(
+            "cloudflared is not installed and Homebrew is unavailable. "
+            "Install cloudflared manually or set mcp.cloudflare_tunnel.binary_path."
+        )
+
+    proc = subprocess.run(
+        [brew, "install", "cloudflared"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode != 0:
+        raise click.ClickException((proc.stderr or proc.stdout or "brew install cloudflared failed").strip())
+
+    resolved = shutil.which("cloudflared")
+    if resolved:
+        return {"binary_path": resolved, "installed": True}
+
+    if path.exists():
+        return {"binary_path": str(path), "installed": True}
+
+    raise click.ClickException("cloudflared install completed but the binary could not be located.")
+
+
+def _ensure_cloudflared_login(binary_path: str) -> dict:
+    cert_path = Path.home() / ".cloudflared" / "cert.pem"
+    if cert_path.exists():
+        return {"logged_in": False, "cert_path": str(cert_path)}
+
+    if not _is_tty():
+        raise click.ClickException(
+            "Cloudflare login is required before tunnel setup. "
+            "Re-run `arq mcp --install` interactively or run `cloudflared tunnel login` first."
+        )
+
+    proc = subprocess.run([binary_path, "tunnel", "login"], check=False)
+    if proc.returncode != 0:
+        raise click.ClickException("cloudflared tunnel login failed")
+    if not cert_path.exists():
+        raise click.ClickException("cloudflared tunnel login did not create ~/.cloudflared/cert.pem")
+    return {"logged_in": True, "cert_path": str(cert_path)}
+
+
+def _cloudflare_tunnel_list(binary_path: str, tunnel_name: str | None = None) -> list[dict]:
+    args = [binary_path, "tunnel", "list", "--output", "json"]
+    if tunnel_name:
+        args.extend(["--name", tunnel_name])
+    proc = subprocess.run(args, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        raise click.ClickException((proc.stderr or proc.stdout or "cloudflared tunnel list failed").strip())
+    try:
+        payload = json.loads(proc.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise click.ClickException("cloudflared tunnel list returned invalid JSON") from exc
+    if not isinstance(payload, list):
+        raise click.ClickException("cloudflared tunnel list returned an unexpected payload")
+    return payload
+
+
+def _ensure_cloudflare_tunnel(binary_path: str, tunnel_name: str) -> dict:
+    created = False
+    for item in _cloudflare_tunnel_list(binary_path, tunnel_name):
+        if str(item.get("name") or "") == tunnel_name and str(item.get("deleted_at") or "").startswith("0001-01-01"):
+            tunnel_id = str(item.get("id") or "").strip()
+            if tunnel_id:
+                break
+    else:
+        proc = subprocess.run(
+            [binary_path, "tunnel", "create", tunnel_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise click.ClickException((proc.stderr or proc.stdout or "cloudflared tunnel create failed").strip())
+        created = True
+        tunnel_id = ""
+        for item in _cloudflare_tunnel_list(binary_path, tunnel_name):
+            if str(item.get("name") or "") == tunnel_name and str(item.get("deleted_at") or "").startswith("0001-01-01"):
+                tunnel_id = str(item.get("id") or "").strip()
+                break
+        if not tunnel_id:
+            raise click.ClickException(f"Created tunnel {tunnel_name!r} but could not resolve its id.")
+
+    credentials_file = Path.home() / ".cloudflared" / f"{tunnel_id}.json"
+    if not credentials_file.exists():
+        proc = subprocess.run(
+            [binary_path, "tunnel", "token", "--cred-file", str(credentials_file), tunnel_name],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode != 0:
+            raise click.ClickException((proc.stderr or proc.stdout or "cloudflared tunnel token failed").strip())
+
+    return {
+        "tunnel_name": tunnel_name,
+        "tunnel_id": tunnel_id,
+        "credentials_file": str(credentials_file),
+        "created": created,
+    }
+
+
+def _ensure_cloudflare_dns_route(binary_path: str, tunnel_name: str, hostname: str) -> dict:
+    proc = subprocess.run(
+        [binary_path, "tunnel", "route", "dns", tunnel_name, hostname],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if proc.returncode == 0:
+        return {"hostname": hostname, "created": True}
+
+    message = (proc.stderr or proc.stdout or "cloudflared tunnel route dns failed").strip()
+    lowered = message.lower()
+    if "already exists" in lowered or "already routed" in lowered:
+        return {"hostname": hostname, "created": False, "message": message}
+    raise click.ClickException(message)
+
+
+def _write_cloudflared_config(config: dict, tunnel_id: str, credentials_file: str) -> dict:
+    ingress = _cloudflare_ingress_entries(config)
+    if not ingress:
+        raise click.ClickException(
+            "No public hostnames are configured for the Cloudflare tunnel. "
+            "Set mcp.allowed_hosts and optionally serve.allowed_hosts/public_exposure first."
+        )
+
+    config_path = Path.home() / ".cloudflared" / "config.yml"
+    payload = {
+        "tunnel": tunnel_id,
+        "credentials-file": credentials_file,
+        "ingress": [*ingress, {"service": "http_status:404"}],
+    }
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    text = yaml.safe_dump(payload, sort_keys=False, allow_unicode=False).strip()
+    config_path.write_text(f"{text}\n", encoding="utf-8")
+    return {"path": str(config_path), "ingress": ingress}
+
+
+def _prompt_required(prompt: str, *, default: str) -> str:
+    value = str(click.prompt(prompt, default=default, show_default=True)).strip()
+    if not value:
+        raise click.ClickException(f"{prompt} is required")
+    return value
+
+
+def _ensure_mcp_install_config(config: dict, *, config_path: str | None = None) -> tuple[dict, Path]:
+    maintainer_path = _maintainer_config_file(config_path)
+    maintainer_config = _load_yaml_file(maintainer_path)
+    changed = False
+
+    mcp_cfg = maintainer_config.get("mcp")
+    if not isinstance(mcp_cfg, dict):
+        mcp_cfg = {}
+        maintainer_config["mcp"] = mcp_cfg
+        changed = True
+    mcp_cfg.setdefault("transport", "streamable-http")
+    mcp_cfg.setdefault("host", "127.0.0.1")
+    mcp_cfg.setdefault("port", 8000)
+    mcp_cfg.setdefault("streamable_http_path", "/mcp")
+    mcp_cfg.setdefault("keep_alive", True)
+
+    tunnel_cfg = mcp_cfg.get("cloudflare_tunnel")
+    if not isinstance(tunnel_cfg, dict):
+        tunnel_cfg = {}
+        mcp_cfg["cloudflare_tunnel"] = tunnel_cfg
+        changed = True
+    tunnel_cfg.setdefault("label", "com.arquimedes.cloudflared-tunnel")
+    tunnel_cfg.setdefault("keep_alive", True)
+    tunnel_cfg.setdefault("binary_path", _cloudflared_default_binary())
+
+    current_hosts = _string_list(mcp_cfg.get("allowed_hosts"))
+    current_origins = _string_list(mcp_cfg.get("allowed_origins"))
+    tunnel_name = str(tunnel_cfg.get("tunnel_name") or "").strip()
+    cloudflared_enabled = bool(tunnel_cfg.get("enabled", False))
+
+    if (not current_hosts or not tunnel_name or not cloudflared_enabled) and not _is_tty():
+        raise click.ClickException(
+            "MCP tunnel config is incomplete. Re-run `arq mcp --install` interactively "
+            "or pre-fill mcp.allowed_hosts, mcp.allowed_origins, and mcp.cloudflare_tunnel."
+        )
+
+    if not current_hosts:
+        default_host = f"mcp-{_slugify(maintainer_path.parent.parent.parent.name)}.example.com"
+        host = _prompt_required("Public MCP hostname", default=default_host)
+        mcp_cfg["allowed_hosts"] = [host]
+        mcp_cfg["allowed_origins"] = [f"https://{host}", "https://chatgpt.com"]
+        current_hosts = [host]
+        current_origins = mcp_cfg["allowed_origins"]
+        changed = True
+    elif not current_origins:
+        mcp_cfg["allowed_origins"] = [f"https://{current_hosts[0]}", "https://chatgpt.com"]
+        changed = True
+
+    if not tunnel_name:
+        default_tunnel = f"arquimedes-{_slugify(maintainer_path.parent.parent.parent.name)}"
+        tunnel_cfg["tunnel_name"] = _prompt_required("Cloudflare tunnel name", default=default_tunnel)
+        changed = True
+    if not cloudflared_enabled:
+        tunnel_cfg["enabled"] = True
+        changed = True
+
+    serve_cfg = maintainer_config.get("serve")
+    if serve_cfg is None:
+        serve_cfg = {}
+        maintainer_config["serve"] = serve_cfg
+        changed = True
+    if not isinstance(serve_cfg, dict):
+        raise click.ClickException("serve config must be a mapping in config/maintainer/config.yaml")
+    serve_cfg.setdefault("host", "0.0.0.0")
+    serve_cfg.setdefault("port", 8420)
+
+    if bool(serve_cfg.get("public_exposure", False)) and not _serve_hostnames(maintainer_config):
+        if not _is_tty():
+            raise click.ClickException(
+                "serve.public_exposure is enabled but serve.allowed_hosts is empty. "
+                "Set serve.allowed_hosts or re-run interactively."
+            )
+        default_host = f"{_slugify(maintainer_path.parent.parent.parent.name)}.example.com"
+        serve_cfg["allowed_hosts"] = [_prompt_required("Public web UI hostname", default=default_host)]
+        changed = True
+
+    if changed:
+        _write_yaml_file(maintainer_path, maintainer_config)
+        from arquimedes.config import load_config
+
+        return load_config(str(maintainer_path)), maintainer_path
+    return config, maintainer_path
+
+
 def _install_cloudflare_tunnel_launch_agent(tunnel_cfg: dict, *, working_directory: str) -> dict:
     from arquimedes.launchd import install as install_plist, render_plist
 
@@ -218,15 +536,76 @@ def cli(ctx: click.Context, global_config_path: str | None):
     is_flag=True,
     help="Emit a short human-readable summary instead of JSON.",
 )
-def init_cmd(path: str, from_url: str | None, no_git: bool, human: bool):
+@click.option(
+    "--library-root",
+    default=None,
+    help="Shared library root to write into config/config.yaml.",
+)
+@click.option(
+    "--serve-public-host",
+    default=None,
+    help="Public hostname for the read-only web UI behind Cloudflare Tunnel.",
+)
+@click.option(
+    "--mcp-public-host",
+    default=None,
+    help="Public hostname for the remote MCP endpoint behind Cloudflare Tunnel.",
+)
+@click.option(
+    "--tunnel-name",
+    default=None,
+    help="Named Cloudflare Tunnel to write into config/maintainer/config.yaml.",
+)
+@click.option(
+    "--cloudflared-bin",
+    default=None,
+    help="cloudflared binary path to write into config/maintainer/config.yaml.",
+)
+def init_cmd(
+    path: str,
+    from_url: str | None,
+    no_git: bool,
+    human: bool,
+    library_root: str | None,
+    serve_public_host: str | None,
+    mcp_public_host: str | None,
+    tunnel_name: str | None,
+    cloudflared_bin: str | None,
+):
     """Scaffold a new vault at <path>, or clone one with --from <git-url>."""
     from arquimedes.vault import VaultExistsError, clone_vault, init_vault
+
+    target = Path(path).expanduser().resolve()
+    default_tunnel = f"arquimedes-{_slugify(target.name)}"
+
+    if not from_url and _is_tty():
+        library_root = library_root or _prompt_required("Library root", default=DEFAULT_LIBRARY_ROOT)
+        if serve_public_host is None and click.confirm("Expose the web UI publicly through Cloudflare Tunnel?", default=False):
+            serve_public_host = _prompt_required(
+                "Public web UI hostname",
+                default=f"{_slugify(target.name)}.example.com",
+            )
+        if mcp_public_host is None and click.confirm("Expose the MCP publicly through Cloudflare Tunnel?", default=True):
+            mcp_public_host = _prompt_required(
+                "Public MCP hostname",
+                default=f"mcp-{_slugify(target.name)}.example.com",
+            )
+        if mcp_public_host and tunnel_name is None:
+            tunnel_name = _prompt_required("Cloudflare tunnel name", default=default_tunnel)
 
     try:
         if from_url:
             result = clone_vault(from_url, path)
         else:
-            result = init_vault(path, init_git=not no_git)
+            result = init_vault(
+                path,
+                init_git=not no_git,
+                library_root=library_root or DEFAULT_LIBRARY_ROOT,
+                serve_public_host=serve_public_host,
+                mcp_public_host=mcp_public_host,
+                tunnel_name=tunnel_name or default_tunnel,
+                cloudflared_binary=cloudflared_bin or _cloudflared_default_binary(),
+            )
     except VaultExistsError as exc:
         raise click.ClickException(str(exc))
     except RuntimeError as exc:
@@ -241,7 +620,14 @@ def init_cmd(path: str, from_url: str | None, no_git: bool, human: bool):
         if from_url:
             click.echo("Next: write config/collaborator/config.local.yaml with library_root, then run `arq overview`.")
         else:
-            click.echo("Next: edit config/config.yaml, drop PDFs into the library, run `arq ingest`.")
+            click.echo(f"library_root: {library_root or DEFAULT_LIBRARY_ROOT}")
+            if serve_public_host:
+                click.echo(f"web_ui: https://{serve_public_host}")
+            if mcp_public_host:
+                click.echo(f"mcp: https://{mcp_public_host}/mcp")
+                click.echo("Next: export ARQUIMEDES_CONFIG to config/maintainer/config.yaml, then run `arq mcp --install`.")
+            else:
+                click.echo("Next: export ARQUIMEDES_CONFIG to config/maintainer/config.yaml, then run `arq watch --install` and `arq serve --install`.")
     else:
         click.echo(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
 
@@ -1227,8 +1613,8 @@ def mcp(config_path: str | None, install: bool, uninstall: bool, show_status: bo
 
         try:
             config = load_config(config_path)
-            tunnel_cfg = _mcp_cloudflare_tunnel_config(config)
             if uninstall:
+                tunnel_cfg = _mcp_cloudflare_tunnel_config(config)
                 click.echo(
                     json.dumps(
                         {
@@ -1240,6 +1626,7 @@ def mcp(config_path: str | None, install: bool, uninstall: bool, show_status: bo
                 )
                 return
             if show_status:
+                tunnel_cfg = _mcp_cloudflare_tunnel_config(config)
                 click.echo(
                     json.dumps(
                         {
@@ -1250,10 +1637,52 @@ def mcp(config_path: str | None, install: bool, uninstall: bool, show_status: bo
                     )
                 )
                 return
+
+            config, maintainer_path = _ensure_mcp_install_config(config, config_path=config_path)
+            tunnel_cfg = _mcp_cloudflare_tunnel_config(config)
             mcp_cfg = _mcp_config(config)
+
+            cloudflared_setup: dict[str, object]
+            cloudflared_routes: list[dict] = []
+            cloudflared_config: dict[str, object] | None = None
+            tunnel_setup: dict[str, object] | None = None
+            login_setup: dict[str, object] | None = None
+
+            if tunnel_cfg is not None:
+                cloudflared_setup = _ensure_cloudflared_binary(str(tunnel_cfg["binary_path"]))
+                resolved_binary = str(cloudflared_setup["binary_path"])
+                tunnel_cfg["binary_path"] = resolved_binary
+
+                maintainer_payload = _load_yaml_file(maintainer_path)
+                maintainer_mcp = maintainer_payload.setdefault("mcp", {})
+                maintainer_tunnel = maintainer_mcp.setdefault("cloudflare_tunnel", {})
+                maintainer_tunnel["binary_path"] = resolved_binary
+                _write_yaml_file(maintainer_path, maintainer_payload)
+
+                config = load_config(str(maintainer_path))
+                tunnel_cfg = _mcp_cloudflare_tunnel_config(config)
+                login_setup = _ensure_cloudflared_login(resolved_binary)
+                tunnel_setup = _ensure_cloudflare_tunnel(resolved_binary, str(tunnel_cfg["tunnel_name"]))
+                cloudflared_config = _write_cloudflared_config(
+                    config,
+                    str(tunnel_setup["tunnel_id"]),
+                    str(tunnel_setup["credentials_file"]),
+                )
+                for entry in _cloudflare_ingress_entries(config):
+                    cloudflared_routes.append(
+                        _ensure_cloudflare_dns_route(
+                            resolved_binary,
+                            str(tunnel_cfg["tunnel_name"]),
+                            str(entry["hostname"]),
+                        )
+                    )
+            else:
+                cloudflared_setup = {"enabled": False, "managed": False}
+
             args = _arq_program_args("mcp")
-            if config_path and "--config" not in args:
-                args.extend(["--config", config_path])
+            effective_config_path = str(maintainer_path if install else _maintainer_config_file(config_path))
+            if effective_config_path and "--config" not in args:
+                args.extend(["--config", effective_config_path])
             plist = render_plist(
                 label,
                 args,
@@ -1271,6 +1700,11 @@ def mcp(config_path: str | None, install: bool, uninstall: bool, show_status: bo
                     if tunnel_cfg is not None
                     else {"enabled": False, "managed": False}
                 ),
+                "cloudflared_binary": cloudflared_setup,
+                "cloudflare_login": login_setup,
+                "cloudflare_named_tunnel": tunnel_setup,
+                "cloudflare_dns": cloudflared_routes,
+                "cloudflared_config": cloudflared_config,
             }
             click.echo(json.dumps(result, indent=2))
             return

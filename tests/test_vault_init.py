@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 
 import pytest
+import yaml
 
 from arquimedes.vault import VaultExistsError, init_vault, vault_info
 
@@ -24,6 +25,15 @@ def test_init_vault_creates_subtree(tmp_path):
     assert (target / "manifests" / "materials.jsonl").is_file()
     assert (target / ".gitignore").is_file()
     assert result.git_initialized is False
+
+    shared = yaml.safe_load((target / "config" / "config.yaml").read_text(encoding="utf-8"))
+    maintainer = yaml.safe_load((target / "config" / "maintainer" / "config.yaml").read_text(encoding="utf-8"))
+    assert shared["library_root"] == "~/Library/Mobile Documents/com~apple~CloudDocs/Arquimedes"
+    assert maintainer["llm"]["agent_cmd"] == ["claude --print", "codex exec"]
+    assert maintainer["enrichment"]["llm_routes"]["document"][1]["provider"] == "codex"
+    assert maintainer["mcp"]["transport"] == "streamable-http"
+    assert maintainer["watch"]["scan_interval_minutes"] == 30
+    assert maintainer["lint"]["graph_schedule"]["min_cluster_delta"] == 3
 
 
 def test_init_vault_skip_git(tmp_path):
@@ -64,6 +74,31 @@ def test_init_vault_gitignore_excludes_runtime_state(tmp_path):
     assert "logs/" in body
     assert "*.sqlite-shm" in body
     assert "config/maintainer/config.local.yaml" in body
+
+
+def test_init_vault_applies_public_hosts_and_tunnel_defaults(tmp_path):
+    target = tmp_path / "personal"
+    init_vault(
+        target,
+        init_git=False,
+        library_root="~/CustomLibrary",
+        serve_public_host="arquimedes.example.com",
+        mcp_public_host="mcp.example.com",
+        tunnel_name="arquimedes-personal",
+        cloudflared_binary="/custom/cloudflared",
+    )
+
+    shared = yaml.safe_load((target / "config" / "config.yaml").read_text(encoding="utf-8"))
+    maintainer = yaml.safe_load((target / "config" / "maintainer" / "config.yaml").read_text(encoding="utf-8"))
+
+    assert shared["library_root"] == "~/CustomLibrary"
+    assert maintainer["serve"]["public_exposure"] is True
+    assert maintainer["serve"]["allowed_hosts"] == ["arquimedes.example.com"]
+    assert maintainer["mcp"]["allowed_hosts"] == ["mcp.example.com"]
+    assert maintainer["mcp"]["allowed_origins"] == ["https://mcp.example.com", "https://chatgpt.com"]
+    assert maintainer["mcp"]["cloudflare_tunnel"]["enabled"] is True
+    assert maintainer["mcp"]["cloudflare_tunnel"]["tunnel_name"] == "arquimedes-personal"
+    assert maintainer["mcp"]["cloudflare_tunnel"]["binary_path"] == "/custom/cloudflared"
 
 
 def test_vault_info_reports_resolved_paths(tmp_path, monkeypatch):

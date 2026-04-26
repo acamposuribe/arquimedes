@@ -28,11 +28,12 @@ Then it should do the rest:
 
 1. Verify prerequisites (Python 3.11+, Git, pipx, shared library folder reachable). Install missing prerequisites.
 2. Install the `arquimedes` package globally with pipx.
-3. Install the deploy key into `~/.ssh/` and add a `Host` alias to `~/.ssh/config` so `git clone` uses it.
-4. Run `arq init <vault-path> --from <vault-git-url>` to clone the vault.
-5. Write `<vault-path>/config/collaborator/config.local.yaml` with the collaborator's `library_root`.
-6. Run `arq refresh`.
-7. Verify that `arq overview --human` works.
+3. Run `pipx upgrade arquimedes` so the machine has the latest collaborator tools before using `arq`.
+4. Install the deploy key into `~/.ssh/` and add a `Host` alias to `~/.ssh/config` so `git clone` uses it.
+5. Run `arq init <vault-path> --from <vault-git-url>` to clone the vault.
+6. Write `<vault-path>/config/collaborator/config.local.yaml` with the collaborator's `library_root`.
+7. Run `arq refresh`.
+8. Verify that `arq overview --human` works.
 
 The sections below are in execution order: **Prerequisites → Code install → Deploy key → Vault clone → Configuration → Verification**. End-to-end on a typical machine this takes 5–15 minutes; the install step downloads ~200 MB of Python wheels.
 
@@ -82,6 +83,7 @@ pipx install git+https://github.com/<maintainer>/arquimedes.git
 Verify:
 
 ```bash
+pipx upgrade arquimedes
 arq --version
 ```
 
@@ -195,6 +197,7 @@ All four should succeed. Common failures:
 From the vault folder:
 
 ```bash
+pipx upgrade arquimedes
 arq refresh
 arq search "thermal mass"
 ```

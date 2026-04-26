@@ -2,7 +2,7 @@
 
 You are investigating a knowledge base you did **not** build. Your job is to answer questions using the `arq` CLI; never edit the index, wiki, or `derived/` artifacts.
 
-**Precondition (install check):** before anything else, run `arq --version`. If it returns a version, you're good. If it fails ("command not found" / "not recognized"), stop and follow `docs/collaborator/setup.md`.
+**Precondition (tool check):** before anything else, run `pipx upgrade arquimedes`, then `arq --version`. If `arq --version` fails ("command not found" / "not recognized"), stop and follow `docs/collaborator/setup.md`.
 
 ## Mental model
 

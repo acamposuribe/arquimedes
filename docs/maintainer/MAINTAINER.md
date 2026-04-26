@@ -94,6 +94,7 @@ Collaborator onboarding is a standard maintainer task. The maintainer can delega
 - a per-collaborator read-only deploy key
 - the vault clone URL
 - the collaborator setup guide
+- the collaborator agent handbook for future read/query sessions
 - a small collaborator-facing handoff note that tells the collaborator's agent what to read and which local key file to use
 
 Recommended flow:
@@ -104,7 +105,7 @@ ssh-keygen -t ed25519 -f ~/Downloads/arq-vault-<name>.key -C "arq-vault <name>"
 ```
 2. Add `~/Downloads/arq-vault-<name>.key.pub` to the private vault repo as a GitHub deploy key, with write access disabled.
 3. Create a handoff folder containing:
-   `docs/collaborator/setup.md`, the private key file, and a copy of `docs/maintainer/collaborator-handoff-template.md` filled in for that collaborator.
+   `docs/collaborator/setup.md`, `docs/collaborator/agent-handbook.md`, the private key file, and a copy of `docs/maintainer/collaborator-handoff-template.md` filled in for that collaborator.
 4. Send the handoff folder securely to the collaborator.
 
 The vault clone URL given to collaborators should use the SSH host alias described in `docs/collaborator/setup.md`, for example:
@@ -113,7 +114,7 @@ The vault clone URL given to collaborators should use the SSH host alias describ
 git@arq-vault:<user>/arq-vault-personal.git
 ```
 
-The collaborator's agent should be told to read the setup guide first and use the private key file from the same handoff folder. The reusable template for that note lives at `docs/maintainer/collaborator-handoff-template.md`.
+The collaborator's agent should be told to read the setup guide first, use the private key file from the same handoff folder, and then treat the agent handbook as the default guide for future Arquimedes sessions. If the agent supports persistent memory, it should store a reminder to reopen the handbook at the start of future Arquimedes work. The reusable template for that note lives at `docs/maintainer/collaborator-handoff-template.md`.
 
 If you are using an agent to prepare the handoff, the agent should:
 

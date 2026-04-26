@@ -1,9 +1,9 @@
 # Phase 10 — Vault Model: Code/Data Split (Design Spec)
 
-> **Status:** Proposed (2026-04-26, revised after design discussion)
+> **Status:** Partially superseded (2026-04-26). The code/data split (one public `arquimedes` package + one private vault repo per maintainer machine + per-machine local cache) is in production. The **collaborator distribution model** described below — read-only deploy keys, per-collaborator vault clones, `arq init --from`, the destructive `arq refresh` path on collaborator machines — has been replaced by a **remote-MCP-only** model: collaborators do not clone the vault, they consume the maintainer's `arq-mcp` over HTTPS gated by Cloudflare Access. The deploy-key/clone path remains as legacy code in `freshness.py`/`vault.py` pending removal. See [MAINTAINER.md](../../../maintainer/MAINTAINER.md) for the current onboarding flow.
 > **Phase:** 10
 > **Companion plan:** _not yet written — pending ratification of this spec_
-> **References:** [Phase 9 server agent design](2026-04-25-phase9-server-agent-design.md), [PIPELINE.md](../../PIPELINE.md), [MAINTAINER.md](../../../maintainer/MAINTAINER.md), [collaborator setup](../../../collaborator/setup.md)
+> **References:** [Phase 9 server agent design](2026-04-25-phase9-server-agent-design.md), [PIPELINE.md](../../PIPELINE.md), [MAINTAINER.md](../../../maintainer/MAINTAINER.md)
 
 ## Context
 

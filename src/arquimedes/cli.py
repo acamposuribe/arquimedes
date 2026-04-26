@@ -46,9 +46,23 @@ def _mcp_config(config: dict) -> dict:
     return mcp_cfg
 
 
+def _string_list(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, (list, tuple)):
+        return [str(item) for item in value if str(item).strip()]
+    raise click.ClickException("expected a string or list of strings in mcp config")
+
+
 def _mcp_server_from_config(config_path: str | None):
     from arquimedes.config import load_config
-    from arquimedes.mcp_server import _auth_config_from_mapping, build_server
+    from arquimedes.mcp_server import (
+        _auth_config_from_mapping,
+        build_server,
+        build_transport_security,
+    )
 
     config = load_config(config_path)
     mcp_cfg = _mcp_config(config)
@@ -64,6 +78,13 @@ def _mcp_server_from_config(config_path: str | None):
 
     auth_mapping = mcp_cfg.get("auth") if isinstance(mcp_cfg.get("auth"), dict) else None
     auth_config = _auth_config_from_mapping(auth_mapping)
+    transport_security = build_transport_security(
+        allowed_hosts=_string_list(mcp_cfg.get("allowed_hosts")),
+        allowed_origins=_string_list(mcp_cfg.get("allowed_origins")),
+        disable_dns_rebinding_protection=bool(
+            mcp_cfg.get("disable_dns_rebinding_protection", False)
+        ),
+    )
     server = build_server(
         config_path=config_path,
         host=host,
@@ -73,6 +94,7 @@ def _mcp_server_from_config(config_path: str | None):
         streamable_http_path=streamable_http_path,
         auth_config=auth_config,
         debug_http_log=debug_http_log,
+        transport_security=transport_security,
     )
     return server, transport, mount_path
 

@@ -63,6 +63,29 @@ serve:
   host: 0.0.0.0
   port: 8420
 
+# Optional remote MCP profile for ChatGPT / other remote MCP clients.
+# Bind to loopback, then expose via Cloudflare Tunnel + Access (see
+# docs/maintainer/MAINTAINER.md). The `allowed_hosts` / `allowed_origins`
+# entries are REQUIRED when a reverse proxy forwards the public hostname,
+# otherwise the MCP SDK's DNS-rebinding protection responds with
+# `421 Invalid Host header`.
+#
+# mcp:
+#   transport: "streamable-http"
+#   host: "127.0.0.1"
+#   port: 8000
+#   streamable_http_path: "/mcp"
+#   keep_alive: true
+#   allowed_hosts:
+#     - "mcp.example.com"
+#   allowed_origins:
+#     - "https://mcp.example.com"
+#     - "https://chatgpt.com"
+#   cloudflare_tunnel:
+#     enabled: true
+#     tunnel_name: "arquimedes-example"
+#     binary_path: "/opt/homebrew/bin/cloudflared"
+
 watch:
   scan_interval_minutes: 30
   batch_commit: true

@@ -1,12 +1,10 @@
 # Arquimedes Agent Handbook
 
-You are investigating a knowledge base you did **not** build. Use the **read-only MCP tools** when available. Do not modify the vault, index, wiki, or derived artifacts.
-
-If MCP is unavailable but shell access is available, fall back to [agent-handbook-cli.md](agent-handbook-cli.md).
+You are investigating a knowledge base you did **not** build. Use the **read-only MCP tools** exposed by the maintainer's remote `arq-mcp` server. Do not modify the vault, index, wiki, or derived artifacts.
 
 ## Surface
 
-Default surface: `arq-mcp`
+Default surface: the maintainer's remote `arq-mcp` server. Connect to it from your agent client (ChatGPT developer mode, Claude desktop, etc.) using the URL the maintainer gave you. There is no local install for collaborators.
 
 Tool groups:
 
@@ -17,8 +15,6 @@ Tool groups:
 - `refresh`: explicit freshness when you need the latest collaborator state
 
 Prefer the smallest tool that answers the question.
-
-CLI is fallback only: use it only if MCP is unavailable.
 
 ## Mental Model
 
@@ -46,6 +42,6 @@ Start from the index, not from raw files.
 - Use navigation tools instead of repeated broad searches.
 - Avoid full text unless the question truly needs wording-level evidence.
 
-## Boundaries
+## Optional: visual browse via LAN web UI
 
-Do not run maintainer workflows. If a task appears to require publishing, ingest, extraction, clustering, compile, lint, sync, or watch behavior, stop and ask the human maintainer.
+If you are on the same local network as the maintainer machine, the maintainer also serves a read-only web UI for visual browsing of the vault — useful when you want to skim the wiki, look at figures, or click around materials without going through an agent. Open `http://<maintainer-hostname>.local:8420` in any browser (the maintainer will tell you the exact hostname; macOS and Windows 10 build 1803+ resolve `*.local` natively, older Windows needs Bonjour Print Services). The UI is unauthenticated, so it only works on the trusted LAN — there is no public version. The remote MCP remains the canonical agent surface; the web UI is just a convenience for human eyes.

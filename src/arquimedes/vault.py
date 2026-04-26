@@ -65,10 +65,19 @@ _MAINTAINER_PROFILE = """\
 #
 # mcp:
 #   transport: "streamable-http"
-#   host: "0.0.0.0"
+#   host: "127.0.0.1"
 #   port: 8000
 #   streamable_http_path: "/mcp"
 #   keep_alive: true
+#   # Required when fronting the MCP with a reverse proxy (e.g. Cloudflare
+#   # Tunnel). The MCP SDK auto-enables DNS-rebinding protection on loopback
+#   # binds and only allows 127.0.0.1/localhost Host headers — public
+#   # hostnames must be explicitly allowlisted here or requests get 421.
+#   allowed_hosts:
+#     - "mcp.example.com"
+#   allowed_origins:
+#     - "https://mcp.example.com"
+#     - "https://chatgpt.com"
 #   cloudflare_tunnel:
 #     enabled: true
 #     tunnel_name: "arquimedes-example"

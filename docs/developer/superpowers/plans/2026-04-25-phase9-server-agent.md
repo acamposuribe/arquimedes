@@ -34,9 +34,8 @@ Before any code changes, the implementer reviews:
 
 Add the new config keys defined in the spec to:
 
-- `config/config.yaml` — collaborator-safe shared defaults only
+- `config/config.yaml` — shared defaults only
 - `config/maintainer/config.yaml` — maintainer extraction/enrichment/LLM/daemon profile
-- `config/collaborator/config.local.example.yaml` — collaborator local config example
 - `src/arquimedes/config.py` — schema + validation
 
 New keys:

@@ -252,7 +252,6 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 | `src/arquimedes/removal.py` | Material removal cascade for deleted library files |
 | `src/arquimedes/launchd.py` | macOS launchd plist rendering/install/status helpers |
 | `config/config.yaml` | Shared default configuration |
-| `config/collaborator/config.local.example.yaml` | Collaborator local config example |
 | `config/maintainer/config.yaml` | Maintainer LLM/provider and daemon profile |
 
 ## Verification Checklist

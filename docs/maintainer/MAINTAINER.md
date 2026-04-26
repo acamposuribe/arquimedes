@@ -24,17 +24,17 @@ Inspect the active vault any time with `arq vault info --human`.
 
 ## Roles
 
-The maintainer machine is the only semantic publisher. It owns ingest, extraction, clustering, compile, lint, memory rebuild, commits, and pushes.
+The maintainer machine is the only semantic publisher and the only host of the published knowledge base. It owns ingest, extraction, clustering, compile, lint, memory rebuild, commits, and pushes. It also publishes the read-only `arq-mcp` server that collaborators consume remotely.
 
-Collaborator clones consume the published result and rebuild local query artifacts only.
+Collaborators do not clone the vault. Their only contact with the system is the remote MCP, gated by Cloudflare Access.
 
-The freshness path (`git fetch && git reset --hard && git clean -fd`) only runs on collaborator machines (detected by presence of `config/collaborator/config.local.yaml` and absence of `config/maintainer/config.yaml`). Maintainer and developer machines skip the destructive steps so in-flight work is never wiped.
+(The collaborator-clone path — destructive `git fetch && git reset --hard && git clean -fd` triggered by the presence of `config/collaborator/config.local.yaml` — is legacy code still present in `freshness.py` for backwards compatibility and will be retired.)
 
 ## Cadence
 
 - Every 30 minutes: `arq watch --once` scans the shared library and publishes one batch if anything changed.
 - Daily at 02:00: `arq lint --full --commit-push` runs reflective maintenance, including `global-bridge`, then commits and pushes any changed artifacts.
-- Every collaborator refresh: `arq refresh` restores the canonical repo state and ensures local index + memory.
+- Continuously: `arq mcp` (launchd) serves the read-only MCP on loopback; `cloudflared` (launchd) tunnels it to the public hostname behind Cloudflare Access.
 
 ## Setup
 
@@ -90,44 +90,20 @@ arq watch --once
 
 ## Onboarding a collaborator
 
-Collaborator onboarding is a standard maintainer task. The maintainer can delegate it to an agent, but the handoff should always contain the same ingredients:
+Collaborators no longer clone the vault. The maintainer is the only writer and the only host of the published knowledge base; collaborators consume it as a remote MCP from their agent client (ChatGPT, Claude desktop, etc.). Onboarding is therefore an Access-policy update plus a one-line handoff:
 
-- a per-collaborator read-only deploy key
-- the vault clone URL
-- the collaborator setup guide
-- the collaborator agent handbook for future read/query sessions
-- a small collaborator-facing handoff note that tells the collaborator's agent what to read and which local key file to use
+1. In Cloudflare Zero Trust → Access → Applications, open the self-hosted app for `mcp.<your-domain>` and add the collaborator's email to the existing Allow policy. Save.
+2. Send the collaborator two things:
+   - the public MCP URL (e.g. `https://mcp.example.com/mcp`)
+   - a pointer to `docs/collaborator/agent-handbook.md` so their agent knows how to use the read-only tool surface
 
-Recommended flow:
+That's it. There is no key, no clone, no local install, no `config.local.yaml` for collaborators. First connection from their agent triggers Cloudflare's OAuth flow against their email; subsequent calls reuse the session.
 
-1. Generate a dedicated deploy key for that collaborator.
-```bash
-ssh-keygen -t ed25519 -f ~/Downloads/arq-vault-<name>.key -C "arq-vault <name>"
-```
-2. Add `~/Downloads/arq-vault-<name>.key.pub` to the private vault repo as a GitHub deploy key, with write access disabled.
-3. Create a handoff folder containing:
-   `docs/collaborator/setup.md`, `docs/collaborator/agent-handbook.md`, the private key file, and a copy of `docs/maintainer/collaborator-handoff-template.md` filled in for that collaborator.
-4. Send the handoff folder securely to the collaborator.
-
-The vault clone URL given to collaborators should use the SSH host alias described in `docs/collaborator/setup.md`, for example:
-
-```text
-git@arq-vault:<user>/arq-vault-personal.git
-```
-
-The collaborator's agent should be told to read the setup guide first, use the private key file from the same handoff folder, and then treat the agent handbook as the default guide for future Arquimedes sessions. If the agent supports persistent memory, it should store a reminder to reopen the handbook at the start of future Arquimedes work. The reusable template for that note lives at `docs/maintainer/collaborator-handoff-template.md`.
-
-If the collaborator uses an agent client without shell permissions but with MCP support, the maintainer should point them at the packaged read-only MCP server:
-
-```text
-arq-mcp --config <vault>/config/collaborator/config.local.yaml
-```
-
-That server exposes the collaborator-safe read surface without granting Bash access.
+If you ever need to revoke a collaborator, remove their email from the Access policy — their existing session expires within the configured `Session duration` (24 h by default).
 
 ## Remote MCP for ChatGPT
 
-If you want ChatGPT developer mode to use Arquimedes without requiring each collaborator to clone a vault locally, run `arq-mcp` as a remote streamable HTTP server and expose it through an HTTPS tunnel.
+The remote MCP is now the canonical collaborator surface. Run `arq-mcp` as a streamable HTTP server bound to loopback and expose it over HTTPS through Cloudflare Tunnel + Access.
 
 Recommended shape:
 
@@ -141,15 +117,26 @@ Configure the remote MCP in `config/maintainer/config.yaml`:
 ```yaml
 mcp:
   transport: "streamable-http"
-  host: "0.0.0.0"
+  host: "127.0.0.1"
   port: 8000
   streamable_http_path: "/mcp"
   keep_alive: true
+  # Required when fronting the MCP with a reverse proxy. The MCP SDK
+  # auto-enables DNS-rebinding protection on loopback binds and rejects any
+  # Host header other than 127.0.0.1/localhost with `421 Invalid Host header`.
+  # List the public hostname here so the tunnel-forwarded request is accepted.
+  allowed_hosts:
+    - "mcp.example.com"
+  allowed_origins:
+    - "https://mcp.example.com"
+    - "https://chatgpt.com"
   cloudflare_tunnel:
     enabled: true
     tunnel_name: "arquimedes-example"
     binary_path: "/opt/homebrew/bin/cloudflared"
 ```
+
+If you cannot edit the maintainer config (or want a defense-in-depth fallback), the cloudflared ingress block also accepts `originRequest.httpHostHeader: 127.0.0.1:8000`, which rewrites the inner Host header before it reaches the MCP. Either approach makes the 421 go away; prefer `allowed_hosts` so the server's own config documents which hostnames are legitimate.
 
 Run in the foreground for testing:
 
@@ -214,6 +201,8 @@ ingress:
     service: http://127.0.0.1:8000
   - service: http_status:404
 ```
+
+This works as long as `mcp.allowed_hosts` in `config/maintainer/config.yaml` lists `mcp.example.com` (see the MCP block above). If the `allowed_hosts` entry is missing, the MCP SDK's DNS-rebinding protection will reject the tunnel-forwarded request with `421 Invalid Host header` — add `originRequest.httpHostHeader: 127.0.0.1:8000` under the ingress as a quick workaround, but the canonical fix is to keep the allowlist on the server side.
 
 6. Test the tunnel manually:
 
@@ -336,13 +325,6 @@ Current status:
 - browser login through Access is verified
 - ChatGPT remote MCP connection through Cloudflare Managed OAuth is verified
 
-If you are using an agent to prepare the handoff, the agent should:
-
-1. generate the per-collaborator deploy keypair
-2. assemble the handoff folder
-3. fill in the handoff template with the vault clone URL and filenames
-4. stop before any GitHub-side deploy-key registration unless the maintainer explicitly asks it to continue
-
 ## Publication Cycle
 
 The daytime cycle is intentionally narrow:
@@ -355,15 +337,15 @@ Reflective lint stages do not run in the daytime cycle. `global-bridge` runs onl
 
 ## LAN Web UI
 
-The maintainer machine serves the web UI to collaborators on the local network. With `serve.host: 0.0.0.0` and `serve.port: 8420` in `config/maintainer/config.yaml`, `arq serve --install` registers a `KeepAlive` launchd job (`com.arquimedes.serve`) that stays up across reboots and restarts on crash.
+Optional local browse UI for the maintainer (and anyone trusted on the same LAN). Collaborators do not use this — they connect via the remote MCP. With `serve.host: 0.0.0.0` and `serve.port: 8420` in `config/maintainer/config.yaml`, `arq serve --install` registers a `KeepAlive` launchd job (`com.arquimedes.serve`) that stays up across reboots and restarts on crash.
 
-Find the hostname collaborators should use:
+Find the hostname:
 
 ```bash
 scutil --get LocalHostName
 ```
 
-That name resolves over mDNS as `<name>.local` from any client on the same LAN. Collaborators just open `http://<name>.local:8420` in a browser.
+That name resolves over mDNS as `<name>.local` from any client on the same LAN. Open `http://<name>.local:8420` in a browser.
 
 First run: macOS will prompt once to allow incoming connections for the Python binary. Approve it. If `serve` does not appear on the LAN, check System Settings → Network → Firewall.
 
@@ -377,7 +359,6 @@ arq serve --uninstall
 Caveats:
 
 - The web UI has no authentication. Only expose it on a trusted LAN. Do not port-forward to the public internet.
-- Windows 10 build 1803+ resolves `*.local` natively. Older Windows needs Bonjour Print Services (free Apple installer) — see `docs/collaborator/setup.md`.
 - The Mac Mini must not sleep. Energy Saver → "Prevent automatic sleeping when the display is off" must be on (also required for `arq watch`).
 
 ## Recovery

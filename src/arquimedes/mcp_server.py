@@ -544,6 +544,46 @@ def tool_serve_local_ui(*, port: int = 8420) -> dict[str, Any]:
     )
 
 
+def build_transport_security(
+    *,
+    allowed_hosts: list[str] | None = None,
+    allowed_origins: list[str] | None = None,
+    disable_dns_rebinding_protection: bool = False,
+):
+    """Build a TransportSecuritySettings or return None to use the SDK default.
+
+    Recent versions of the `mcp` SDK auto-enable DNS-rebinding protection when
+    the server binds to `127.0.0.1`/`localhost`/`::1` and only allow loopback
+    Host headers. A reverse proxy (e.g. Cloudflare Tunnel) that forwards the
+    public hostname will then get `421 Invalid Host header`. Pass the public
+    hostname via `allowed_hosts` (and matching origin via `allowed_origins`)
+    to extend the allowlist, or set `disable_dns_rebinding_protection=True`
+    to turn the check off entirely.
+    """
+    hosts = [str(value) for value in (allowed_hosts or []) if str(value).strip()]
+    origins = [str(value) for value in (allowed_origins or []) if str(value).strip()]
+    if not (hosts or origins or disable_dns_rebinding_protection):
+        return None
+
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    if disable_dns_rebinding_protection:
+        return TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
+    merged_hosts = ["127.0.0.1:*", "localhost:*", "[::1]:*", *hosts]
+    merged_origins = [
+        "http://127.0.0.1:*",
+        "http://localhost:*",
+        "http://[::1]:*",
+        *origins,
+    ]
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=merged_hosts,
+        allowed_origins=merged_origins,
+    )
+
+
 def build_server(
     config_path: str | None = None,
     *,
@@ -554,6 +594,7 @@ def build_server(
     streamable_http_path: str = "/mcp",
     auth_config=None,
     debug_http_log: bool = False,
+    transport_security=None,
 ):
     """Build the FastMCP server lazily so tests don't require the SDK."""
     _configure(config_path)
@@ -591,6 +632,7 @@ def build_server(
         mount_path=mount_path,
         sse_path=sse_path,
         streamable_http_path=streamable_http_path,
+        transport_security=transport_security,
     )
     if debug_http_log:
         _enable_http_logging(mcp)
@@ -761,8 +803,32 @@ def main(argv: list[str] | None = None) -> None:
         "--auth-service-documentation-url",
         help="Optional public docs URL advertised in OAuth metadata.",
     )
+    parser.add_argument(
+        "--allowed-host",
+        action="append",
+        help="Extra Host header value to allow past DNS-rebinding protection. "
+        "Repeat or use comma-separated values. Required when fronting the MCP "
+        "with a reverse proxy that forwards the public hostname.",
+    )
+    parser.add_argument(
+        "--allowed-origin",
+        action="append",
+        help="Extra Origin header value to allow past DNS-rebinding protection. "
+        "Repeat or use comma-separated values.",
+    )
+    parser.add_argument(
+        "--disable-dns-rebinding-protection",
+        action="store_true",
+        help="Turn off the SDK's DNS-rebinding protection entirely. Only safe "
+        "when an external auth layer (e.g. Cloudflare Access) gates the server.",
+    )
     args = parser.parse_args(argv)
     auth_config = _auth_config_from_args(args)
+    transport_security = build_transport_security(
+        allowed_hosts=list(_csvish(args.allowed_host)),
+        allowed_origins=list(_csvish(args.allowed_origin)),
+        disable_dns_rebinding_protection=args.disable_dns_rebinding_protection,
+    )
 
     server = build_server(
         config_path=args.config,
@@ -773,6 +839,7 @@ def main(argv: list[str] | None = None) -> None:
         streamable_http_path=args.streamable_http_path,
         auth_config=auth_config,
         debug_http_log=args.debug_http_log,
+        transport_security=transport_security,
     )
     server.run(transport=args.transport, mount_path=args.mount_path)
 

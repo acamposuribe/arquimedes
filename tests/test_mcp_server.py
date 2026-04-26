@@ -604,3 +604,86 @@ def test_main_forwards_auth_args(monkeypatch):
     auth_config = calls["kwargs"]["auth_config"]
     assert auth_config.issuer_url == "https://auth.example.com"
     assert auth_config.required_scopes == ("arq.read",)
+
+
+def test_build_transport_security_returns_none_when_unconfigured():
+    assert mcp_server.build_transport_security() is None
+
+
+def test_build_transport_security_extends_allowlist():
+    settings = mcp_server.build_transport_security(
+        allowed_hosts=["mcp.example.com"],
+        allowed_origins=["https://mcp.example.com", "https://chatgpt.com"],
+    )
+
+    assert settings is not None
+    assert settings.enable_dns_rebinding_protection is True
+    assert "mcp.example.com" in settings.allowed_hosts
+    assert "127.0.0.1:*" in settings.allowed_hosts
+    assert "https://mcp.example.com" in settings.allowed_origins
+    assert "http://127.0.0.1:*" in settings.allowed_origins
+
+
+def test_build_transport_security_can_disable_protection():
+    settings = mcp_server.build_transport_security(disable_dns_rebinding_protection=True)
+
+    assert settings is not None
+    assert settings.enable_dns_rebinding_protection is False
+
+
+def test_main_forwards_transport_security_args(monkeypatch):
+    calls: dict[str, object] = {}
+
+    class FakeServer:
+        def run(self, transport="stdio", mount_path=None):
+            calls["transport"] = transport
+
+    def _build_server(**kwargs):
+        calls["kwargs"] = kwargs
+        return FakeServer()
+
+    monkeypatch.setattr(mcp_server, "build_server", _build_server)
+
+    mcp_server.main([
+        "--transport", "streamable-http",
+        "--allowed-host", "mcp.example.com",
+        "--allowed-origin", "https://mcp.example.com,https://chatgpt.com",
+    ])
+
+    transport_security = calls["kwargs"]["transport_security"]
+    assert transport_security is not None
+    assert "mcp.example.com" in transport_security.allowed_hosts
+    assert "https://chatgpt.com" in transport_security.allowed_origins
+
+
+def test_mcp_server_from_config_passes_transport_security(monkeypatch):
+    from arquimedes import cli as cli_module
+
+    captured: dict[str, object] = {}
+
+    def _load_config(_path):
+        return {
+            "mcp": {
+                "transport": "streamable-http",
+                "host": "127.0.0.1",
+                "port": 8000,
+                "allowed_hosts": ["mcp.example.com"],
+                "allowed_origins": ["https://mcp.example.com"],
+            }
+        }
+
+    def _build_server(**kwargs):
+        captured["kwargs"] = kwargs
+        return object()
+
+    monkeypatch.setattr("arquimedes.config.load_config", _load_config)
+    monkeypatch.setattr(mcp_server, "build_server", _build_server)
+
+    server, transport, mount_path = cli_module._mcp_server_from_config("/tmp/vault.yaml")
+
+    assert transport == "streamable-http"
+    assert mount_path == "/"
+    transport_security = captured["kwargs"]["transport_security"]
+    assert transport_security is not None
+    assert "mcp.example.com" in transport_security.allowed_hosts
+    assert "https://mcp.example.com" in transport_security.allowed_origins

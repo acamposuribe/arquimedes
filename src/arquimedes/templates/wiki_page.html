@@ -5,12 +5,12 @@
   <article class="wiki-body">
     {% if page_search and page_search.kind == 'material' and search_query %}
     <section class="material-search-context">
-      <p class="eyebrow">Within This Material</p>
-      <h2>Search hits for "{{ search_query }}"</h2>
+      <p class="eyebrow">{{ ui_label('within_this_material', active_domain, 'Within This Material') }}</p>
+      <h2>{{ ui_label('search_hits_for', active_domain, 'Search hits for') }} "{{ search_query }}"</h2>
       {% if search_hits and search_hits.has_matches %}
         {% if search_hits.chunks %}
         <div class="search-evidence-group">
-          <h3>Matching passages</h3>
+          <h3>{{ ui_label('matching_passages', active_domain, 'Matching passages') }}</h3>
           <div class="search-evidence-list">
             {% for hit in search_hits.chunks %}
             <article class="search-evidence-item">
@@ -19,11 +19,11 @@
                 {% if hit.emphasized %}<span>emphasized</span>{% endif %}
               </div>
               {% if hit.summary %}
-              <p class="search-evidence-summary-label">Summary</p>
+              <p class="search-evidence-summary-label">{{ ui_label('summary', active_domain, 'Summary') }}</p>
               <p class="search-evidence-summary">{{ hit.summary }}</p>
               {% endif %}
               {% if hit.excerpt_html %}
-              <p class="search-evidence-excerpt-label">Full text</p>
+              <p class="search-evidence-excerpt-label">{{ ui_label('full_text', active_domain, 'Full text') }}</p>
               <p class="search-evidence-excerpt">{{ hit.excerpt_html }}</p>
               {% endif %}
             </article>
@@ -33,7 +33,7 @@
         {% endif %}
         {% if search_hits.annotations %}
         <div class="search-evidence-group">
-          <h3>Annotations</h3>
+          <h3>{{ ui_label('annotations_label', active_domain, 'Annotations') }}</h3>
           <div class="search-evidence-list">
             {% for hit in search_hits.annotations %}
             <article class="search-evidence-item">
@@ -50,7 +50,7 @@
         {% endif %}
         {% if search_hits.concepts %}
         <div class="search-evidence-group">
-          <h3>Concept matches</h3>
+          <h3>{{ ui_label('concept_matches', active_domain, 'Concept matches') }}</h3>
           <div class="cluster-list">
             {% for hit in search_hits.concepts %}
             <span class="cluster-pill">{{ hit.concept_name }}{% if hit.pages_label %} · {{ hit.pages_label }}{% endif %}</span>
@@ -60,7 +60,7 @@
         {% endif %}
         {% if search_hits.figures %}
         <div class="search-evidence-group">
-          <h3>Figure matches</h3>
+          <h3>{{ ui_label('figure_matches', active_domain, 'Figure matches') }}</h3>
           <div class="search-evidence-list">
             {% for hit in search_hits.figures %}
             <article class="search-evidence-item">
@@ -76,14 +76,14 @@
         </div>
         {% endif %}
       {% else %}
-      <p class="meta-line">No indexed chunk, annotation, concept, or figure matches were found for this query inside the material.</p>
+      <p class="meta-line">{{ ui_label('no_matches_inside_material', active_domain, 'No indexed chunk, annotation, concept, or figure matches were found for this query inside the material.') }}</p>
       {% endif %}
     </section>
     {% endif %}
     {% if page_search and page_search.kind in ['collection', 'concept'] and page_search.query %}
     <section class="material-search-context">
-      <p class="eyebrow">Scoped Search</p>
-      <h2>Search hits for "{{ page_search.query }}"</h2>
+      <p class="eyebrow">{{ ui_label('scoped_search', active_domain, 'Scoped Search') }}</p>
+      <h2>{{ ui_label('search_hits_for', active_domain, 'Search hits for') }} "{{ page_search.query }}"</h2>
       {% if page_search.results and page_search.results.results %}
       <div class="stack">
         {% set query = page_search.query %}
@@ -93,14 +93,14 @@
         {% endfor %}
       </div>
       {% else %}
-      <p class="meta-line">No matching materials were found inside this {{ page_search.kind }}.</p>
+      <p class="meta-line">{{ ui_label('no_matches_inside_scope', active_domain, 'No matching materials were found inside this page.') }}</p>
       {% endif %}
     </section>
     {% endif %}
     {{ content_html }}
     {% if collection_material_cards %}
     <section class="collection-materials-section">
-      <h2>Materials</h2>
+      <h2>{{ ui_label('materials', active_domain, 'Materials') }}</h2>
       <div class="stack">
         {% for item in collection_material_cards %}
         {% include "partials/material_card.html" %}
@@ -113,7 +113,7 @@
     {% endif %}
     {% if material_figures %}
     <section class="material-gallery">
-      <h2>Figures</h2>
+      <h2>{{ ui_label('figures', active_domain, 'Figures') }}</h2>
       <div class="figure-grid">
         {% for item in material_figures %}
         <figure class="figure-card">
@@ -149,17 +149,17 @@
           <input name="q" value="{{ page_search.query or '' }}" placeholder="Musee Imaginaire">
           {% if page_search.query %}
           <a
-            aria-label="Clear page search"
+            aria-label="{{ ui_label('clear_search', active_domain, 'Clear search') }}"
             class="material-search-action material-search-action--clear"
             href="{{ request.url.path }}"
-            title="Clear search"
+            title="{{ ui_label('clear_search', active_domain, 'Clear search') }}"
           >
             <svg aria-hidden="true" viewBox="0 0 16 16">
               <path d="M4 4l8 8M12 4L4 12"></path>
             </svg>
           </a>
           {% else %}
-          <button aria-label="Search within page" class="material-search-action" title="Search within page" type="submit">
+          <button aria-label="{{ ui_label('search_within_page', active_domain, 'Search within page') }}" class="material-search-action" title="{{ ui_label('search_within_page', active_domain, 'Search within page') }}" type="submit">
             <svg aria-hidden="true" viewBox="0 0 16 16">
               <circle cx="7" cy="7" r="4.5"></circle>
               <path d="M10.5 10.5L14 14"></path>
@@ -174,26 +174,26 @@
 
     {% if collection_url %}
     <section class="panel">
-      <h2>Collection</h2>
+      <h2>{{ ui_label('collection', active_domain, 'Collection') }}</h2>
       <a href="{{ collection_url }}">{{ collection_label }}</a>
     </section>
     {% endif %}
 
     {% if source_url or extracted_text_url or figures_url or no_figures %}
     <section class="panel">
-      <h2>Actions</h2>
+      <h2>{{ ui_label('actions', active_domain, 'Actions') }}</h2>
       <div class="action-links">
         {% if source_url %}
-        <a class="action-link" href="{{ source_url }}">Open source file</a>
+        <a class="action-link" href="{{ source_url }}">{{ ui_label('open_source_file', active_domain, 'Open source file') }}</a>
         {% endif %}
         {% if extracted_text_url %}
-        <a class="action-link" href="{{ extracted_text_url }}">Extracted text</a>
+        <a class="action-link" href="{{ extracted_text_url }}">{{ ui_label('extracted_text', active_domain, 'Extracted text') }}</a>
         {% endif %}
         {% if figures_url %}
-        <a class="action-link" href="{{ figures_url }}">Figures{% if figure_count %} <span class="meta-line">({{ figure_count }})</span>{% endif %}</a>
+        <a class="action-link" href="{{ figures_url }}">{{ ui_label('figures', active_domain, 'Figures') }}{% if figure_count %} <span class="meta-line">({{ figure_count }})</span>{% endif %}</a>
         {% endif %}
         {% if no_figures %}
-        <span class="action-link-muted">No extracted figures</span>
+        <span class="action-link-muted">{{ ui_label('no_extracted_figures', active_domain, 'No extracted figures') }}</span>
         {% endif %}
       </div>
     </section>
@@ -201,7 +201,7 @@
 
     {% if page_thumbnails %}
     <section class="panel thumb-panel">
-      <h2>Pages</h2>
+      <h2>{{ ui_label('pages_nav', active_domain, 'Pages') }}</h2>
       <div class="thumb-strip">
         {% for item in page_thumbnails %}
         <button class="thumb-button"
@@ -219,7 +219,7 @@
     {% endif %}
     {% if collection_material_thumbs %}
     <section class="panel thumb-panel">
-      <h2>Materials</h2>
+      <h2>{{ ui_label('materials', active_domain, 'Materials') }}</h2>
       <div class="thumb-strip thumb-strip--two-col">
         {% for item in collection_material_thumbs %}
         <a class="thumb-button thumb-button--material" href="{{ item.material_url }}" title="{{ item.title }}">
@@ -232,7 +232,7 @@
     {% endif %}
     {% if concept_material_thumbs %}
     <section class="panel thumb-panel">
-      <h2>Linked Materials</h2>
+      <h2>{{ ui_label('linked_materials', active_domain, 'Linked Materials') }}</h2>
       <div class="thumb-strip thumb-strip--two-col">
         {% for item in concept_material_thumbs %}
         <a class="thumb-button thumb-button--material" href="{{ item.material_url }}" title="{{ item.title }}">

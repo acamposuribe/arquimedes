@@ -17,13 +17,13 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from arquimedes import freshness as freshness_mod
 from arquimedes import read as read_mod
 from arquimedes import search as search_mod
+from arquimedes.domain_profiles import display_domain_name, generated_label, is_practice_domain
 from arquimedes.index import get_index_path
 
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_HERE / "templates"))
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
 _DOMAINS = ("research", "practice")
-_DOMAIN_LABELS = {"research": "Research", "practice": "Practice"}
 
 
 def _label(part: str) -> str:
@@ -71,7 +71,35 @@ def _normalized_domain(domain: str | None) -> str | None:
 
 
 def _domain_label(domain: str) -> str:
-    return _DOMAIN_LABELS.get(domain, domain.title())
+    return display_domain_name(domain)
+
+
+def _ui_label(key: str, domain: str | None, default: str) -> str:
+    return generated_label(key, domain or "research", default=default)
+
+
+def _ui_lang(domain: str | None) -> str:
+    return "es" if is_practice_domain(domain or "", default="research") else "en"
+
+
+def _heading_candidates(key: str, default: str) -> list[str]:
+    values = [
+        default,
+        generated_label(key, "research", default=default),
+        generated_label(key, "practice", default=default),
+    ]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for value in values:
+        clean = str(value or "").strip()
+        if clean and clean not in seen:
+            seen.add(clean)
+            ordered.append(clean)
+    return ordered
+
+
+def _section_regex(headings: list[str]) -> str:
+    return r"(?ms)^## (?:" + "|".join(re.escape(heading) for heading in headings) + r")\n.*?(?=^## |\Z)"
 
 
 def _path_domain(path: str) -> str | None:
@@ -208,13 +236,13 @@ def _rewrite_target(target: str, current_path: str, material_id: str | None) -> 
 def render_wiki_markdown(md_text: str, current_path: str, material_id: str | None = None) -> Markup:
     html = mistune.html(md_text)
     html = re.sub(
-        r"(<h2>Metadata</h2>\s*<table)(>)",
+        r"(<h2>(?:Metadata|Metadatos)</h2>\s*<table)(>)",
         r'\1 class="metadata-table"\2',
         html,
         count=1,
     )
     html = re.sub(
-        r"(<h2>Related Materials</h2>\s*<ul)(>)",
+        r"(<h2>(?:Related Materials|Materiales relacionados)</h2>\s*<ul)(>)",
         r'\1 class="related-materials-list"\2',
         html,
         count=1,
@@ -228,8 +256,9 @@ def render_wiki_markdown(md_text: str, current_path: str, material_id: str | Non
     return Markup(html)
 
 
-def _split_markdown_section(md_text: str, heading: str) -> tuple[str, str, str]:
-    match = re.search(rf"(?ms)^## {re.escape(heading)}\n.*?(?=^## |\Z)", md_text)
+def _split_markdown_section(md_text: str, heading: str | list[str]) -> tuple[str, str, str]:
+    headings = [heading] if isinstance(heading, str) else heading
+    match = re.search(_section_regex(headings), md_text)
     if not match:
         return md_text.strip(), "", ""
     before = md_text[:match.start()].strip()
@@ -239,10 +268,10 @@ def _split_markdown_section(md_text: str, heading: str) -> tuple[str, str, str]:
 
 
 def _split_material_sections(md_text: str) -> tuple[str, str]:
-    body = re.sub(r"(?ms)^## Figures\n.*?(?=^## |\Z)", "", md_text)
-    body = re.sub(r"(?m)^\[(Open original file|Full extracted text)\]\(.*\)\s*$\n?", "", body)
+    body = re.sub(_section_regex(_heading_candidates("figures", "Figures")), "", md_text)
+    body = re.sub(r"(?m)^\[(?:Open original file|Full extracted text|Abrir archivo original|Texto extraído completo)\]\(.*\)\s*$\n?", "", body)
     related_block = ""
-    related = re.search(r"(?ms)^## Related Materials\n.*?(?=^## |\Z)", body)
+    related = re.search(_section_regex(_heading_candidates("related_materials", "Related Materials")), body)
     if related:
         related_block = related.group(0).strip()
         body = body[:related.start()] + body[related.end():]
@@ -252,7 +281,7 @@ def _split_material_sections(md_text: str) -> tuple[str, str]:
 def _strip_material_sections(md_text: str) -> str:
     body, related_block = _split_material_sections(md_text)
     md_text = body
-    related = re.search(r"(?ms)^## Related Materials\n.*?(?=^## |\Z)", md_text)
+    related = re.search(_section_regex(_heading_candidates("related_materials", "Related Materials")), md_text)
     if related:
         related_block = related.group(0).strip()
         md_text = md_text[:related.start()] + md_text[related.end():]
@@ -550,6 +579,7 @@ def _base_context(
         "page_title": page_title,
         "active_domain": resolved_domain,
         "active_domain_label": _domain_label(resolved_domain),
+        "page_language": _ui_lang(page_domain or resolved_domain),
         "domain_tabs": [
             {
                 "key": domain,
@@ -584,6 +614,7 @@ def create_app(config: dict | None = None) -> FastAPI:
         wiki_url=wiki_url,
         material_url=material_url,
         truncate_words=truncate_words,
+        ui_label=_ui_label,
     )
     _TEMPLATES.env.globals["public_exposure"] = public_exposure
 
@@ -686,20 +717,20 @@ def create_app(config: dict | None = None) -> FastAPI:
             "search_depth": depth,
             "search_scope": search_scope,
             "search_hits": None,
-            "page_search": {"kind": "material", "label": "Search This Material", "query": search_query, "results": None},
+            "page_search": {"kind": "material", "label": _ui_label("search_this_material", str(material.get("domain") or domain), "Search This Material"), "query": search_query, "results": None},
         }
         if search_query and search_scope == "all":
             try:
                 search_context = _material_search_context(material_id, search_query, depth)
                 search_context["search_scope"] = search_scope
-                search_context["page_search"] = {"kind": "material", "label": "Search This Material", "query": search_query, "results": None}
+                search_context["page_search"] = {"kind": "material", "label": _ui_label("search_this_material", str(material.get("domain") or domain), "Search This Material"), "query": search_query, "results": None}
             except FileNotFoundError:
                 search_context = {
                     "search_query": search_query,
                     "search_depth": depth,
                     "search_scope": search_scope,
                     "search_hits": None,
-                    "page_search": {"kind": "material", "label": "Search This Material", "query": search_query, "results": None},
+                    "page_search": {"kind": "material", "label": _ui_label("search_this_material", str(material.get("domain") or domain), "Search This Material"), "query": search_query, "results": None},
                 }
         return _TEMPLATES.TemplateResponse(
             request,
@@ -731,13 +762,13 @@ def create_app(config: dict | None = None) -> FastAPI:
                 "request": request,
                 **_base_context(
                     request,
-                    page_title=f"Figures · {meta.get('title') or material_id}",
+                    page_title=f"{_ui_label('figures_for', str(meta.get('domain') or ''), 'Figures')} · {meta.get('title') or material_id}",
                     page_domain=str(meta.get("domain") or ""),
                 ),
                 "material_id": material_id,
                 "figures": _figure_view_models(material_id, figures),
-                "empty_message": "No extracted figures were found for this material." if not figures else "",
-                "breadcrumbs": [{"label": "Home", "url": "/"}, {"label": _label(material_id), "url": f"/materials/{material_id}"}, {"label": "Figures", "url": f"/materials/{material_id}/figures"}],
+                "empty_message": _ui_label("no_extracted_figures_for_material", str(meta.get("domain") or ""), "No extracted figures were found for this material.") if not figures else "",
+                "breadcrumbs": [{"label": _ui_label("home", str(meta.get("domain") or ""), "Home"), "url": "/"}, {"label": _label(material_id), "url": f"/materials/{material_id}"}, {"label": _ui_label("figures_for", str(meta.get("domain") or ""), "Figures"), "url": f"/materials/{material_id}/figures"}],
             },
         )
 
@@ -829,7 +860,7 @@ def create_app(config: dict | None = None) -> FastAPI:
             extra = material
             extra["related_materials_html"] = render_wiki_markdown(material["related_materials_body"], page_path.relative_to(read_mod.get_project_root()).as_posix(), material_id) if material["related_materials_body"] else ""
             search_query = q.strip()
-            page_search = {"kind": "material", "label": "Search This Material", "query": search_query, "results": None}
+            page_search = {"kind": "material", "label": _ui_label("search_this_material", str(extra.get("domain") or page_domain or ""), "Search This Material"), "query": search_query, "results": None}
             extra.update({"search_query": "", "search_depth": depth, "search_scope": "all", "search_hits": None, "page_search": page_search})
             if search_query:
                 try:
@@ -854,7 +885,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                 rel_parts = page_path.relative_to(wiki_root).parts
                 if len(rel_parts) == 3 and "shared" not in rel_parts and "concepts" not in rel_parts:
                     coll_domain, coll_name = rel_parts[0], rel_parts[1]
-                    before_materials, _, after_materials = _split_markdown_section(body, "Materials")
+                    before_materials, _, after_materials = _split_markdown_section(body, _heading_candidates("materials", "Materials"))
                     content_body = before_materials
                     collection_after_html = render_wiki_markdown(after_materials, page_path.relative_to(read_mod.get_project_root()).as_posix()) if after_materials else ""
                     collection_material_thumbs = _collection_sidebar_context(coll_domain, coll_name) or None
@@ -871,7 +902,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                         )
                     page_search = {
                         "kind": "collection",
-                        "label": "Search This Collection",
+                        "label": _ui_label("search_this_collection", coll_domain, "Search This Collection"),
                         "query": q.strip(),
                         "results": scoped_results,
                     }
@@ -898,7 +929,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                     scoped_results = search_mod.SearchResult(query=q.strip(), depth=depth, total=0, results=[])
             page_search = {
                 "kind": "concept",
-                "label": "Search This Concept",
+                "label": _ui_label("search_this_concept", page_domain or "", "Search This Concept"),
                 "query": q.strip(),
                 "results": scoped_results,
             }
@@ -942,12 +973,12 @@ def create_app(config: dict | None = None) -> FastAPI:
                 "request": request,
                 **_base_context(
                     request,
-                    page_title=f"Extracted text · {material_id}",
+                    page_title=f"{_ui_label('extracted_text_for', str(read_mod.load_material_meta(material_id).get('domain') or ''), 'Extracted text')} · {material_id}",
                     page_domain=str(read_mod.load_material_meta(material_id).get("domain") or ""),
                 ),
-                "breadcrumbs": [{"label": "Home", "url": "/"}, {"label": _label(material_id), "url": f"/materials/{material_id}"}, {"label": "Extracted text", "url": f"/extracted/{material_id}/text"}],
+                "breadcrumbs": [{"label": _ui_label("home", str(read_mod.load_material_meta(material_id).get("domain") or ""), "Home"), "url": "/"}, {"label": _label(material_id), "url": f"/materials/{material_id}"}, {"label": _ui_label("extracted_text_for", str(read_mod.load_material_meta(material_id).get("domain") or ""), "Extracted text"), "url": f"/extracted/{material_id}/text"}],
                 "content_html": render_wiki_markdown(path.read_text(encoding="utf-8"), f"extracted/{material_id}/text.md", material_id),
-                "page_title": f"Extracted text · {material_id}",
+                "page_title": f"{_ui_label('extracted_text_for', str(read_mod.load_material_meta(material_id).get('domain') or ''), 'Extracted text')} · {material_id}",
                 "wiki_path": f"extracted/{material_id}/text.md",
                 "collection_url": "",
                 "collection_label": "",

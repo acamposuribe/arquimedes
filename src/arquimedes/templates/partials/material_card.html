@@ -19,11 +19,11 @@
     {% if document_type_text %} · {{ document_type_text }}{% endif %}
   </p>
   {% if item.concepts is defined and item.concepts %}
-  <p class="meta-line">Concepts: {% for concept in item.concepts[:3] %}{% if not loop.first %} · {% endif %}{{ concept.concept_name or concept }}{% endfor %}</p>
+  <p class="meta-line">{{ ui_label('concepts', item.domain or active_domain, 'Concepts') }}: {% for concept in item.concepts[:3] %}{% if not loop.first %} · {% endif %}{{ concept.concept_name or concept }}{% endfor %}</p>
   {% endif %}
   {% if scope is defined and scope == 'all' and item.chunks is defined and item.chunks %}
   <div class="search-hit-group">
-    <div class="search-hit-label">Matching passages</div>
+    <div class="search-hit-label">{{ ui_label('matching_passages', item.domain or active_domain, 'Matching passages') }}</div>
     <div class="search-hit-list">
       {% for chunk in item.chunks[:2] %}
       {% set pages = chunk.source_pages or [] %}

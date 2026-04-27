@@ -2,24 +2,24 @@
 {% block content %}
 <section class="home-hero">
   <h1>Arquimedes</h1>
-  <p class="home-hero-kicker">{{ active_domain_label }} domain</p>
-  <p class="home-hero-desc">Architecture knowledge base — browse the compiled wiki, search materials, and explore extracted figures.</p>
+  <p class="home-hero-kicker">{{ active_domain_label }} {{ ui_label('domain_suffix', active_domain, 'domain') }}</p>
+  <p class="home-hero-desc">{{ ui_label('architecture_knowledge_base_desc', active_domain, 'Architecture knowledge base — browse the compiled wiki, search materials, and explore extracted figures.') }}</p>
   <form action="/search" class="home-search" method="get">
     <input name="domain" type="hidden" value="{{ active_domain }}">
-    <input name="q" placeholder="Search materials, concepts, annotations…" autocomplete="off">
-    <button type="submit">Search</button>
+    <input name="q" placeholder="{{ ui_label('search_materials_concepts_annotations', active_domain, 'Search materials, concepts, annotations…') }}" autocomplete="off">
+    <button type="submit">{{ ui_label('search_materials_button', active_domain, 'Search') }}</button>
   </form>
 </section>
 
 {% if index_missing %}
 <div class="notice-box">
-  <strong>Index not ready.</strong> Run <code>arq index rebuild</code> to unlock search and collection navigation.
+  <strong>{{ ui_label('index_not_ready', active_domain, 'Index not ready.') }}</strong> {{ ui_label('index_not_ready_help', active_domain, 'Run arq index rebuild to unlock search and collection navigation.') }}
 </div>
 {% endif %}
 
 <div class="home-grid">
   <section class="home-section">
-    <h2>{{ active_domain_label }} Collections</h2>
+    <h2>{{ active_domain_label }} {{ ui_label('collections_summary', active_domain, 'Collections')|capitalize }}</h2>
     {% if collections %}
     <ul class="wiki-list">
       {% for item in collections %}
@@ -29,12 +29,12 @@
       {% endfor %}
     </ul>
     {% else %}
-    <p class="meta-line">No indexed collections yet.</p>
+    <p class="meta-line">{{ ui_label('no_indexed_collections_yet', active_domain, 'No indexed collections yet.') }}</p>
     {% endif %}
   </section>
 
   <section class="home-section">
-    <h2>{{ active_domain_label }} Recent Materials</h2>
+    <h2>{{ active_domain_label }} {{ ui_label('recent_materials', active_domain, 'Recent Materials') }}</h2>
     {% if recent_materials %}
     <div class="stack">
       {% for item in recent_materials %}
@@ -42,7 +42,7 @@
       {% endfor %}
     </div>
     {% else %}
-    <p class="meta-line">No indexed materials yet.</p>
+    <p class="meta-line">{{ ui_label('no_indexed_materials_yet', active_domain, 'No indexed materials yet.') }}</p>
     {% endif %}
   </section>
 </div>

@@ -94,7 +94,7 @@ def test_home_page_scopes_domain_navigation(tmp_path, monkeypatch):
     response = client.get("/?domain=practice")
     assert response.status_code == 200
     assert 'href="/?domain=practice" class="active"' in response.text
-    assert "Practice Collections" in response.text
+    assert "Práctica Colecciones" in response.text
     assert "/wiki/practice/projects" in response.text
     assert "/wiki/research/papers" not in response.text
     assert "/wiki/practice/bridge-concepts/practice-beta" in response.text
@@ -358,7 +358,7 @@ def test_search_scopes_active_domain(tmp_path, monkeypatch):
     response = client.get("/search?q=material&domain=practice&facet=year%3D%3D2024")
     assert response.status_code == 200
     assert captured["facets"] == ["year==2024", "domain==practice"]
-    assert "Practice domain" in response.text
+    assert "Práctica dominio" in response.text
     assert 'name="domain" type="hidden" value="practice"' in response.text
 
 
@@ -501,7 +501,7 @@ def test_material_route_renders_search_hits(tmp_path, monkeypatch):
     assert "Portable archive framing." in response.text
     assert "<mark>Musee</mark> <mark>Imaginaire</mark>" in response.text
     assert "Concept matches" in response.text
-    assert 'aria-label="Clear page search"' in response.text
+    assert 'aria-label="Clear search"' in response.text
     assert 'href="/materials/mat_001"' in response.text
 
 
@@ -538,10 +538,60 @@ def test_collection_page_uses_collection_search_label(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert "Search This Collection" in response.text
     assert "Search This Material" not in response.text
-    assert 'aria-label="Clear page search"' in response.text
+    assert 'aria-label="Clear search"' in response.text
     assert 'href="/wiki/research/papers"' in response.text
     assert captured["collection"] == "papers"
     assert captured["facet"] == ["domain==research"]
+
+
+def test_practice_material_page_localizes_ui_and_parses_spanish_sections(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material Uno",
+        "domain": "practice",
+        "collection": "projects",
+        "source_path": "Practice/mat_001.pdf",
+    })
+    (root / "Library" / "Practice" / "mat_001.pdf").write_text("pdf", encoding="utf-8")
+    (root / "extracted" / "mat_001" / "text.md").write_text("Extracted", encoding="utf-8")
+    _write_json(root / "extracted" / "mat_001" / "figures" / "fig_0001.json", {
+        "figure_id": "fig_0001",
+        "image_path": "figures/fig_0001.png",
+        "caption": "Detalle útil",
+    })
+    (root / "extracted" / "mat_001" / "figures" / "fig_0001.png").write_bytes(b"png")
+    (root / "wiki" / "practice" / "projects" / "mat_001.md").write_text(
+        "# Material Uno\n\n"
+        "## Metadatos\n\n"
+        "| Campo | Valor |\n"
+        "| --- | --- |\n"
+        "| Autores | Alguien |\n\n"
+        "## Materiales relacionados\n\n"
+        "- [Otro](otro.md)\n\n"
+        "## Fuente\n\n"
+        "[Abrir archivo original](file:///tmp/source.pdf)\n\n"
+        "[Texto extraído completo](../../../extracted/mat_001/text.md)\n\n"
+        "## Figuras\n\n"
+        "**fig_0001**\n"
+        "![Fig](figures/fig_0001.png)\n\n",
+        encoding="utf-8",
+    )
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_001")
+    assert response.status_code == 200
+    assert 'lang="es"' in response.text
+    assert "Navegación" in response.text
+    assert "Inicio" in response.text
+    assert "Buscar" in response.text
+    assert "Acciones" in response.text
+    assert "Abrir archivo fuente" in response.text
+    assert "Texto extraído" in response.text
+    assert "Figuras" in response.text
+    assert "Materiales relacionados" in response.text
+    assert 'class="metadata-table"' in response.text
+    assert 'class="related-materials-list"' in response.text
+    assert response.text.index(">Fuente</h2>") < response.text.index(">Materiales relacionados</h2>")
 
 
 def test_collection_page_renders_material_cards_with_word_truncation_and_previews(tmp_path, monkeypatch):

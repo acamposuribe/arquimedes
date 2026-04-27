@@ -4,7 +4,7 @@
 <section class="panel">
   <h1>{{ page_title }}</h1>
   {% if listing.dirs %}
-  <h2>Directories</h2>
+  <h2>{{ ui_label('directories', active_domain, 'Directories') }}</h2>
   <div class="dir-listing">
     {% for item in listing.dirs %}
     <a href="/wiki/{{ item.path }}">{{ item.name }}/</a>
@@ -12,7 +12,7 @@
   </div>
   {% endif %}
   {% if listing.pages %}
-  <h2>Pages</h2>
+  <h2>{{ ui_label('pages_nav', active_domain, 'Pages') }}</h2>
   <div class="dir-listing">
     {% for item in listing.pages %}
     <a href="/wiki/{{ item.path }}">{{ item.name }}</a>

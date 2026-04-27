@@ -3,38 +3,38 @@
 {% set collection_count = result.collection_pages|length if result and result.collection_pages is defined else 0 %}
 {% set concept_count = result.canonical_clusters|length if result and result.canonical_clusters is defined else 0 %}
 <div class="page-lead">
-  <h1>Search</h1>
-  <p class="meta-line">{{ active_domain_label }} domain</p>
+  <h1>{{ ui_label('search', active_domain, 'Search') }}</h1>
+  <p class="meta-line">{{ active_domain_label }} {{ ui_label('domain_suffix', active_domain, 'domain') }}</p>
 </div>
 
 <form class="search-form" method="get">
   <input name="domain" type="hidden" value="{{ active_domain }}">
-  <input name="q" value="{{ query }}" placeholder="thermal mass, archive, courtyard…" autocomplete="off">
-  <select name="scope" aria-label="Search scope">
-    <option value="all" {% if scope == 'all' %}selected{% endif %}>All</option>
-    <option value="title" {% if scope == 'title' %}selected{% endif %}>Title</option>
-    <option value="author" {% if scope == 'author' %}selected{% endif %}>Author</option>
+  <input name="q" value="{{ query }}" placeholder="{{ ui_label('search_materials_placeholder', active_domain, 'thermal mass, archive, courtyard…') }}" autocomplete="off">
+  <select name="scope" aria-label="{{ ui_label('search_scope', active_domain, 'Search scope') }}">
+    <option value="all" {% if scope == 'all' %}selected{% endif %}>{{ ui_label('all', active_domain, 'All') }}</option>
+    <option value="title" {% if scope == 'title' %}selected{% endif %}>{{ ui_label('title_label', active_domain, 'Title') }}</option>
+    <option value="author" {% if scope == 'author' %}selected{% endif %}>{{ ui_label('author', active_domain, 'Author') }}</option>
   </select>
-  <input name="collection" value="{{ collection }}" placeholder="Collection" style="width:9rem">
+  <input name="collection" value="{{ collection }}" placeholder="{{ ui_label('collection', active_domain, 'Collection') }}" style="width:9rem">
   <input name="depth" type="hidden" value="3">
-  <button type="submit">Search</button>
+  <button type="submit">{{ ui_label('search_materials_button', active_domain, 'Search') }}</button>
 </form>
 
 {% if index_missing %}
 <div class="notice-box">
-  Search index not found. Run <code>arq index rebuild</code> first.
+  {{ ui_label('search_index_not_found', active_domain, 'Search index not found. Run arq index rebuild first.') }}
 </div>
 {% elif result and (result.total or collection_count or concept_count) %}
 <p class="search-summary">
-  <strong>{{ collection_count }}</strong> collection{% if collection_count != 1 %}s{% endif %},
-  <strong>{{ concept_count }}</strong> concept{% if concept_count != 1 %}s{% endif %},
-  <strong>{{ result.total }}</strong> material{% if result.total != 1 %}s{% endif %}
-  for <strong>{{ result.query }}</strong>
+  <strong>{{ collection_count }}</strong> {{ ui_label('collections_summary', active_domain, 'collections') }},
+  <strong>{{ concept_count }}</strong> {{ ui_label('concepts_summary', active_domain, 'concepts') }},
+  <strong>{{ result.total }}</strong> {{ ui_label('materials_summary', active_domain, 'materials') }}
+  {{ ui_label('results_for', active_domain, 'for') }} <strong>{{ result.query }}</strong>
 </p>
 {% if scope == 'all' and result.collection_pages is defined and result.collection_pages %}
 <section class="search-section">
   <div class="page-lead">
-    <h2>Collections</h2>
+    <h2>{{ ui_label('collections_summary', active_domain, 'Collections')|capitalize }}</h2>
   </div>
   <div class="stack">
     {% for collection_hit in result.collection_pages %}
@@ -43,7 +43,7 @@
       'title': collection_hit.title,
       'summary': collection_hit.summary,
       'meta_line': (collection_hit.domain ~ '/' ~ collection_hit.collection),
-      'meta_tail': (collection_hit.material_count ~ ' materials')
+      'meta_tail': (collection_hit.material_count ~ ' ' ~ ui_label('materials_summary', active_domain, 'materials'))
     } %}
     {% include "partials/search_page_card.html" %}
     {% endfor %}
@@ -53,7 +53,7 @@
 {% if scope == 'all' and result.canonical_clusters is defined and result.canonical_clusters %}
 <section class="search-section">
   <div class="page-lead">
-    <h2>Concepts</h2>
+    <h2>{{ ui_label('concepts', active_domain, 'Concepts') }}</h2>
   </div>
   <div class="stack">
     {% for cluster in result.canonical_clusters %}
@@ -63,7 +63,7 @@
       'title': cluster.canonical_name,
       'summary': cluster.summary,
       'meta_line': cluster_scope,
-      'meta_tail': (cluster.material_count ~ ' materials')
+      'meta_tail': (cluster.material_count ~ ' ' ~ ui_label('materials_summary', active_domain, 'materials'))
     } %}
     {% include "partials/search_page_card.html" %}
     {% endfor %}
@@ -73,7 +73,7 @@
 {% if result.results %}
 <section class="search-section">
   <div class="page-lead">
-    <h2>Materials</h2>
+    <h2>{{ ui_label('materials', active_domain, 'Materials') }}</h2>
   </div>
 <div class="stack">
   {% for item in result.results %}
@@ -83,8 +83,8 @@
 </section>
 {% endif %}
 {% elif query %}
-<p class="meta-line">No results for <strong>{{ query }}</strong>.</p>
+<p class="meta-line">{{ ui_label('no_results_for', active_domain, 'No results for') }} <strong>{{ query }}</strong>.</p>
 {% else %}
-<p class="meta-line">Enter a query above to search collections, concepts, materials, and passages inside materials.</p>
+<p class="meta-line">{{ ui_label('enter_query_to_search', active_domain, 'Enter a query above to search collections, concepts, materials, and passages inside materials.') }}</p>
 {% endif %}
 {% endblock %}

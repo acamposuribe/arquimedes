@@ -503,6 +503,104 @@ def test_incremental_skip(tmp_path, monkeypatch):
     assert "Archive and Space needs a stronger architectural anchor." in graph_page.read_text(encoding="utf-8")
 
 
+def test_compile_rebuilds_pages_when_template_version_changes(tmp_path, monkeypatch):
+    """Legacy compile stamps without a template version trigger a full page rebuild."""
+    import shutil
+
+    import arquimedes.cluster as cluster_mod
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.memory as memory_mod
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "manifests").mkdir()
+    (tmp_path / "manifests" / "materials.jsonl").write_text(
+        json.dumps({
+            "material_id": "mat_aaa",
+            "file_hash": "x",
+            "relative_path": "R/mat_aaa.pdf",
+            "file_type": "pdf",
+            "domain": "research",
+            "collection": "papers",
+            "ingested_at": "2026-01-01T00:00:00+00:00",
+        }),
+        encoding="utf-8",
+    )
+
+    db_path = _make_sqlite_db(tmp_path)
+    index_dir = tmp_path / "indexes"
+    index_dir.mkdir()
+    shutil.copy(str(db_path), str(index_dir / "search.sqlite"))
+
+    extracted_dir = tmp_path / "extracted" / "mat_aaa"
+    extracted_dir.mkdir(parents=True)
+    meta = _make_meta("mat_aaa", "Necropolitics")
+    (extracted_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    (extracted_dir / "chunks.jsonl").write_text("", encoding="utf-8")
+    (extracted_dir / "annotations.jsonl").write_text("", encoding="utf-8")
+
+    collection_dir = tmp_path / "derived" / "collections" / "research__papers"
+    collection_dir.mkdir(parents=True, exist_ok=True)
+    clusters_data = [{
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive Space Framework",
+        "slug": "archive-space-framework",
+        "aliases": [],
+        "descriptor": "A bridge joining local archive-space clusters.",
+        "material_ids": ["mat_aaa"],
+        "source_concepts": [{
+            "material_id": "mat_aaa",
+            "concept_name": "archival habitat",
+            "relevance": "high",
+            "source_pages": [1],
+            "evidence_spans": ["test span"],
+            "confidence": 0.9,
+        }],
+        "confidence": 0.85,
+        "wiki_path": "wiki/research/papers/concepts/archive-space-framework.md",
+    }]
+    (collection_dir / "local_concept_clusters.jsonl").write_text(
+        "\n".join(json.dumps(c) for c in clusters_data) + "\n",
+        encoding="utf-8",
+    )
+
+    mat_stamp = compile_mod._material_stamp(extracted_dir)
+    cluster_stamp = compile_mod._cluster_file_stamp(tmp_path)
+    stamp_path = tmp_path / "derived" / "compile_stamp.json"
+    stamp_path.parent.mkdir(parents=True, exist_ok=True)
+    stamp_path.write_text(
+        json.dumps({
+            "compiled_at": "2026-01-01T00:00:00+00:00",
+            "material_stamps": {"mat_aaa": mat_stamp},
+            "cluster_stamp": cluster_stamp,
+        }, separators=(",", ":")),
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True},
+    )
+
+    result = compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=False, run_quick_lint=False)
+
+    assert result["material_pages"] == 1
+    assert result["material_pages_skipped"] == 0
+    assert result["concept_pages"] == 1
+    stamp_payload = json.loads(stamp_path.read_text(encoding="utf-8"))
+    assert stamp_payload["template_version"] == compile_mod.COMPILE_TEMPLATE_VERSION
+    assert (tmp_path / "wiki" / "research" / "papers" / "concepts" / "archive-space-framework.md").exists()
+
+
 # ---------------------------------------------------------------------------
 # Test 7: orphan removal
 # ---------------------------------------------------------------------------

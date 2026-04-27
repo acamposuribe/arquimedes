@@ -28,6 +28,7 @@ from arquimedes.domain_profiles import display_domain_name, is_practice_domain
 from arquimedes.lint_global_bridge import global_bridge_artifact_paths, load_global_bridge_clusters
 
 logger = logging.getLogger(__name__)
+COMPILE_TEMPLATE_VERSION = 2
 
 
 # ---------------------------------------------------------------------------
@@ -346,6 +347,7 @@ def _write_compile_stamp(
             "compiled_at": datetime.now(timezone.utc).isoformat(),
             "material_stamps": material_stamps,
             "cluster_stamp": cluster_stamp,
+            "template_version": COMPILE_TEMPLATE_VERSION,
         }, separators=(',', ':')),
         encoding="utf-8",
     )
@@ -683,8 +685,10 @@ def compile_wiki(
     prev_stamp = _load_compile_stamp(root) if not force else None
     prev_material_stamps: dict[str, str] = (prev_stamp or {}).get("material_stamps", {})
     prev_cluster_stamp: str = (prev_stamp or {}).get("cluster_stamp", "")
+    prev_template_version = int((prev_stamp or {}).get("template_version") or 0)
     current_cluster_stamp = _cluster_file_stamp(root)
-    clusters_changed = (current_cluster_stamp != prev_cluster_stamp) or force or recompile_pages
+    templates_changed = prev_template_version != COMPILE_TEMPLATE_VERSION
+    clusters_changed = (current_cluster_stamp != prev_cluster_stamp) or templates_changed or force or recompile_pages
 
     # 6. Material clusters index: material_id → list of concept homes
     material_clusters: dict[str, list[dict]] = {mid: [] for mid in all_metas}
@@ -709,7 +713,7 @@ def compile_wiki(
         output_dir = extracted_root / mid
         stamp = _material_stamp(output_dir)
         current_material_stamps[mid] = stamp
-        if not (force or recompile_pages) and prev_material_stamps.get(mid) == stamp:
+        if not (force or recompile_pages or templates_changed) and prev_material_stamps.get(mid) == stamp:
             mat_pages_skipped += 1
             continue
 

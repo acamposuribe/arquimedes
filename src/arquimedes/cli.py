@@ -10,6 +10,7 @@ import re
 import shutil
 import subprocess
 import sys
+from urllib.parse import unquote, urlparse
 
 import click
 import yaml
@@ -506,6 +507,13 @@ def _default_upgrade_install_spec(explicit_spec: str | None = None) -> str:
     if not url:
         return "arquimedes"
 
+    parsed = urlparse(url)
+    if parsed.scheme == "file":
+        repo_spec = _upgrade_spec_from_local_repo(Path(unquote(parsed.path)))
+        if repo_spec:
+            return repo_spec
+        return f"arquimedes @ {url}"
+
     vcs_info = payload.get("vcs_info") if isinstance(payload.get("vcs_info"), dict) else None
     if vcs_info:
         vcs = str(vcs_info.get("vcs") or "").strip()
@@ -515,6 +523,50 @@ def _default_upgrade_install_spec(explicit_spec: str | None = None) -> str:
             return f"{source}@{revision}" if revision else source
 
     return f"arquimedes @ {url}"
+
+
+def _upgrade_spec_from_local_repo(repo_path: Path) -> str | None:
+    try:
+        resolved = repo_path.expanduser().resolve()
+    except OSError:
+        return None
+
+    if not (resolved / ".git").exists():
+        return None
+
+    remote = subprocess.run(
+        ["git", "remote", "get-url", "origin"],
+        cwd=resolved,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if remote.returncode != 0:
+        return None
+    remote_url = (remote.stdout or "").strip()
+    if not remote_url:
+        return None
+
+    branch = subprocess.run(
+        ["git", "branch", "--show-current"],
+        cwd=resolved,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    revision = (branch.stdout or "").strip()
+    if not revision:
+        head = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=resolved,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        revision = (head.stdout or "").strip()
+
+    source = remote_url if remote_url.startswith("git+") else f"git+{remote_url}"
+    return f"{source}@{revision}" if revision else source
 
 
 def _run_checked_command(args: list[str], *, error_prefix: str) -> subprocess.CompletedProcess[str]:

@@ -39,6 +39,28 @@ def test_default_upgrade_install_spec_falls_back_to_pypi(monkeypatch):
     assert cli_mod._default_upgrade_install_spec() == "arquimedes"
 
 
+def test_default_upgrade_install_spec_converts_local_repo_to_remote_branch(monkeypatch):
+    class FakeDistribution:
+        @staticmethod
+        def read_text(name: str) -> str | None:
+            assert name == "direct_url.json"
+            return json.dumps(
+                {
+                    "url": "file:///Users/test/Sites/arquimedes-code",
+                    "dir_info": {},
+                }
+            )
+
+    monkeypatch.setattr(cli_mod.metadata, "distribution", lambda name: FakeDistribution())
+    monkeypatch.setattr(
+        cli_mod,
+        "_upgrade_spec_from_local_repo",
+        lambda repo_path: "git+https://github.com/example/arquimedes.git@main",
+    )
+
+    assert cli_mod._default_upgrade_install_spec() == "git+https://github.com/example/arquimedes.git@main"
+
+
 def test_upgrade_force_reinstalls_package_and_launch_agents(monkeypatch):
     calls: list[list[str]] = []
 

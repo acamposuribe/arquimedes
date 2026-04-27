@@ -276,6 +276,41 @@ def test_expected_pages_include_local_concepts_and_collection_indexes(tmp_path, 
     assert root / "wiki" / "research" / "Van Eyck" / "concepts" / "threshold-space-and-the-in-between.md" in expected
 
 
+def test_expected_pages_include_domain_bridge_indexes(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root = tmp_path
+    monkeypatch.setattr(
+        lint_mod,
+        "load_global_bridge_clusters",
+        lambda _root: [
+            {
+                "cluster_id": "research__bridge_0001",
+                "domain": "research",
+                "slug": "archive-space-framework",
+                "wiki_path": "wiki/research/bridge-concepts/archive-space-framework.md",
+            }
+        ],
+    )
+    manifest_records = [{
+        "material_id": "mat_001",
+        "domain": "research",
+        "collection": "Van Eyck",
+    }]
+    metas = {
+        "mat_001": {
+            "material_id": "mat_001",
+            "domain": "research",
+            "collection": "Van Eyck",
+            "title": "One",
+        }
+    }
+
+    expected = _expected_pages(root, manifest_records, metas, [])
+
+    assert root / "wiki" / "research" / "bridge-concepts" / "_index.md" in expected
+
+
 def test_run_lint_quick_writes_markdown_report(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)

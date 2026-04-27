@@ -1827,6 +1827,8 @@ def _expected_pages(
         expected.add(root / f"wiki/{domain}/{collection}/concepts/_index.md")
     for domain in sorted({meta.get("domain") or "practice" for meta in metas.values()}):
         expected.add(root / f"wiki/{domain}/_index.md")
+    for domain in sorted({str(cluster.get("domain") or "").strip() for cluster in bridge_clusters if str(cluster.get("domain") or "").strip()}):
+        expected.add(root / f"wiki/{domain}/bridge-concepts/_index.md")
     expected.add(root / "wiki" / "_index.md")
     expected.add(root / "wiki" / "shared" / "concepts" / "_index.md")
     expected.add(root / "wiki" / "shared" / "glossary" / "_index.md")

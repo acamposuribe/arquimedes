@@ -56,6 +56,7 @@ from arquimedes.compile_pages import (
     render_collection_page,
 )
 from arquimedes.config import get_logs_root, get_project_root, load_config
+from arquimedes.domain_profiles import get_domain_profile
 from arquimedes.enrich import _is_chunk_stale, _is_document_stale, _is_figure_stale
 from arquimedes.llm import EnrichmentError, LlmFn, get_model_id, make_cli_llm_fn, parse_json_or_repair
 from arquimedes.enrich_stamps import canonical_hash
@@ -186,6 +187,16 @@ _CLUSTER_AUDIT_DELTA_SCHEMA = '{"bridge_updates":[{"cluster_id":"existing bridge
 _CONCEPT_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"open_questions":["strings"]|null,"helpful_new_sources":["strings"]|null,"why_this_concept_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
 _COLLECTION_REFLECTION_DELTA_SCHEMA = '{"main_takeaways":["strings"]|null,"main_tensions":["strings"]|null,"important_material_ids":["material ids"]|null,"important_cluster_ids":["cluster ids"]|null,"open_questions":["strings"]|null,"helpful_new_sources":["strings"]|null,"why_this_collection_matters":"string"|null,"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
 _GRAPH_REFLECTION_DELTA_SCHEMA = '{"findings":[{"finding_id":"string(optional)","finding_type":"string","severity":"low|medium|high","summary":"string","details":"string","affected_material_ids":["material ids"],"affected_cluster_ids":["cluster ids"],"candidate_future_sources":["strings"],"candidate_bridge_links":["strings"]}]|null,"_finished":true}'
+
+
+def concept_reflection_figure_limit(domain: str) -> int:
+    profile = get_domain_profile(domain, default="research")
+    return profile.concept_reflection_figure_limit
+
+
+def collection_reflection_figure_limit(domain: str) -> int:
+    profile = get_domain_profile(domain, default="research")
+    return profile.collection_reflection_figure_limit
 
 
 def _progress(message: str) -> None:

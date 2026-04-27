@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 
 from arquimedes import enrich_prompts, enrich_stamps, llm
+from arquimedes.domain_profiles import domain_prompt_version
 from arquimedes.llm import get_model_id
 from arquimedes.models import (
     ArchitectureFacets,
@@ -193,6 +194,8 @@ def enrich_document_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"Load error: {exc}"}
 
+    prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
+
     # 4. Build prompt and call LLM
     document_text_path = output_dir / "document.work.md"
     try:
@@ -202,7 +205,9 @@ def enrich_document_stage(
 
         # LLM reads the source files directly and returns a JSON patch.
         system, messages = enrich_prompts.build_document_file_prompt(
-            meta_path, document_text_path
+            meta_path,
+            document_text_path,
+            domain=str(meta.get("domain", "")),
         )
         raw_text = llm_fn(system, messages)
         parsed = llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_PATCH_SCHEMA)

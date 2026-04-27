@@ -239,6 +239,16 @@ class TestBuildDocumentFilePrompt:
         assert '"title": "... optional, only if replacing ..."' not in system
         assert "Replace only if clearly wrong from document evidence." not in system
 
+    def test_practice_prompt_requests_spanish_output(self, tmp_path):
+        meta_path = tmp_path / "meta.json"
+        document_text_path = tmp_path / "document.work.md"
+        meta_path.write_text("{}", encoding="utf-8")
+        document_text_path.write_text("texto", encoding="utf-8")
+        system, _ = build_document_file_prompt(meta_path, document_text_path, domain="practice")
+        assert "orientada a la práctica" in system
+        assert "Escribe en español" in system
+        assert '"document_type"' in system
+
 
 # ---------------------------------------------------------------------------
 # build_chunk_batch_prompt
@@ -255,6 +265,14 @@ class TestBuildChunkBatchPrompt:
         assert "abc123-c0" in content
         assert "Urban Housing Standards" in content
         assert "[HIGHLIGHTED]" in content
+
+    def test_practice_prompt_switches_to_spanish(self):
+        doc_ctx = build_document_context(_meta(domain="practice"), None, None)
+        system, messages = build_chunk_batch_prompt(_chunks(), doc_ctx, _annotations(), domain="practice")
+        assert "orientada a la práctica" in system
+        content = messages[0]["content"]
+        assert "Todos los textos libres deben estar en español" in content
+        assert "Language must be English" not in content
 
 
 # ---------------------------------------------------------------------------
@@ -326,6 +344,16 @@ class TestBuildFigureBatchPrompt:
         all_text = " ".join(b["text"] for b in messages[0]["content"] if b["type"] == "text")
         assert "Bounding box:" in all_text
         assert "Artifact hint:" in all_text
+
+    def test_practice_prompt_prioritizes_figures_as_primary_evidence(self):
+        figs = [{"figure_id": "fig_0001", "image_path": None,
+                 "source_page_text": "Una planta con cotas.", "caption_candidates": ["Figura 1"],
+                 "sidecar": {"source_page": 3}}]
+        system, messages = build_figure_batch_prompt(figs, "Contexto", domain="practice")
+        assert "orientada a la práctica" in system
+        all_text = " ".join(b["text"] for b in messages[0]["content"] if b["type"] == "text")
+        assert "evidencia principal" in all_text
+        assert "Todos los textos libres deben estar en español" in all_text
 
 
 class TestBuildMetadataFixPrompt:

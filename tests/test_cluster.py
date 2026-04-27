@@ -12,6 +12,7 @@ from click.testing import CliRunner
 
 from arquimedes.cluster import (
     _BRIDGE_SYSTEM_PROMPT,
+    _bridge_system_prompt,
     _apply_bridge_delta,
     _build_bridge_prompt,
     cluster_concepts,
@@ -38,6 +39,12 @@ def test_local_cluster_paths_and_wiki_path():
     assert local_cluster_path(root, "research", "papers") == root / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl"
     assert local_cluster_stamp_path(root, "research", "papers") == root / "derived" / "collections" / "research__papers" / "local_cluster_stamp.json"
     assert local_concept_wiki_path("research", "papers", "archival-space") == "wiki/research/papers/concepts/archival-space.md"
+
+
+def test_practice_bridge_system_prompt_is_spanish():
+    system = _bridge_system_prompt("practice")
+    assert "orientada a la práctica" in system
+    assert "Devuelve nombres canónicos, alias y descriptores en español." in system
 
 
 def test_normalize_local_clusters_assigns_scoped_ids_and_schema():
@@ -123,6 +130,9 @@ def test_local_cluster_staleness_and_fingerprint_are_collection_scoped(tmp_path,
         encoding="utf-8",
     )
 
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(cluster_mod, "get_project_root", lambda: tmp_path)
 
     assert is_local_clustering_stale("research", "papers") is True

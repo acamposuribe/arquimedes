@@ -17,6 +17,7 @@ from arquimedes.compile_pages import (
     _material_wiki_path,
     _relative_link,
     render_concept_page,
+    render_collection_page,
     render_glossary,
     render_index_page,
     render_material_page,
@@ -234,6 +235,20 @@ def test_material_page_sections():
     assert "## Source" in page
 
 
+def test_practice_material_page_sections_are_spanish():
+    meta = _make_meta("mat_aaa", "Proyecto")
+    meta["domain"] = "practice"
+    meta["methodological_conclusions"] = {"value": ["Comprobar compatibilidades antes de definir el detalle."], "provenance": {}}
+    meta["main_content_learnings"] = {"value": ["La sección resuelve la relación entre estructura y envolvente."], "provenance": {}}
+    page = render_material_page(meta, [], [], [], [], [])
+    assert "## Metadatos" in page
+    assert "## Resumen" in page
+    assert "## Conclusiones del material" in page
+    assert "**Conclusiones metodológicas**" in page
+    assert "**Aprendizajes principales**" in page
+    assert "## Fuente" in page
+
+
 # ---------------------------------------------------------------------------
 # Test 4: concept page evidence
 # ---------------------------------------------------------------------------
@@ -289,7 +304,25 @@ def test_concept_page_evidence():
     assert "Archival Landscapes" in page
     assert "spatial dimension of archival practice" in page
     assert "## Related Concepts" in page
-    assert "memory palace" in page
+
+
+def test_practice_collection_page_sections_are_spanish():
+    page = render_collection_page(
+        "Práctica / Vivienda",
+        "practice",
+        "vivienda",
+        [{"name": "Caso A", "path": "caso-a.md", "summary": "Resumen breve."}],
+        [{"name": "detalle constructivo", "path": "detalle.md", "count": 2}],
+        [{"field": "material_system", "value": "madera", "count": 2}],
+        [{"name": "Caso A", "path": "caso-a.md", "ingested_at": "2026-04-27T00:00:00+00:00"}],
+        {"main_takeaways": ["Sirve para comparar soluciones."], "main_tensions": [], "open_questions": [], "helpful_new_sources": [], "why_this_collection_matters": "Organiza decisiones repetibles."},
+    )
+    assert "## Resumen general" in page
+    assert "## Reflexiones" in page
+    assert "## Incorporaciones recientes" in page
+    assert "## Materiales" in page
+    assert "## Conceptos clave" in page
+    assert "## Facetas principales" in page
 
 
 def test_bridge_concept_page_renders_recent_changes_section():

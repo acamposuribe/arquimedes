@@ -11,13 +11,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
-from arquimedes import enrich_stamps
+from arquimedes import enrich_stamps, practice_prompts
 from arquimedes.config import (
     get_indexes_root,
     get_logs_root,
     get_project_root,
     load_config,
 )
+from arquimedes.domain_profiles import is_practice_domain
 from arquimedes.llm import (
     EnrichmentError,
     LlmFn,
@@ -737,7 +738,11 @@ def _stage_bridge_memory_input(root: Path, clusters: list[dict], *, scope_key: s
 def _build_bridge_prompt(
     bridge_packets_path: Path,
     bridge_memory_path: Path,
+    *,
+    domain: str = "",
 ) -> str:
+    if is_practice_domain(domain):
+        return practice_prompts.local_cluster_user_prompt(bridge_packets_path, bridge_memory_path)
     return (
         f"Read the new concepts packet file from {bridge_packets_path}.\n"
         f"Read the existing bridge cluster memory file from {bridge_memory_path}.\n"
@@ -752,6 +757,12 @@ def _build_bridge_prompt(
         "Set _finished to true only in that final completed JSON object.\n"
         "Return JSON only.\n"
     )
+
+
+def _bridge_system_prompt(domain: str) -> str:
+    if is_practice_domain(domain):
+        return practice_prompts.local_cluster_system_prompt(_BRIDGE_DELTA_SCHEMA)
+    return _BRIDGE_SYSTEM_PROMPT
 
 
 def _normalize_bridge_source_concepts(source_concepts, *, label: str) -> list[dict]:
@@ -1108,8 +1119,15 @@ def cluster_concepts(
                     scope_key=scope_tmp_key,
                 )
                 try:
-                    user_msg = _build_bridge_prompt(bridge_packets_path, bridge_memory_path)
-                    raw_text = scope_llm_fn(_BRIDGE_SYSTEM_PROMPT, [{"role": "user", "content": user_msg}])
+                    user_msg = _build_bridge_prompt(
+                        bridge_packets_path,
+                        bridge_memory_path,
+                        domain=scope_domain,
+                    )
+                    raw_text = scope_llm_fn(
+                        _bridge_system_prompt(scope_domain),
+                        [{"role": "user", "content": user_msg}],
+                    )
                     parsed = parse_json_or_repair(scope_llm_fn, raw_text, _BRIDGE_DELTA_SCHEMA)
                     if not isinstance(parsed, dict):
                         raise EnrichmentError(f"Cluster output is not a JSON object for {scope_key}")

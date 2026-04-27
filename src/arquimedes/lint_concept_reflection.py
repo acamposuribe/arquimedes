@@ -6,8 +6,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from arquimedes import practice_prompts
 from arquimedes.llm import EnrichmentError
 from arquimedes.config import load_config
+from arquimedes.domain_profiles import is_practice_domain
 from arquimedes.llm import parse_json_or_repair
 
 
@@ -201,7 +203,7 @@ def _build_concept_reflection_evidence_payload(
                 query_terms,
                 chunk_limit=chunk_limit,
                 annotation_limit=deps.CONCEPT_REFLECTION_MAX_ANNOTATIONS_PER_MATERIAL,
-                figure_limit=deps.CONCEPT_REFLECTION_MAX_FIGURES_PER_MATERIAL,
+                figure_limit=deps.concept_reflection_figure_limit(str(cluster.get("domain", ""))),
                 concept_limit=deps.CONCEPT_REFLECTION_MAX_CONCEPTS_PER_MATERIAL,
             )
             if tool
@@ -374,10 +376,17 @@ def _concept_reflection_link_fingerprint(cluster: dict) -> str:
 
 
 def _concept_reflection_prompt(
+    domain: str,
     page_path: Path,
     evidence_path: Path,
 ) -> tuple[str, str]:
     deps = _deps()
+    if is_practice_domain(domain):
+        return practice_prompts.concept_reflection_prompt(
+            deps._CONCEPT_REFLECTION_DELTA_SCHEMA,
+            page_path,
+            evidence_path,
+        )
     system = (
         "You are an architecture research librarian writing reflective synthesis for a concept page.\n"
         "\n"
@@ -466,7 +475,11 @@ def _run_concept_reflections_impl(
         deps._write_json(evidence_path, evidence_payload)
         scaffold = deps._concept_reflection_scaffold(cluster, fingerprint, root)
         llm_fn = llm_factory("cluster")
-        system, user = deps._concept_reflection_prompt(page_copy_path, evidence_path)
+        system, user = deps._concept_reflection_prompt(
+            str(cluster.get("domain", "")),
+            page_copy_path,
+            evidence_path,
+        )
         succeeded = False
         try:
             if tool is not None:

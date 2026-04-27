@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phases 1-7 complete (Phase 7 agent tools landed 2026-04-16); Collection Graph implemented; Phase 8 web UI in progress; Phase 9 server agent + sync implemented in code/tests (2026-04-25); macOS launchd end-to-end install remains operator verification
-> **Last updated:** 2026-04-25
+> **Status:** Phases 1-7 complete (Phase 7 agent tools landed 2026-04-16); Collection Graph implemented; Phase 8 web UI in progress; Phase 9 server agent + sync implemented in code/tests (2026-04-25); macOS launchd end-to-end install remains operator verification; Practice domain Phase 1 prompting/reflection customization is implemented in code/tests
+> **Last updated:** 2026-04-27
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
 > **Phase 4 spec:** [Search index design](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md)
@@ -15,6 +15,7 @@
 > **Phase 8 plan:** [Web UI implementation plan](superpowers/plans/2026-04-11-phase8-web-ui.md)
 > **Phase 9 spec:** [Server agent + sync design](superpowers/specs/2026-04-25-phase9-server-agent-design.md)
 > **Phase 9 plan:** [Server agent + sync implementation plan](superpowers/plans/2026-04-25-phase9-server-agent.md)
+> **Practice domain Phase 1 plan:** [Prompting, reflection, and figure weighting](superpowers/plans/2026-04-27-practice-domain-phase1.md)
 > **Collaborator handbook:** [docs/collaborator/agent-handbook.md](../collaborator/agent-handbook.md) (created by Phase 7)
 > **Reference:** [Karpathy-inspired LLM wiki idea](llm-wiki.md)
 > **Pipeline:** [Operational pipeline](PIPELINE.md)

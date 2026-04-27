@@ -3458,6 +3458,18 @@ def test_global_bridge_prompt_requests_page_worthy_bridge_essay():
     assert "page-worthy bridge synthesis" in user
 
 
+def test_global_bridge_prompt_for_practice_is_spanish():
+    from arquimedes.lint import collection_reflection_figure_limit, concept_reflection_figure_limit
+    from arquimedes.lint_global_bridge import _global_bridge_prompt
+
+    system, user = _global_bridge_prompt(Path("packet.json"), Path("memory.json"), "practice")
+
+    assert "orientada a la práctica" in system
+    assert "Todos los textos libres y listas deben estar en español." in user
+    assert concept_reflection_figure_limit("practice") > concept_reflection_figure_limit("research")
+    assert collection_reflection_figure_limit("practice") > collection_reflection_figure_limit("research")
+
+
 def test_run_reflective_lint_global_bridge_stage_skips_with_fewer_than_two_collections(tmp_path, monkeypatch):
     import arquimedes.lint as lint_mod
 

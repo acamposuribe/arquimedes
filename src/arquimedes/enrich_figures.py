@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from arquimedes import enrich_prompts, enrich_stamps, llm
+from arquimedes.domain_profiles import domain_prompt_version
 from arquimedes.llm import get_model_id
 from arquimedes.models import EnrichedField
 
@@ -72,7 +73,8 @@ def _extract_caption_candidates(page_text: str) -> list[str]:
     candidates = []
     for line in page_text.splitlines():
         stripped = line.strip()
-        if stripped and ("fig" in stripped.lower() or "figure" in stripped.lower()):
+        lowered = stripped.lower()
+        if stripped and ("fig" in lowered or "figure" in lowered or "figura" in lowered):
             candidates.append(stripped)
     return candidates
 
@@ -98,6 +100,34 @@ _SCAN_ARTIFACT_PHRASES = (
     "article text and page footer",
     "journal footer and page number",
     "title page of the article",
+    "portada escaneada",
+    "página escaneada",
+    "pagina escaneada con texto",
+    "página escaneada con texto",
+    "pagina de solo texto",
+    "página de solo texto",
+    "imagen vacia",
+    "imagen vacía",
+    "imagen en blanco",
+    "escaneo en blanco",
+    "artefacto de escaneo",
+    "artefacto del escaner",
+    "artefacto del escáner",
+    "fragmento recortado",
+    "recorte muy pequeno",
+    "recorte muy pequeño",
+    "pagina de texto",
+    "página de texto",
+    "prosa densa",
+    "prosa continua",
+    "sin ilustracion independiente",
+    "sin ilustración independiente",
+    "sin contenido grafico",
+    "sin contenido gráfico",
+    "pie de pagina y numero de pagina",
+    "pie de página y número de página",
+    "portada del articulo",
+    "portada del artículo",
 )
 
 
@@ -375,6 +405,8 @@ def enrich_figures_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"Load meta error: {exc}"}
 
+    prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
+
     # Build doc_context for fingerprints
     doc_context: dict = {
         "title": meta.get("title", ""),
@@ -495,7 +527,9 @@ def enrich_figures_stage(
             })
 
         system, messages = enrich_prompts.build_figure_batch_prompt(
-            figures_with_context, doc_context_str
+            figures_with_context,
+            doc_context_str,
+            domain=str(meta.get("domain", "")),
         )
         raw_text = batch_llm_fn(system, messages)
         actual_model = getattr(batch_llm_fn, "last_model", model)

@@ -11,6 +11,8 @@ import re
 from pathlib import PurePosixPath
 from urllib.parse import quote
 
+from arquimedes.domain_profiles import generated_label, is_practice_domain
+
 
 # ---------------------------------------------------------------------------
 # Enriched field unwrapper
@@ -214,11 +216,34 @@ def _relative_link(from_path: str, to_path: str) -> str:
     return quote(rel, safe="/.")
 
 
-def _render_reflection_section(title: str, reflection: dict | None) -> list[str]:
+def _page_domain_from_path(page_path: str) -> str:
+    parts = PurePosixPath(page_path).parts
+    if len(parts) >= 2 and parts[0] == "wiki" and parts[1] in {"practice", "research"}:
+        return parts[1]
+    return ""
+
+
+def _label(domain: str, key: str, default: str) -> str:
+    return generated_label(key, domain, default=default)
+
+
+def _material_count_text(domain: str, count: int) -> str:
+    if is_practice_domain(domain, default="research"):
+        return f"{count} material{'es' if count != 1 else ''}"
+    return f"{count} material{'s' if count != 1 else ''}"
+
+
+def _concept_appears_text(domain: str, count: int) -> str:
+    if is_practice_domain(domain, default="research"):
+        return f"Este concepto aparece en {_material_count_text(domain, count)}."
+    return f"This concept appears in {count} material{'s' if count != 1 else ''}."
+
+
+def _render_reflection_section(title: str, reflection: dict | None, *, domain: str = "") -> list[str]:
     lines: list[str] = []
     if not reflection:
         return lines
-    lines.append(f"## {title}\n")
+    lines.append(f"## {_label(domain, 'reflections', title)}\n")
     takeaways = reflection.get("main_takeaways") or []
     tensions = reflection.get("main_tensions") or []
     questions = reflection.get("open_questions") or []
@@ -227,26 +252,26 @@ def _render_reflection_section(title: str, reflection: dict | None) -> list[str]
         lines.append(prose)
         lines.append("")
     if takeaways:
-        lines.append("**Main takeaways**")
+        lines.append(f"**{_label(domain, 'main_takeaways', 'Main takeaways')}**")
         for item in takeaways[:8]:
             if str(item).strip():
                 lines.append(f"- {item}")
         lines.append("")
     if tensions:
-        lines.append("**Main tensions**")
+        lines.append(f"**{_label(domain, 'main_tensions', 'Main tensions')}**")
         for item in tensions[:8]:
             if str(item).strip():
                 lines.append(f"- {item}")
         lines.append("")
     if questions:
-        lines.append("**Open questions**")
+        lines.append(f"**{_label(domain, 'open_questions', 'Open questions')}**")
         for item in questions[:8]:
             if str(item).strip():
                 lines.append(f"- {item}")
         lines.append("")
     helpful_new_sources = reflection.get("helpful_new_sources") or []
     if helpful_new_sources:
-        lines.append("**Helpful new sources**")
+        lines.append(f"**{_label(domain, 'helpful_new_sources', 'Helpful new sources')}**")
         for item in helpful_new_sources[:8]:
             if str(item).strip():
                 lines.append(f"- {item}")
@@ -254,7 +279,7 @@ def _render_reflection_section(title: str, reflection: dict | None) -> list[str]
     return lines
 
 
-def _render_recent_changes_section(review_rows: list[dict] | None) -> list[str]:
+def _render_recent_changes_section(review_rows: list[dict] | None, *, domain: str = "") -> list[str]:
     lines: list[str] = []
     if not review_rows:
         return lines
@@ -263,7 +288,7 @@ def _render_recent_changes_section(review_rows: list[dict] | None) -> list[str]:
         provenance = row.get("_provenance") if isinstance(row.get("_provenance"), dict) else {}
         return str(provenance.get("run_at", "")).strip()
 
-    lines.append("## Recent Changes\n")
+    lines.append(f"## {_label(domain, 'recent_changes', 'Recent Changes')}\n")
     for row in sorted(review_rows, key=_sort_key, reverse=True):
         finding_type = str(row.get("finding_type", "")).strip() or "update"
         severity = str(row.get("severity", "")).strip()
@@ -278,13 +303,13 @@ def _render_recent_changes_section(review_rows: list[dict] | None) -> list[str]:
             title_bits.append(run_at[:10])
         lines.append(f"### {' · '.join(title_bits)}\n")
         if status:
-            lines.append(f"- Status: {status}")
+            lines.append(f"- {_label(domain, 'status', 'Status')}: {status}")
         if severity:
-            lines.append(f"- Severity: {severity}")
+            lines.append(f"- {_label(domain, 'severity', 'Severity')}: {severity}")
         if note:
-            lines.append(f"- Note: {note}")
+            lines.append(f"- {_label(domain, 'note', 'Note')}: {note}")
         if recommendation:
-            lines.append(f"- Recommendation: {recommendation}")
+            lines.append(f"- {_label(domain, 'recommendation', 'Recommendation')}: {recommendation}")
         lines.append("")
     return lines
 
@@ -324,11 +349,12 @@ def render_material_page(
 
     # --- Title ---
     title = meta.get("title") or mid
+    domain = meta.get("domain") or ""
     lines.append(f"# {title}\n")
 
     # --- Metadata block ---
-    lines.append("## Metadata\n")
-    lines.append("| Field | Value |")
+    lines.append(f"## {_label(domain, 'metadata', 'Metadata')}\n")
+    lines.append(f"| {_label(domain, 'field', 'Field')} | {_label(domain, 'value', 'Value')} |")
     lines.append("| --- | --- |")
     authors = meta.get("authors") or []
     if isinstance(authors, list):
@@ -336,49 +362,48 @@ def render_material_page(
     else:
         author_str = str(authors)
     if author_str:
-        lines.append(f"| Authors | {author_str} |")
+        lines.append(f"| {_label(domain, 'authors', 'Authors')} | {author_str} |")
     year = meta.get("year") or ""
     if year:
-        lines.append(f"| Year | {year} |")
+        lines.append(f"| {_label(domain, 'year', 'Year')} | {year} |")
     doc_type = _meta_val(meta.get("document_type")) or meta.get("raw_document_type") or ""
     if doc_type:
-        lines.append(f"| Type | {doc_type} |")
-    domain = meta.get("domain") or ""
+        lines.append(f"| {_label(domain, 'type', 'Type')} | {doc_type} |")
     if domain:
-        lines.append(f"| Domain | {domain} |")
+        lines.append(f"| {_label(domain, 'domain', 'Domain')} | {domain} |")
     collection = meta.get("collection") or ""
     if collection:
-        lines.append(f"| Collection | {collection} |")
+        lines.append(f"| {_label(domain, 'collection', 'Collection')} | {collection} |")
     page_count = meta.get("page_count") or 0
     if page_count:
-        lines.append(f"| Pages | {page_count} |")
+        lines.append(f"| {_label(domain, 'pages', 'Pages')} | {page_count} |")
     lines.append("")
 
     # --- Summary ---
     summary = _meta_val(meta.get("summary"))
     if summary:
-        lines.append("## Summary\n")
+        lines.append(f"## {_label(domain, 'summary', 'Summary')}\n")
         lines.append(summary)
         lines.append("")
 
     methodological_conclusions = _meta_lines(meta.get("methodological_conclusions"))
     main_content_learnings = _meta_lines(meta.get("main_content_learnings"))
     if methodological_conclusions or main_content_learnings:
-        lines.append("## Material Conclusions\n")
+        lines.append(f"## {_label(domain, 'material_conclusions', 'Material Conclusions')}\n")
         if methodological_conclusions:
-            lines.append("**Methodological conclusions**")
+            lines.append(f"**{_label(domain, 'methodological_conclusions', 'Methodological conclusions')}**")
             for item in methodological_conclusions:
                 lines.append(f"- {item}")
             lines.append("")
         if main_content_learnings:
-            lines.append("**Main content learnings**")
+            lines.append(f"**{_label(domain, 'main_content_learnings', 'Main content learnings')}**")
             for item in main_content_learnings:
                 lines.append(f"- {item}")
             lines.append("")
 
     # --- Key concepts ---
     if clusters:
-        lines.append("## Key Concepts\n")
+        lines.append(f"## {_label(domain, 'key_concepts', 'Key Concepts')}\n")
         for c in sorted(clusters, key=lambda x: x.get("canonical_name", "")):
             cname = c["canonical_name"]
             slug = c["slug"]
@@ -386,7 +411,7 @@ def render_material_page(
             rel = _relative_link(page_path, concept_path)
             link_label = cname
             if "/bridge-concepts/" in concept_path:
-                link_label += " (bridge)"
+                link_label += f" ({_label(domain, 'bridge_suffix', 'bridge')})"
             lines.append(f"- [{link_label}]({rel})")
         lines.append("")
 
@@ -394,17 +419,17 @@ def render_material_page(
     # Facets may be nested under meta["facets"][key] as {value, provenance} objects,
     # or directly on meta[key] as plain strings (synthetic/test fixtures).
     facet_fields = [
-        ("building_type", "Building type"),
-        ("scale", "Scale"),
-        ("location", "Location"),
-        ("jurisdiction", "Jurisdiction"),
-        ("climate", "Climate"),
-        ("program", "Program"),
-        ("material_system", "Material system"),
-        ("structural_system", "Structural system"),
-        ("historical_period", "Historical period"),
-        ("course_topic", "Course topic"),
-        ("studio_project", "Studio project"),
+        ("building_type", _label(domain, "building_type", "Building type")),
+        ("scale", _label(domain, "scale", "Scale")),
+        ("location", _label(domain, "location", "Location")),
+        ("jurisdiction", _label(domain, "jurisdiction", "Jurisdiction")),
+        ("climate", _label(domain, "climate", "Climate")),
+        ("program", _label(domain, "program", "Program")),
+        ("material_system", _label(domain, "material_system", "Material system")),
+        ("structural_system", _label(domain, "structural_system", "Structural system")),
+        ("historical_period", _label(domain, "historical_period", "Historical period")),
+        ("course_topic", _label(domain, "course_topic", "Course topic")),
+        ("studio_project", _label(domain, "studio_project", "Studio project")),
     ]
     nested_facets = meta.get("facets") or {}
     facets = []
@@ -415,7 +440,7 @@ def render_material_page(
         facets.append((label, val))
     nonempty_facets = [(label, val) for label, val in facets if val.strip()]
     if nonempty_facets:
-        lines.append("## Architecture Facets\n")
+        lines.append(f"## {_label(domain, 'architecture_facets', 'Architecture Facets')}\n")
         for label, val in nonempty_facets:
             lines.append(f"**{label}:** {val}  ")
         lines.append("")
@@ -427,7 +452,7 @@ def render_material_page(
         and _meta_val(f.get("visual_type")) != "decorative"
     ]
     if substantive_figs:
-        lines.append("## Figures\n")
+        lines.append(f"## {_label(domain, 'figures', 'Figures')}\n")
         for fig in substantive_figs:
             fig_id = fig.get("figure_id", "")
             visual_type = _meta_val(fig.get("visual_type")) or ""
@@ -451,7 +476,7 @@ def render_material_page(
 
     # --- Annotations ---
     if annotations:
-        lines.append("## Reader Annotations\n")
+        lines.append(f"## {_label(domain, 'reader_annotations', 'Reader Annotations')}\n")
         for ann in annotations:
             quoted = _clean_quoted_text(ann.get("quoted_text") or "")
             comment = ann.get("comment") or ""
@@ -460,26 +485,26 @@ def render_material_page(
             if quoted:
                 lines.append(f'> "{quoted}"{page_suffix}')
             if comment:
-                lines.append(f"> **Note:** {comment}")
+                lines.append(f"> **{_label(domain, 'note', 'Note')}:** {comment}")
             lines.append("")
 
     # --- Source ---
-    lines.append("## Source\n")
+    lines.append(f"## {_label(domain, 'source', 'Source')}\n")
     if page_count:
-        lines.append(f"**Pages:** {page_count}  ")
+        lines.append(f"**{_label(domain, 'pages', 'Pages')}:** {page_count}  ")
     citation = _chicago_citation(meta)
     if citation:
-        lines.append(f"**Citation:** {citation}")
+        lines.append(f"**{_label(domain, 'citation', 'Citation')}:** {citation}")
     lines.append("")
     if raw_file_link:
-        lines.append(f"[Open original file]({raw_file_link})  ")
+        lines.append(f"[{_label(domain, 'open_original_file', 'Open original file')}]({raw_file_link})  ")
     if extracted_text_link:
-        lines.append(f"[Full extracted text]({extracted_text_link})  ")
+        lines.append(f"[{_label(domain, 'full_extracted_text', 'Full extracted text')}]({extracted_text_link})  ")
     lines.append("")
 
     # --- Related materials ---
     if related:
-        lines.append("## Related Materials\n")
+        lines.append(f"## {_label(domain, 'related_materials', 'Related Materials')}\n")
         for r in related:
             rtitle = r.get("title") or r["material_id"]
             reasons = r.get("reasons") or []
@@ -518,6 +543,7 @@ def render_concept_page(
     canonical_name = cluster["canonical_name"]
     slug = cluster["slug"]
     page_path = cluster.get("wiki_path") or _concept_wiki_path(slug)
+    page_domain = str(cluster.get("domain", "")).strip() or _page_domain_from_path(page_path)
     is_bridge_page = "/bridge-concepts/" in page_path
     source_concepts = cluster.get("source_concepts", [])
     member_local_clusters = cluster.get("member_local_clusters", [])
@@ -528,12 +554,12 @@ def render_concept_page(
     lines.append(f"# {canonical_name}\n")
 
     if "/bridge-concepts/" in page_path:
-        lines.append("_Bridge cluster_\n")
+        lines.append(f"_{_label(page_domain, 'bridge_cluster', 'Bridge cluster')}_\n")
 
     descriptor = str(cluster.get("descriptor", "")).strip()
     # --- Aliases ---
     if aliases:
-        lines.append(f"_Also known as: {', '.join(aliases)}_\n")
+        lines.append(f"_{_label(page_domain, 'also_known_as', 'Also known as')}: {', '.join(aliases)}_\n")
 
     if descriptor:
         lines.append(f"{descriptor}\n")
@@ -543,9 +569,9 @@ def render_concept_page(
         n_materials = len({mid for member in member_local_clusters for mid in member.get("material_ids", [])})
     else:
         n_materials = len(dict.fromkeys(sc["material_id"] for sc in source_concepts))
-    lines.append(f"This concept appears in {n_materials} material{'s' if n_materials != 1 else ''}.\n")
+    lines.append(f"{_concept_appears_text(page_domain, n_materials)}\n")
 
-    lines.extend(_render_reflection_section("Reflections", reflection))
+    lines.extend(_render_reflection_section("Reflections", reflection, domain=page_domain))
 
     if is_bridge_page:
         bridge_takeaways = [str(item).strip() for item in cluster.get("bridge_takeaways", []) if str(item).strip()]
@@ -559,28 +585,28 @@ def render_concept_page(
             if isinstance(row, dict)
         ]
         if bridge_takeaways or bridge_tensions or bridge_questions or bridge_sources or why_this_bridge_matters or supporting_collection_reflections:
-            lines.append("## Cross-Collection Synthesis\n")
+            lines.append(f"## {_label(page_domain, 'cross_collection_synthesis', 'Cross-Collection Synthesis')}\n")
             if why_this_bridge_matters:
-                lines.append("### Why This Bridge Matters\n")
+                lines.append(f"### {_label(page_domain, 'why_this_bridge_matters', 'Why This Bridge Matters')}\n")
                 lines.append(why_this_bridge_matters)
                 lines.append("")
             if bridge_takeaways:
-                lines.append("### Shared Takeaways\n")
+                lines.append(f"### {_label(page_domain, 'shared_takeaways', 'Shared Takeaways')}\n")
                 for item in bridge_takeaways:
                     lines.append(f"- {item}")
                 lines.append("")
             if bridge_tensions:
-                lines.append("### Shared Tensions\n")
+                lines.append(f"### {_label(page_domain, 'shared_tensions', 'Shared Tensions')}\n")
                 for item in bridge_tensions:
                     lines.append(f"- {item}")
                 lines.append("")
             if bridge_questions:
-                lines.append("### Open Questions\n")
+                lines.append(f"### {_label(page_domain, 'open_questions', 'Open Questions')}\n")
                 for item in bridge_questions:
                     lines.append(f"- {item}")
                 lines.append("")
             if bridge_sources:
-                lines.append("### Helpful New Sources\n")
+                lines.append(f"### {_label(page_domain, 'helpful_new_sources', 'Helpful New Sources')}\n")
                 for item in bridge_sources[:8]:
                     lines.append(f"- {item}")
                 lines.append("")
@@ -591,13 +617,13 @@ def render_concept_page(
                 if collection_key and why:
                     collection_signals.append(f"{collection_key} — {why}")
             if collection_signals:
-                lines.append("### Collection Signals\n")
+                lines.append(f"### {_label(page_domain, 'collection_signals', 'Collection Signals')}\n")
                 for item in collection_signals:
                     lines.append(f"- {item}")
                 lines.append("")
 
     if bridge_memberships and not is_bridge_page:
-        lines.append("## Global Bridges\n")
+        lines.append(f"## {_label(page_domain, 'global_bridges', 'Global Bridges')}\n")
         for bridge in bridge_memberships:
             bridge_name = str(bridge.get("canonical_name", "")).strip()
             bridge_path = str(bridge.get("wiki_path", "")).strip()
@@ -612,7 +638,7 @@ def render_concept_page(
                 link = f"[{bridge_name}]({_relative_link(page_path, bridge_path)})"
             summary_bits = []
             if supporting_material_ids:
-                summary_bits.append(f"{len(supporting_material_ids)} material{'s' if len(supporting_material_ids) != 1 else ''}")
+                summary_bits.append(_material_count_text(page_domain, len(supporting_material_ids)))
             if bridge.get("confidence") not in (None, ""):
                 try:
                     summary_bits.append(f"confidence {float(bridge.get('confidence', 0.0) or 0.0):.2f}")
@@ -626,7 +652,7 @@ def render_concept_page(
         lines.append("")
 
     if member_local_clusters:
-        lines.append("## Contributing Local Clusters\n")
+        lines.append(f"## {_label(page_domain, 'contributing_local_clusters', 'Contributing Local Clusters')}\n")
         for member in member_local_clusters:
             cluster_name = str(member.get("canonical_name", "")).strip() or str(member.get("cluster_id", "")).strip()
             cluster_path = str(member.get("wiki_path", "")).strip()
@@ -637,11 +663,14 @@ def render_concept_page(
             if domain and collection:
                 scope_bits.append(f"{domain}/{collection}")
             if material_ids:
-                scope_bits.append(f"{len(material_ids)} material{'s' if len(material_ids) != 1 else ''}")
+                scope_bits.append(_material_count_text(page_domain, len(material_ids)))
             scope_suffix = f" ({' / '.join(scope_bits)})" if scope_bits else ""
             lines.append(f"### {cluster_name}{scope_suffix}\n")
             if cluster_path:
-                lines.append(f"- Local cluster: [{cluster_name}]({_relative_link(page_path, cluster_path)})")
+                lines.append(
+                    f"- {_label(page_domain, 'local_cluster', 'Local cluster')}: "
+                    f"[{cluster_name}]({_relative_link(page_path, cluster_path)})"
+                )
 
             descriptor = str(member.get("descriptor", "")).strip()
             if descriptor:
@@ -650,7 +679,7 @@ def render_concept_page(
 
             promotion_reasons = [str(reason).strip().replace("_", " ") for reason in member.get("promotion_reasons", []) if str(reason).strip()]
             if promotion_reasons:
-                lines.append(f"- Promotion: {', '.join(promotion_reasons)}")
+                lines.append(f"- {_label(page_domain, 'promotion', 'Promotion')}: {', '.join(promotion_reasons)}")
             if material_ids:
                 for mid in material_ids:
                     title = material_titles.get(mid, mid)
@@ -662,7 +691,7 @@ def render_concept_page(
 
     # --- By material ---
     if source_concepts and not member_local_clusters:
-        lines.append("## By Material\n")
+        lines.append(f"## {_label(page_domain, 'by_material', 'By Material')}\n")
         for sc in source_concepts:
             mid = sc["material_id"]
             title = material_titles.get(mid, mid)
@@ -690,7 +719,7 @@ def render_concept_page(
 
     # --- Related concepts ---
     if related_concepts:
-        lines.append("## Related Concepts\n")
+        lines.append(f"## {_label(page_domain, 'related_concepts', 'Related Concepts')}\n")
         for rc in related_concepts:
             rc_name = rc["canonical_name"]
             rc_slug = rc["slug"]
@@ -700,12 +729,12 @@ def render_concept_page(
             rel = _relative_link(page_path, rc_path)
             link_label = rc_name
             if "/bridge-concepts/" in rc_path:
-                link_label += " (bridge)"
+                link_label += f" ({_label(page_domain, 'bridge_suffix', 'bridge')})"
             lines.append(f"- [{link_label}]({rel})")
         lines.append("")
 
     if is_bridge_page:
-        lines.extend(_render_recent_changes_section(review_rows))
+        lines.extend(_render_recent_changes_section(review_rows, domain=page_domain))
 
     return "\n".join(lines)
 
@@ -739,17 +768,17 @@ def render_collection_page(
     lines.append(f"# {title}\n")
 
     # Overview
-    lines.append("## Overview\n")
-    lines.append(f"- **Domain:** {domain}")
-    lines.append(f"- **Collection:** {collection}")
-    lines.append(f"- **Materials:** {len(materials)}")
+    lines.append(f"## {_label(domain, 'overview', 'Overview')}\n")
+    lines.append(f"- **{_label(domain, 'domain', 'Domain')}:** {domain}")
+    lines.append(f"- **{_label(domain, 'collection', 'Collection')}:** {collection}")
+    lines.append(f"- **{_label(domain, 'materials', 'Materials')}:** {len(materials)}")
     lines.append("")
 
-    lines.extend(_render_reflection_section("Reflections", reflection))
+    lines.extend(_render_reflection_section("Reflections", reflection, domain=domain))
 
     # Recent additions
     if recent_additions:
-        lines.append("## Recent Additions\n")
+        lines.append(f"## {_label(domain, 'recent_additions', 'Recent Additions')}\n")
         for r in recent_additions[:5]:
             name = r.get("name", "")
             path = r.get("path", "")
@@ -764,7 +793,7 @@ def render_collection_page(
 
     # Materials
     if materials:
-        lines.append("## Materials\n")
+        lines.append(f"## {_label(domain, 'materials', 'Materials')}\n")
         sorted_mats = sorted(materials, key=lambda e: e.get("name", "").lower())
         for e in sorted_mats:
             name = e.get("name", "")
@@ -779,18 +808,18 @@ def render_collection_page(
 
     # Key concepts
     if key_concepts:
-        lines.append("## Key Concepts\n")
+        lines.append(f"## {_label(domain, 'key_concepts', 'Key Concepts')}\n")
         for kc in key_concepts:
             name = kc.get("name", "")
             path = kc.get("path", "")
             count = kc.get("count", 0)
             link = f"[{name}]({path})" if path else name
-            lines.append(f"- {link} ({count} material{'s' if count != 1 else ''})")
+            lines.append(f"- {link} ({_material_count_text(domain, count)})")
         lines.append("")
 
     # Top facets (grouped by field)
     if top_facets:
-        lines.append("## Top Facets\n")
+        lines.append(f"## {_label(domain, 'top_facets', 'Top Facets')}\n")
         # Group by field, preserving input order
         from collections import OrderedDict
         grouped: OrderedDict[str, list[dict]] = OrderedDict()
@@ -798,7 +827,7 @@ def render_collection_page(
             field = tf.get("field", "")
             grouped.setdefault(field, []).append(tf)
         for field, entries in grouped.items():
-            heading = field.replace("_", " ").title()
+            heading = _label(domain, field, field.replace("_", " ").title())
             lines.append(f"### {heading}\n")
             for tf in entries:
                 value = tf.get("value", "")

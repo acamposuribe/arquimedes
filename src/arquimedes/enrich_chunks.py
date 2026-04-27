@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from arquimedes import enrich_prompts, enrich_stamps, llm
+from arquimedes.domain_profiles import domain_prompt_version
 from arquimedes.llm import get_model_id
 from arquimedes.enrich_prompts import estimate_tokens
 
@@ -242,6 +243,8 @@ def enrich_chunks_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"Load error: {exc}"}
 
+    prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
+
     if not chunks:
         return {"status": "skipped", "detail": "no chunks"}
 
@@ -368,7 +371,12 @@ def enrich_chunks_stage(
         if _debug_enabled():
             batch_ids = ",".join(c.get("chunk_id", "") for c in batch)
             _debug(f"batch={batch_idx + 1}/{n_batches} size={len(batch)} chunk_ids={batch_ids}")
-        system, messages = enrich_prompts.build_chunk_batch_prompt(batch, doc_context_str, annotations)
+        system, messages = enrich_prompts.build_chunk_batch_prompt(
+            batch,
+            doc_context_str,
+            annotations,
+            domain=str(meta.get("domain", "")),
+        )
         raw_text = batch_llm_fn(system, messages)
         actual_model = _actual_model_name(batch_llm_fn, model)
         parsed_batch = _parse_chunk_jsonl(raw_text)

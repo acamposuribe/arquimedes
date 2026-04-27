@@ -24,6 +24,7 @@ from arquimedes.config import (
     get_wiki_root,
     load_config,
 )
+from arquimedes.domain_profiles import display_domain_name, is_practice_domain
 from arquimedes.lint_global_bridge import global_bridge_artifact_paths, load_global_bridge_clusters
 
 logger = logging.getLogger(__name__)
@@ -1069,7 +1070,7 @@ def _render_index_pages(
                 reverse=True,
             )
 
-            friendly_title = f"{domain.replace('_', ' ').title()} / {collection.replace('_', ' ').title()}"
+            friendly_title = f"{display_domain_name(domain)} / {collection.replace('_', ' ').title()}"
             content = compile_pages.render_collection_page(
                 friendly_title, domain, collection,
                 coll_entries, key_concepts, top_facets, recent,
@@ -1077,9 +1078,14 @@ def _render_index_pages(
             )
             _write_page(wiki_root / domain / collection / "_index.md", content)
             written += 1
+            concept_index_title = (
+                f"{friendly_title} {compile_pages._label(domain, 'concepts', 'Concepts')}"
+                if is_practice_domain(domain, default="research")
+                else f"{friendly_title} Concepts"
+            )
             _write_page(
                 wiki_root / domain / collection / "concepts" / "_index.md",
-                compile_pages.render_index_page(f"{friendly_title} Concepts", collection_concept_entries),
+                compile_pages.render_index_page(concept_index_title, collection_concept_entries),
             )
             written += 1
 
@@ -1103,22 +1109,25 @@ def _render_index_pages(
         if bridge_entries:
             domain_entries.append(
                 {
-                    "name": "Bridge Concepts",
+                    "name": compile_pages._label(domain, "bridge_concepts", "Bridge Concepts"),
                     "path": compile_pages._relative_link(domain_index, bridge_index),
                     "summary": f"{len(bridge_entries)} bridge concepts",
                 }
             )
             _write_page(
                 wiki_root / domain / "bridge-concepts" / "_index.md",
-                compile_pages.render_index_page(f"{domain.title()} Bridge Concepts", bridge_entries),
+                compile_pages.render_index_page(
+                    f"{display_domain_name(domain)} {compile_pages._label(domain, 'bridge_concepts', 'Bridge Concepts')}",
+                    bridge_entries,
+                ),
             )
             written += 1
 
-        domain_content = compile_pages.render_index_page(domain.title(), domain_entries)
+        domain_content = compile_pages.render_index_page(display_domain_name(domain), domain_entries)
         _write_page(wiki_root / domain / "_index.md", domain_content)
         written += 1
         domain_pages.append({
-            "name": domain.title(),
+            "name": display_domain_name(domain),
             "path": f"{domain}/_index.md",
             "summary": f"{sum(len(cols) for cols in collections.values())} materials",
         })

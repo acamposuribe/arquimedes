@@ -6,7 +6,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from arquimedes import practice_prompts
 from arquimedes.config import load_config
+from arquimedes.domain_profiles import is_practice_domain
 from arquimedes.llm import EnrichmentError
 from arquimedes.llm import parse_json_or_repair
 
@@ -166,15 +168,15 @@ def _collection_reflection_materials(
             chunk_evidence = deps._collect_material_chunk_evidence(tool, mid, query_terms, chunk_limit)
             evidence = (
                 tool._material_evidence(
-                    mid,
-                    query_terms,
-                    chunk_limit=chunk_limit,
-                    annotation_limit=deps.COLLECTION_REFLECTION_MAX_ANNOTATIONS_PER_MATERIAL,
-                    figure_limit=deps.COLLECTION_REFLECTION_MAX_FIGURES_PER_MATERIAL,
-                    concept_limit=deps.COLLECTION_REFLECTION_MAX_CONCEPTS_PER_MATERIAL,
-                )
-                if tool
-                else {}
+                mid,
+                query_terms,
+                chunk_limit=chunk_limit,
+                annotation_limit=deps.COLLECTION_REFLECTION_MAX_ANNOTATIONS_PER_MATERIAL,
+                figure_limit=deps.collection_reflection_figure_limit(domain),
+                concept_limit=deps.COLLECTION_REFLECTION_MAX_CONCEPTS_PER_MATERIAL,
+            )
+            if tool
+            else {}
             )
             evidence_payload: dict[str, Any] = {
                 "chunks": [
@@ -359,6 +361,13 @@ def _collection_reflection_prompt(
     evidence_path: Path,
 ) -> tuple[str, str]:
     deps = _deps()
+    del collection
+    if is_practice_domain(domain):
+        return practice_prompts.collection_reflection_prompt(
+            deps._COLLECTION_REFLECTION_DELTA_SCHEMA,
+            page_path,
+            evidence_path,
+        )
     system = (
         "You are an architecture research librarian writing reflective synthesis for a collection page.\n"
         "\n"

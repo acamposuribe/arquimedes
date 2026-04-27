@@ -13,6 +13,7 @@ from pathlib import Path
 from arquimedes import enrich_stamps
 from arquimedes.llm import get_model_id
 from arquimedes.config import get_logs_root, get_project_root, load_config
+from arquimedes.domain_profiles import domain_prompt_version
 from arquimedes.enrich_document import enrich_document_stage
 from arquimedes.enrich_chunks import enrich_chunks_stage
 from arquimedes.enrich_figures import enrich_figures_stage
@@ -38,6 +39,9 @@ def _is_document_stale(output_dir: Path, config: dict) -> bool:
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
     try:
+        meta_path = output_dir / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
         existing = enrich_stamps.read_document_stamp(output_dir)
         return not enrich_stamps.matches_stage_version(existing, prompt_version, schema_version)
     except Exception:
@@ -79,6 +83,7 @@ def _chunk_staleness_info(output_dir: Path, config: dict) -> tuple[set[str], int
     try:
         meta_path = output_dir / "meta.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
         toc_path = output_dir / "toc.json"
         toc = json.loads(toc_path.read_text(encoding="utf-8")) if toc_path.exists() else None
 
@@ -152,6 +157,7 @@ def _is_figure_stale(output_dir: Path, config: dict) -> bool:
     try:
         meta_path = output_dir / "meta.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+        prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
         doc_context: dict = {
             "title": meta.get("title", ""),
             "authors": meta.get("authors", []),

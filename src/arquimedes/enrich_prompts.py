@@ -18,6 +18,9 @@ import json
 import mimetypes
 from pathlib import Path
 
+from arquimedes.domain_profiles import is_practice_domain
+from arquimedes import practice_prompts
+
 
 # ---------------------------------------------------------------------------
 # TOC formatter (shared helper)
@@ -332,6 +335,8 @@ def build_document_input_files(
 def build_document_file_prompt(
     meta_path: Path,
     document_text_path: Path,
+    *,
+    domain: str = "",
 ) -> tuple[str, list[dict]]:
     """Build (system_prompt, messages) for file-based document enrichment.
 
@@ -342,7 +347,12 @@ def build_document_file_prompt(
         meta_path=meta_path,
         document_text_path=document_text_path,
     )
-    return _DOCUMENT_FILE_SYSTEM_PROMPT, [{"role": "user", "content": user_content}]
+    system = (
+        practice_prompts.document_file_system_prompt()
+        if is_practice_domain(domain)
+        else _DOCUMENT_FILE_SYSTEM_PROMPT
+    )
+    return system, [{"role": "user", "content": user_content}]
 
 
 # ---------------------------------------------------------------------------
@@ -473,6 +483,8 @@ def build_chunk_batch_prompt(
     chunk_batch: list[dict],
     doc_context_str: str,
     annotations: list[dict],
+    *,
+    domain: str = "",
 ) -> tuple[str, list[dict]]:
     """Build (system_prompt, messages) for a chunk-batch enrichment call.
 
@@ -483,13 +495,23 @@ def build_chunk_batch_prompt(
     """
     chunks_text = _build_chunks_text(chunk_batch, annotations)
 
-    user_content = _CHUNK_BATCH_USER_TEMPLATE.format(
+    system = (
+        practice_prompts.chunk_batch_system_prompt()
+        if is_practice_domain(domain)
+        else _CHUNK_BATCH_SYSTEM_PROMPT
+    )
+    user_template = (
+        practice_prompts.chunk_batch_user_template()
+        if is_practice_domain(domain)
+        else _CHUNK_BATCH_USER_TEMPLATE
+    )
+    user_content = user_template.format(
         doc_context_str=doc_context_str,
         chunks_text=chunks_text,
     )
 
     messages = [{"role": "user", "content": user_content}]
-    return _CHUNK_BATCH_SYSTEM_PROMPT, messages
+    return system, messages
 
 
 # ---------------------------------------------------------------------------
@@ -546,6 +568,8 @@ def _encode_image(image_path: str) -> tuple[str, str]:
 def build_figure_batch_prompt(
     figures_with_context: list[dict],
     doc_context_str: str,
+    *,
+    domain: str = "",
 ) -> tuple[str, list[dict]]:
     """Build (system_prompt, messages) for a figure-batch enrichment call.
 
@@ -560,7 +584,17 @@ def build_figure_batch_prompt(
     included as a base64 content block. For figures without images, only text
     context is provided and the LLM is notified.
     """
-    intro = _FIGURE_BATCH_USER_INTRO.format(doc_context_str=doc_context_str)
+    system = (
+        practice_prompts.figure_batch_system_prompt()
+        if is_practice_domain(domain)
+        else _FIGURE_BATCH_SYSTEM_PROMPT
+    )
+    intro_template = (
+        practice_prompts.figure_batch_user_intro()
+        if is_practice_domain(domain)
+        else _FIGURE_BATCH_USER_INTRO
+    )
+    intro = intro_template.format(doc_context_str=doc_context_str)
 
     # Build the content list for the user message (multimodal)
     content: list[dict] = [{"type": "text", "text": intro}]
@@ -617,4 +651,4 @@ def build_figure_batch_prompt(
                 )
 
     messages = [{"role": "user", "content": content}]
-    return _FIGURE_BATCH_SYSTEM_PROMPT, messages
+    return system, messages

@@ -403,6 +403,25 @@ class TestEnrichFiguresStage:
         assert "1 deleted" in result["detail"]
         assert not sidecar_path.exists()
 
+    def test_deletes_spanish_scan_artifact_description(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=True)
+        sidecar_path = output_dir / "figures" / "fig_0001.json"
+        sidecar = json.loads(sidecar_path.read_text())
+        sidecar["bbox"] = [0.0, 0.0, 458.4, 762.0]
+        sidecar["extraction_method"] = "embedded"
+        sidecar_path.write_text(json.dumps(sidecar, indent=2), encoding="utf-8")
+
+        resp = json.dumps({"id": "fig_0001", "vt": "photo", "rel": "substantive",
+                           "desc": "Página escaneada con texto continuo y sin ilustración independiente visible.",
+                           "cap": ""})
+        llm_fn = _make_llm_fn([resp])
+        config = _make_config()
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+        assert result["status"] == "enriched"
+        assert "1 deleted" in result["detail"]
+        assert not sidecar_path.exists()
+
     def test_skipped_when_no_figures_dir(self, tmp_path):
         """If there is no figures directory, the stage is skipped."""
         output_dir = tmp_path / "extracted" / "test123"

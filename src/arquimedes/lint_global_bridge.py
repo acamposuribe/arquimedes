@@ -5,6 +5,8 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+from arquimedes import practice_prompts
+from arquimedes.domain_profiles import is_practice_domain
 from arquimedes.llm import EnrichmentError
 from arquimedes.llm import parse_json_or_repair
 
@@ -383,6 +385,13 @@ def _global_bridge_input_snapshot(
 
 
 def _global_bridge_prompt(packet_path: Path, memory_path: Path, domain: str) -> tuple[str, str]:
+    if is_practice_domain(domain):
+        return practice_prompts.global_bridge_prompt(
+            _GLOBAL_BRIDGE_DELTA_SCHEMA,
+            packet_path,
+            memory_path,
+            domain,
+        )
     system = (
         f"You are an architecture research librarian. You are grouping collection-local concept clusters into broader {domain.title()} bridge concepts.\n"
         "\n"

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from importlib import metadata
 from pathlib import Path
 import re
 import shutil
@@ -483,20 +484,86 @@ def _uninstall_cloudflare_tunnel(tunnel_cfg: dict | None) -> dict:
     return payload
 
 
-def _commit_and_push_if_changed(message: str) -> dict:
+def _default_upgrade_install_spec(explicit_spec: str | None = None) -> str:
+    if explicit_spec and explicit_spec.strip():
+        return explicit_spec.strip()
+
+    try:
+        dist = metadata.distribution("arquimedes")
+    except metadata.PackageNotFoundError:
+        return "arquimedes"
+
+    direct_url_text = dist.read_text("direct_url.json")
+    if not direct_url_text:
+        return "arquimedes"
+
+    try:
+        payload = json.loads(direct_url_text)
+    except json.JSONDecodeError:
+        return "arquimedes"
+
+    url = str(payload.get("url") or "").strip()
+    if not url:
+        return "arquimedes"
+
+    vcs_info = payload.get("vcs_info") if isinstance(payload.get("vcs_info"), dict) else None
+    if vcs_info:
+        vcs = str(vcs_info.get("vcs") or "").strip()
+        if vcs:
+            source = url if url.startswith(f"{vcs}+") else f"{vcs}+{url}"
+            revision = str(vcs_info.get("requested_revision") or vcs_info.get("commit_id") or "").strip()
+            return f"{source}@{revision}" if revision else source
+
+    return f"arquimedes @ {url}"
+
+
+def _run_checked_command(args: list[str], *, error_prefix: str) -> subprocess.CompletedProcess[str]:
+    proc = subprocess.run(args, capture_output=True, text=True, check=False)
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "command failed").strip()
+        raise click.ClickException(f"{error_prefix}: {detail}")
+    return proc
+
+
+def _decode_json_output(stdout: str) -> dict | list | str:
+    text = stdout.strip()
+    if not text:
+        return ""
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return text
+
+
+def _launch_agent_upgrade_commands(arq_binary: str) -> list[tuple[str, list[str]]]:
+    cfg = _resolved_config_path()
+    base = [arq_binary]
+    if cfg:
+        base.extend(["--config", cfg])
+    return [
+        ("watch", [*base, "watch", "--install"]),
+        ("lint_full", [*base, "lint", "--install-full"]),
+        ("serve", [*base, "serve", "--install"]),
+        ("mcp", [*base, "mcp", "--install"]),
+    ]
+
+
+def _commit_and_push_if_changed(message: str, *, config: dict | None = None) -> dict:
     from arquimedes.config import get_project_root
+    from arquimedes.git_publish import git_env, push
 
     root = get_project_root()
-    subprocess.run(["git", "add", "-A"], cwd=root, capture_output=True, text=True, check=False)
-    status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False)
+    env = git_env(config)
+    subprocess.run(["git", "add", "-A"], cwd=root, env=env, capture_output=True, text=True, check=False)
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=root, env=env, capture_output=True, text=True, check=False)
     if not status.stdout.strip():
         return {"committed": False, "pushed": False}
-    commit = subprocess.run(["git", "commit", "-m", message], cwd=root, capture_output=True, text=True, check=False)
+    commit = subprocess.run(["git", "commit", "-m", message], cwd=root, env=env, capture_output=True, text=True, check=False)
     if commit.returncode != 0:
         raise click.ClickException((commit.stderr or commit.stdout or "git commit failed").strip())
-    push = subprocess.run(["git", "push"], cwd=root, capture_output=True, text=True, check=False)
-    if push.returncode != 0:
-        raise click.ClickException((push.stderr or push.stdout or "git push failed").strip())
+    push_result = push(root, config=config, env=env)
+    if push_result.returncode != 0:
+        raise click.ClickException((push_result.stderr or push_result.stdout or "git push failed").strip())
     return {"committed": True, "pushed": True}
 
 
@@ -516,6 +583,55 @@ def cli(ctx: click.Context, global_config_path: str | None):
     ctx.obj["global_config_path"] = global_config_path
     if global_config_path:
         os.environ["ARQUIMEDES_CONFIG"] = global_config_path
+
+
+@cli.command()
+@click.option(
+    "--spec",
+    default=None,
+    help="Explicit pipx install target. Defaults to the current install source or `arquimedes`.",
+)
+@click.option("--human", is_flag=True, help="Pretty-printed output instead of JSON.")
+def upgrade(spec: str | None, human: bool):
+    """Force-reinstall Arquimedes with pipx, then reload maintainer launch agents."""
+    from arquimedes.agent_cli import emit
+
+    pipx = shutil.which("pipx")
+    if pipx is None:
+        raise click.ClickException("pipx is not available on PATH.")
+
+    install_spec = _default_upgrade_install_spec(spec)
+    pipx_command = [pipx, "install", "--force", install_spec]
+    _run_checked_command(pipx_command, error_prefix="pipx install --force failed")
+
+    arq_binary = shutil.which("arq")
+    if arq_binary is None:
+        raise click.ClickException(
+            "Arquimedes was reinstalled, but `arq` is no longer on PATH. "
+            "Re-open your shell or run `pipx ensurepath` if needed."
+        )
+
+    launch_agents: dict[str, dict | list | str] = {}
+    for name, command in _launch_agent_upgrade_commands(arq_binary):
+        proc = _run_checked_command(command, error_prefix=f"{name} launch agent reinstall failed")
+        launch_agents[name] = _decode_json_output(proc.stdout)
+
+    result = {
+        "install_spec": install_spec,
+        "pipx_command": pipx_command,
+        "arq_binary": arq_binary,
+        "launch_agents": launch_agents,
+    }
+
+    def _format_human(payload: dict) -> str:
+        lines = [
+            f"pipx force reinstall: {payload['install_spec']}",
+            f"arq binary: {payload['arq_binary']}",
+            "launch agents reinstalled: watch, lint-full, serve, mcp",
+        ]
+        return "\n".join(lines)
+
+    emit(result, human=human, human_formatter=_format_human)
 
 
 @cli.command("init")
@@ -1379,7 +1495,7 @@ def lint(quick: bool, full: bool, stages: tuple[str, ...], report: bool, fix: bo
         click.echo(f"Lint report: {result.get('report_path')}")
 
     if commit_push:
-        publish = _commit_and_push_if_changed("auto: nightly lint --full")
+        publish = _commit_and_push_if_changed("auto: nightly lint --full", config=load_config())
         if as_json:
             click.echo(json.dumps({"publish": publish}, ensure_ascii=False, indent=2))
         else:

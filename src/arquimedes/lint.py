@@ -2552,6 +2552,10 @@ def run_lint(
                 stages=selected_stages if selected_stages else None,
             )
 
+        if apply:
+            deterministic = run_deterministic_lint(config)
+            result["deterministic"] = deterministic
+
         if report or full or fix:
             report_text = render_lint_report(deterministic)
             path = get_project_root() / REPORT_PATH

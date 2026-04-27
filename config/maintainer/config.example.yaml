@@ -152,6 +152,19 @@ mcp:
     tunnel_name: "arquimedes-example"
     binary_path: "/opt/homebrew/bin/cloudflared"
 
+# Optional non-interactive git publication settings for launchd jobs.
+# If the vault remote uses GitHub HTTPS, Arquimedes automatically switches the
+# push URL to SSH on first publish. For a dedicated deploy key, point
+# `ssh_key_path` at that private key.
+#
+# git:
+#   ssh_key_path: "~/.ssh/arq_vault_personal"
+#   # Optional explicit push target if you don't want the auto-converted
+#   # GitHub SSH URL.
+#   # push_remote_url: "git@github.com:you/arq-vault-personal.git"
+#   # Optional full override for advanced SSH flags.
+#   # ssh_command: "ssh -i ~/.ssh/arq_vault_personal -o IdentitiesOnly=yes -o BatchMode=yes"
+
 watch:
   scan_interval_minutes: 30
   batch_commit: true

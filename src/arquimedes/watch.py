@@ -18,6 +18,7 @@ from arquimedes.config import (
     get_project_root,
     load_config,
 )
+from arquimedes.git_publish import git_env, push as git_push
 from arquimedes.ingest import SUPPORTED_EXTENSIONS, load_manifest
 from arquimedes.models import compute_file_hash, compute_material_id
 from arquimedes.removal import RemovalReport, cascade_delete
@@ -168,7 +169,7 @@ class BatchPipeline:
         self.project_root = project_root or get_project_root()
         self.config = config or load_config()
         self.runner = runner
-        self.env = os.environ.copy()
+        self.env = git_env(self.config)
         self.env.setdefault("ARQUIMEDES_ROOT", str(self.project_root))
         if config_path:
             self.env["ARQUIMEDES_CONFIG"] = config_path
@@ -240,9 +241,9 @@ class BatchPipeline:
             message = self._commit_message(batch, removal_report)
             self._run_checked(["git", "commit", "-m", message])
             committed = True
-            push = self._git("push")
-            if push.returncode != 0:
-                detail = (push.stderr or push.stdout or "git push failed").strip()
+            push_result = git_push(self.project_root, config=self.config, runner=self.runner, env=self.env)
+            if push_result.returncode != 0:
+                detail = (push_result.stderr or push_result.stdout or "git push failed").strip()
                 raise RuntimeError(detail)
             pushed = True
 

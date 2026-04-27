@@ -286,6 +286,50 @@ def test_run_lint_quick_writes_markdown_report(tmp_path, monkeypatch):
     assert (root / "wiki" / "_lint_report.md").exists()
 
 
+def test_run_lint_full_refreshes_report_after_mutations(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.delenv("ARQUIMEDES_CONFIG", raising=False)
+    monkeypatch.delenv("ARQUIMEDES_ROOT", raising=False)
+    monkeypatch.chdir(root)
+
+    deterministic_runs = iter(
+        [
+            {"summary": {"issues": 3, "high": 1, "medium": 1, "low": 1}, "issues": [{"check": "missing_compiled_page"}]},
+            {"summary": {"issues": 0, "high": 0, "medium": 0, "low": 0}, "issues": []},
+        ]
+    )
+
+    monkeypatch.setattr(lint_mod, "run_deterministic_lint", lambda _config: next(deterministic_runs))
+    monkeypatch.setattr(
+        lint_mod,
+        "_apply_deterministic_fixes",
+        lambda report, _config: {"compiled": True, "details": ["recompile wiki"]},
+    )
+    monkeypatch.setattr(
+        lint_mod,
+        "run_reflective_lint",
+        lambda *_args, **_kwargs: {
+            "cluster_reviews": 0,
+            "concept_reflections": 0,
+            "collection_reflections": 0,
+            "global_bridges": 0,
+            "graph_maintenance": 0,
+        },
+    )
+    monkeypatch.setattr(
+        lint_mod,
+        "render_lint_report",
+        lambda report: f"issues={report['summary']['issues']}\n",
+    )
+
+    result = run_lint(config, full=True)
+
+    assert result["deterministic"]["summary"]["issues"] == 0
+    assert (root / "wiki" / "_lint_report.md").read_text(encoding="utf-8") == "issues=0\n"
+
+
 def test_run_lint_logs_failed_outcome(tmp_path, monkeypatch):
     import arquimedes.lint as lint_mod
 

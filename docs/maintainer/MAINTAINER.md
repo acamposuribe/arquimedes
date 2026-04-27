@@ -8,7 +8,7 @@ This is the operational handbook for the Mac Mini that publishes the shared know
 
 Three trees, three lifecycles:
 
-- **Code** — the `arquimedes` Python package (this repo). Public, versioned, upgraded via `pipx install --upgrade arquimedes`.
+- **Code** — the `arquimedes` Python package (this repo). Public, versioned, upgraded via `arq upgrade` (which force-reinstalls the package with `pipx` and reloads the maintainer launch agents).
 - **Vault** — a private git repo containing `extracted/`, `manifests/`, `derived/`, `wiki/`, and the vault's own `config/`. Maintainer pushes; collaborators pull read-only via deploy keys. **One vault per maintainer machine.**
 - **Local cache** — per-machine, regenerable runtime state (`indexes/search.sqlite`, `logs/`). Defaults to the vault root for back-compat; can be moved out of the vault tree by setting `ARQUIMEDES_LOCAL_CACHE` or `local_cache_root` in the active config.
 
@@ -46,6 +46,12 @@ pipx install arquimedes
 pipx install git+https://github.com/<user>/arquimedes.git
 ```
 
+After later code pushes, update the maintainer machine in one step:
+
+```bash
+arq upgrade
+```
+
 Either point at an existing vault or create one:
 
 ```bash
@@ -60,6 +66,15 @@ Pin this shell — and every launchd job installed below — to the active vault
 ```bash
 export ARQUIMEDES_CONFIG=~/Vaults/personal/config/maintainer/config.yaml
 ```
+
+For scheduled `watch` / nightly `lint` publication, prefer SSH-based Git auth over HTTPS prompts. The cleanest setup is a dedicated deploy key:
+
+```yaml
+git:
+  ssh_key_path: "~/.ssh/arq_vault_personal"
+```
+
+With that in the maintainer config, launchd jobs publish through `ssh` non-interactively. If the vault remote is a GitHub `https://github.com/...` URL, Arquimedes auto-converts the **push** URL to `git@github.com:...` on first publish while leaving fetch untouched.
 
 Install launchd jobs (each one embeds the current `$ARQUIMEDES_CONFIG` into its plist via `_arq_program_args()`, so the job stays pinned to this vault even after reboot):
 

@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import errno
 import hashlib
 import json
+import time
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
@@ -508,19 +510,34 @@ class ConceptCandidate:
 # --- Utility ---
 
 
+_HASH_READ_RETRIES = 3
+_HASH_READ_RETRY_DELAY_SECONDS = 0.2
+
+
+def _compute_sha256(file_path: Path) -> str:
+    """Compute a file hash, retrying transient macOS iCloud read deadlocks."""
+    last_error: OSError | None = None
+    for attempt in range(_HASH_READ_RETRIES):
+        try:
+            h = hashlib.sha256()
+            with open(file_path, "rb") as f:
+                for block in iter(lambda: f.read(65536), b""):
+                    h.update(block)
+            return h.hexdigest()
+        except OSError as exc:
+            if exc.errno != errno.EDEADLK or attempt == _HASH_READ_RETRIES - 1:
+                raise
+            last_error = exc
+            time.sleep(_HASH_READ_RETRY_DELAY_SECONDS)
+    assert last_error is not None
+    raise last_error
+
+
 def compute_material_id(file_path: Path) -> str:
     """Compute deterministic material_id from file contents: sha256[:12]."""
-    h = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for block in iter(lambda: f.read(65536), b""):
-            h.update(block)
-    return h.hexdigest()[:12]
+    return _compute_sha256(file_path)[:12]
 
 
 def compute_file_hash(file_path: Path) -> str:
     """Compute full sha256 hash of file contents."""
-    h = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        for block in iter(lambda: f.read(65536), b""):
-            h.update(block)
-    return h.hexdigest()
+    return _compute_sha256(file_path)

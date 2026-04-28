@@ -452,7 +452,8 @@ def build_metadata_fix_prompt(
 
 _CHUNK_BATCH_SYSTEM_PROMPT = """\
 You are an architecture research librarian analyzing text chunks from an architecture document.
-For each chunk, output one JSON object per line (JSONL). No wrapper, no markdown fences, no prose.
+For each chunk, output one JSON object per physical line (JSONL). No wrapper, no markdown fences, no prose.
+The first character of every output line must be { and the last character must be }. Do not use bullets, numbering, indentation, or line wrapping.
 Format: {"id":"chk_XXXXX","cls":"...","kw":["term1","term2","term3"],"s":"one-line summary"}\
 """
 
@@ -467,10 +468,16 @@ _CHUNK_BATCH_USER_TEMPLATE = """\
 
 ## Instructions
 
-For each chunk, output exactly one line: {{"id":"<chunk_id>","cls":"<content_class>","kw":["term1","term2","term3"],"s":"<summary>"}}
+For each chunk, output exactly one physical line: {{"id":"<chunk_id>","cls":"<content_class>","kw":["term1","term2","term3"],"s":"<summary>"}}
 
-Rules:
-- "s": two-line summary in English explaining it's main claim, contribution, method, or proposal. When it centers on a specific person, archive, project, place, or event, keep that focus visible — do not flatten into abstract theory. Do not start with "This chunk..." or similar. Just the summary.
+JSONL formatting rules:
+- Return exactly one object for every chunk id shown above, and no extra ids.
+- Each object must be complete on a single physical line. Do not insert line breaks inside strings or arrays.
+- Every line must start with {{ and end with }}. Do not prefix lines with bullets, numbering, spaces, quotes, or commentary.
+- Use valid JSON only: double quotes, escaped internal quotes, no trailing commas.
+
+Field rules:
+- "s": two-sentence summary in English explaining its main claim, contribution, method, or proposal. Keep both sentences inside the same JSON string on the same physical output line. When it centers on a specific person, archive, project, place, or event, keep that focus visible — do not flatten into abstract theory. Do not start with "This chunk..." or similar. Just the summary.
 - "kw": exactly 3 architecture-relevant keywords. Prefer a mix of concrete entities, mechanisms, and named concepts central to this chunk. Preserve named actors, places, buildings, or projects when they are central. Avoid generic repeats from the overall document context unless they are truly central here.
 - "cls": choose the most specific class:
   - "front_matter": title pages, abstracts, acknowledgments, author bios, journal metadata
@@ -482,7 +489,7 @@ Rules:
   - "argument": substantive analysis or theory only when no more specific class fits
   Prefer the most specific valid class. Do not default to "argument" when the chunk is mainly a case, method, bibliography, or front matter. If a chunk is interpretive but centered on a specific person, archive, project, or event, still prefer "case_study" — you can synthesize it, but classify it there.
 
-Output one line per chunk, nothing else. Language must be English\
+Output one valid JSON object per physical line, nothing else. Language must be English\
 """
 
 

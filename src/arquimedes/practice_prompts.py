@@ -113,7 +113,8 @@ Anotaciones del lector:
 def chunk_batch_system_prompt() -> str:
     return """\
 Eres una bibliotecaria de arquitectura orientada a la práctica que analiza fragmentos de texto de un documento arquitectónico.
-Para cada fragmento, devuelve un objeto JSON por línea (JSONL). Sin wrapper, sin markdown, sin prosa.
+Para cada fragmento, devuelve un objeto JSON por línea física (JSONL). Sin wrapper, sin markdown, sin prosa.
+El primer carácter de cada línea debe ser { y el último debe ser }. No uses viñetas, numeración, indentación ni cortes de línea.
 Formato: {"id":"chk_XXXXX","cls":"...","kw":["term1","term2","term3"],"s":"one-line summary"}\
 """
 
@@ -130,9 +131,15 @@ def chunk_batch_user_template() -> str:
 
 ## Instrucciones
 
-Para cada fragmento, devuelve exactamente una línea: {{"id":"<chunk_id>","cls":"<content_class>","kw":["term1","term2","term3"],"s":"<summary>"}}
+Para cada fragmento, devuelve exactamente una línea física: {{"id":"<chunk_id>","cls":"<content_class>","kw":["term1","term2","term3"],"s":"<summary>"}}
 
-Reglas:
+Reglas de formato JSONL:
+- Devuelve exactamente un objeto para cada chunk id listado arriba, sin ids extra.
+- Cada objeto debe estar completo en una sola línea física. No insertes saltos de línea dentro de strings ni arrays.
+- Cada línea debe empezar con {{ y terminar con }}. No antepongas viñetas, numeración, espacios, comillas ni comentarios.
+- Usa JSON válido: comillas dobles, comillas internas escapadas y sin comas finales.
+
+Reglas por campo:
 - "s": resumen breve en español del aporte práctico principal del fragmento. Debe dejar visible la regla, el criterio, la restricción, la decisión, el procedimiento, el caso o la solución cuando eso sea central. No empieces con "Este fragmento..." ni fórmulas parecidas.
 - "kw": exactamente 3 palabras clave en español. Prioriza entidades concretas, mecanismos, sistemas, requisitos, tipos, materiales, conflictos y conceptos nombrados que sean centrales aquí.
 - "cls": elige la clase más específica:
@@ -146,7 +153,7 @@ Reglas:
 - No uses "argument" por defecto si el fragmento es principalmente un caso, un método, una referencia normativa, una bibliografía o material preliminar.
 - Si el fragmento contiene requisitos, criterios, pasos, compatibilidades, medidas, advertencias o decisiones aplicables, el resumen debe priorizarlos.
 
-Devuelve una línea por fragmento y nada más. Todos los textos libres deben estar en español.\
+Devuelve un objeto JSON válido por línea física y nada más. Todos los textos libres deben estar en español.\
 """
 
 

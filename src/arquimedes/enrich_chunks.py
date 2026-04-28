@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, wait
 from datetime import datetime, timezone
@@ -177,37 +178,122 @@ _VALID_CONTENT_CLASSES = frozenset(
     {"argument", "methodology", "case_study", "bibliography", "front_matter", "caption", "appendix"}
 )
 
+_FENCE_RE = re.compile(r"```(?:json|jsonl)?\s*(.*?)```", re.DOTALL | re.IGNORECASE)
+_JSON_OBJECT_RE = re.compile(r"\{[^{}]*\}", re.DOTALL)
+
+
+def _normalize_chunk_response_obj(obj: dict) -> tuple[str, dict] | None:
+    chunk_id = str(obj.get("id") or obj.get("chunk_id") or "").strip()
+    if not chunk_id:
+        return None
+
+    enrichment: dict = {}
+    s = str(obj.get("s") or obj.get("summary") or "").strip()
+    if s:
+        enrichment["summary"] = " ".join(s.split())
+
+    kw = obj.get("kw") or obj.get("keywords")
+    if isinstance(kw, list):
+        keywords = [" ".join(str(k).split()) for k in kw if str(k).strip()]
+        if keywords:
+            enrichment["keywords"] = keywords[:3]
+
+    cls = str(obj.get("cls") or obj.get("content_class") or "").strip()
+    if cls in _VALID_CONTENT_CLASSES:
+        enrichment["content_class"] = cls
+
+    if not enrichment:
+        return None
+    return chunk_id, enrichment
+
+
+def _extract_chunk_response_objects(raw_text: str) -> list[dict]:
+    """Recover chunk response objects from strict or lightly malformed JSONL.
+
+    Some agent CLIs wrap JSONL in bullets, line-wrap inside strings, or place
+    adjacent objects on one physical line. Keep strict JSON parsing first, then
+    fall back to extracting object-looking spans and replacing accidental line
+    breaks inside each span with spaces.
+    """
+    text = raw_text.strip()
+    if not text:
+        return []
+
+    match = _FENCE_RE.search(text)
+    if match:
+        text = match.group(1).strip()
+
+    objects: list[dict] = []
+
+    def _append_value(value) -> bool:
+        if isinstance(value, dict):
+            items = value.get("chunks") or value.get("items")
+            if isinstance(items, list):
+                appended = False
+                for item in items:
+                    if isinstance(item, dict):
+                        objects.append(item)
+                        appended = True
+                return appended
+            if "id" in value or "chunk_id" in value:
+                objects.append(value)
+                return True
+            return False
+        if isinstance(value, list):
+            appended = False
+            for item in value:
+                if isinstance(item, dict):
+                    objects.append(item)
+                    appended = True
+            return appended
+        return False
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if parsed is not None and _append_value(parsed):
+        return objects
+
+    for line in text.splitlines():
+        line = line.strip().removeprefix("●").removeprefix("•").strip().rstrip(",")
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            parsed_line = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        _append_value(parsed_line)
+
+    if objects:
+        return objects
+
+    for match in _JSON_OBJECT_RE.finditer(text):
+        candidate = " ".join(match.group(0).split())
+        try:
+            parsed_obj = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed_obj, dict):
+            objects.append(parsed_obj)
+
+    return objects
+
 
 def _parse_chunk_jsonl(raw_text: str) -> dict[str, dict]:
     """Parse compact JSONL chunk response into chunk_id → enrichment dict.
 
-    Each line: {"id":"chk_XXXXX","cls":"...","kw":["..."],"s":"..."}
-    Malformed lines are skipped.
+    Expected line: {"id":"chk_XXXXX","cls":"...","kw":["..."],"s":"..."}
+    Also tolerates common agent formatting glitches such as bullets, wrapped
+    strings, fenced output, arrays, or adjacent objects on one line.
     """
     result: dict[str, dict] = {}
-    for line in raw_text.splitlines():
-        line = line.strip()
-        if not line or not line.startswith("{"):
+    for obj in _extract_chunk_response_objects(raw_text):
+        normalized = _normalize_chunk_response_obj(obj)
+        if normalized is None:
             continue
-        try:
-            obj = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        chunk_id = obj.get("id", "")
-        if not chunk_id:
-            continue
-        enrichment: dict = {}
-        s = obj.get("s", "")
-        if s:
-            enrichment["summary"] = s
-        kw = obj.get("kw")
-        if isinstance(kw, list):
-            enrichment["keywords"] = [str(k) for k in kw if k][:3]
-        cls = obj.get("cls", "")
-        if cls in _VALID_CONTENT_CLASSES:
-            enrichment["content_class"] = cls
-        if enrichment:
-            result[chunk_id] = enrichment
+        chunk_id, enrichment = normalized
+        result[chunk_id] = enrichment
     return result
 
 

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from arquimedes.enrich_chunks import enrich_chunks_stage
+from arquimedes.enrich_chunks import _parse_chunk_jsonl, enrich_chunks_stage
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +113,24 @@ def _make_config(batch_target: int = 50, chunk_parallel_requests: int = 1) -> di
 
 
 class TestEnrichChunksStage:
+    def test_parse_chunk_jsonl_recovers_wrapped_copilot_output(self):
+        raw = '''--- batch 1 raw response ---
+● {"id":"chk_00001","cls":"front_matter","kw":["bell hooks","women’s
+  writing","decolonization"],"s":"bell hooks is introduced as a prolific
+  author who reinterprets domesticity as a theoretical and political act."}
+  {"id":"chk_00002","cls":"argument","kw":["homeplace","caretaker
+  roles","women’s rhetorical theory"],"s":"hooks theorizes 'homeplace' as a
+  site of refuge and resistance."} {"id":"chk_00003","cls":"case_study","kw":["grandmother’s
+  house","segregation","black women"],"s":"A childhood journey highlights the contrast between hostile white neighborhoods and home."}
+'''
+
+        parsed = _parse_chunk_jsonl(raw)
+
+        assert set(parsed) == {"chk_00001", "chk_00002", "chk_00003"}
+        assert parsed["chk_00001"]["keywords"] == ["bell hooks", "women’s writing", "decolonization"]
+        assert parsed["chk_00002"]["summary"] == "hooks theorizes 'homeplace' as a site of refuge and resistance."
+        assert parsed["chk_00003"]["content_class"] == "case_study"
+
     def test_parallel_requests_use_worker_local_llm_clones(self, tmp_path):
         output_dir = _make_extracted_dir(tmp_path, n_chunks=100)
         config = _make_config(batch_target=50, chunk_parallel_requests=2)

@@ -219,8 +219,7 @@ class BatchPipeline:
         return "\n".join(lines)
 
     def run(self, batch: WatchBatch) -> dict:
-        if batch.is_empty():
-            return {"status": "skipped", "reason": "empty batch", "batch": batch.to_dict()}
+        batch_empty = batch.is_empty()
 
         removal_report: RemovalReport | None = None
         if batch.ingest_paths:
@@ -230,10 +229,11 @@ class BatchPipeline:
         if batch.delete:
             removal_report = cascade_delete(batch.delete, project_root=self.project_root)
 
-        if batch.add_or_modify:
-            extract_result = self._run_checked(self._arq("extract"), retry=int(self.config.get("watch", {}).get("enrich_retries", 1) or 0), tolerate_failure=True)
-        else:
-            extract_result = None
+        extract_result = self._run_checked(
+            self._arq("extract"),
+            retry=int(self.config.get("watch", {}).get("enrich_retries", 1) or 0),
+            tolerate_failure=True,
+        )
         if extract_result and extract_result.returncode != 0:
             raise RuntimeError(
                 "command failed: "
@@ -242,7 +242,7 @@ class BatchPipeline:
                 + _command_failure_detail(extract_result)
             )
 
-        self._run_checked(self._arq("index", "rebuild"))
+        self._run_checked(self._arq("index", "ensure"))
         self._run_checked(self._arq("compile"))
 
         self._run_checked(["git", "add", "-A"])
@@ -259,8 +259,15 @@ class BatchPipeline:
                 raise RuntimeError(detail)
             pushed = True
 
+        cycle_status = "ok"
+        reason = None
+        if batch_empty and not committed and removal_report is None:
+            cycle_status = "skipped"
+            reason = "no file changes or stale work"
+
         return {
-            "status": "ok",
+            "status": cycle_status,
+            "reason": reason,
             "batch": batch.to_dict(),
             "removal": removal_report.to_dict() if removal_report else None,
             "extract_returncode": extract_result.returncode if extract_result else None,

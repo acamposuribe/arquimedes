@@ -101,5 +101,32 @@ def test_watch_pipeline_raises_when_extract_and_enrich_fail(tmp_path):
         pipeline.run(batch)
 
     assert any(len(args) >= 4 and args[1:4] == ["-m", "arquimedes.cli", "extract"] for args in calls)
-    assert not any(len(args) >= 5 and args[1:5] == ["-m", "arquimedes.cli", "index", "rebuild"] for args in calls)
+    assert not any(len(args) >= 5 and args[1:5] == ["-m", "arquimedes.cli", "index", "ensure"] for args in calls)
+    assert not any(args[:2] == ["git", "commit"] for args in calls)
+
+
+def test_watch_pipeline_empty_batch_still_runs_stale_aware_pipeline(tmp_path):
+    calls: list[list[str]] = []
+
+    def runner(args: list[str], cwd: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+        calls.append(args)
+        if args[:3] == ["git", "status", "--porcelain"]:
+            return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    pipeline = BatchPipeline(
+        project_root=tmp_path,
+        config={"watch": {"enrich_retries": 0}},
+        runner=runner,
+    )
+
+    result = pipeline.run(WatchBatch())
+
+    assert result["status"] == "skipped"
+    assert result["reason"] == "no file changes or stale work"
+    assert result["extract_returncode"] == 0
+    assert any(len(args) >= 4 and args[1:4] == ["-m", "arquimedes.cli", "extract"] for args in calls)
+    assert any(len(args) >= 5 and args[1:5] == ["-m", "arquimedes.cli", "index", "ensure"] for args in calls)
+    assert any(len(args) >= 4 and args[1:4] == ["-m", "arquimedes.cli", "compile"] for args in calls)
+    assert not any(len(args) >= 4 and args[1:4] == ["-m", "arquimedes.cli", "ingest"] for args in calls)
     assert not any(args[:2] == ["git", "commit"] for args in calls)

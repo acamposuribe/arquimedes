@@ -30,6 +30,7 @@ import signal
 import subprocess
 import threading
 import sys
+from pathlib import Path
 from typing import Callable
 
 # ---------------------------------------------------------------------------
@@ -38,6 +39,18 @@ from typing import Callable
 
 LlmFn = Callable[[str, list[dict]], str]
 """(system_prompt, messages) -> response_text"""
+
+
+def _fallback_agent_bin_dirs() -> tuple[Path, ...]:
+    home = Path.home()
+    return (
+        home / ".local" / "bin",
+        home / ".codex" / "bin",
+        Path("/opt/homebrew/bin"),
+        Path("/opt/homebrew/sbin"),
+        Path("/usr/local/bin"),
+        Path("/usr/local/sbin"),
+    )
 
 
 def _llm_debug_enabled() -> bool:
@@ -400,6 +413,39 @@ def _provider_from_parts(parts: list[str]) -> str:
     if not parts:
         return "unknown"
     return os.path.basename(parts[0])
+
+
+def _resolve_agent_executable(command: str) -> str | None:
+    """Resolve an agent executable even under launchd's stripped PATH."""
+    if not isinstance(command, str):
+        return None
+    candidate = os.path.expanduser(command.strip())
+    if not candidate:
+        return None
+    if os.path.sep in candidate:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+        return None
+
+    resolved = shutil.which(candidate)
+    if resolved:
+        return resolved
+
+    for bin_dir in _fallback_agent_bin_dirs():
+        path = bin_dir / candidate
+        if path.is_file() and os.access(path, os.X_OK):
+            return str(path)
+    return None
+
+
+def _resolve_command_parts(parts: list[str]) -> list[str]:
+    """Return argv with an absolute executable when the command is available."""
+    if not parts:
+        return []
+    resolved = _resolve_agent_executable(parts[0])
+    if not resolved:
+        return []
+    return [resolved, *parts[1:]]
 
 
 def _stage_route_config(config: dict, stage: str | None) -> list[dict]:
@@ -852,8 +898,9 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
         resolved: list[dict] = []
         for route in route_entries:
             parts = route.get("command_parts", [])
-            if parts and shutil.which(parts[0]):
-                resolved.append(route)
+            resolved_parts = _resolve_command_parts(parts)
+            if resolved_parts:
+                resolved.append({**route, "command_parts": resolved_parts})
 
         if not resolved:
             names = ", ".join(repr((route.get("command_parts") or ["?"])[0]) for route in route_entries)
@@ -879,8 +926,9 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
         resolved = []
         for cmd_str in cmd_list:
             parts = _command_to_parts(cmd_str)
-            if parts and shutil.which(parts[0]):
-                resolved.append({"provider": _provider_from_parts(parts), "command_parts": parts})
+            resolved_parts = _resolve_command_parts(parts)
+            if resolved_parts:
+                resolved.append({"provider": _provider_from_parts(resolved_parts), "command_parts": resolved_parts})
 
         if not resolved:
             names = ", ".join(repr((_command_to_parts(c)[0] if _command_to_parts(c) else c)) for c in cmd_list)

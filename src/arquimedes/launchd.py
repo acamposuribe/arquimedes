@@ -31,6 +31,9 @@ def render_plist(label: str, program_arguments: list[str], *, working_directory:
         "StandardOutPath": str(Path.home() / ".arquimedes" / f"{label}.out.log"),
         "StandardErrorPath": str(Path.home() / ".arquimedes" / f"{label}.err.log"),
     }
+    path_env = os.environ.get("PATH", "").strip()
+    if path_env:
+        payload["EnvironmentVariables"] = {"PATH": path_env}
     if start_interval is not None:
         payload["StartInterval"] = int(start_interval)
     if start_calendar_interval is not None:

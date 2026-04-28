@@ -416,6 +416,34 @@ class TestMakeCliLlmFn:
         assert "--model" in args and args[args.index("--model") + 1] == "gpt-4.1"
         assert "--effort" in args and args[args.index("--effort") + 1] == "high"
 
+    def test_stage_routes_find_agent_in_home_local_bin_when_path_is_minimal(self, tmp_path, monkeypatch):
+        home = tmp_path / "home"
+        bin_dir = home / ".local" / "bin"
+        bin_dir.mkdir(parents=True)
+        codex = bin_dir / "codex"
+        codex.write_text('#!/bin/bash\ncat - > /dev/null\necho \'{"ok": true}\'\n')
+        codex.chmod(0o755)
+
+        monkeypatch.setenv("HOME", str(home))
+        monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+        config = {
+            "enrichment": {
+                "max_retries": 1,
+                "llm_routes": {
+                    "document": [
+                        {"provider": "codex", "command": "codex exec", "model": "gpt-5.4-mini"},
+                    ]
+                },
+            }
+        }
+        fn = make_cli_llm_fn(config, "document")
+
+        result = fn("system", [{"role": "user", "content": "hi"}])
+
+        assert '{"ok": true}' in result
+        assert fn.last_model == "codex:gpt-5.4-mini"
+
     def test_claude_fallback_can_be_blocked_by_env(self, tmp_path, monkeypatch):
         claude = tmp_path / "claude"
         claude.write_text('#!/bin/bash\necho "Invalid API key"\nexit 1')

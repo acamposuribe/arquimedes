@@ -19,6 +19,7 @@ def test_render_plist_with_start_interval():
     assert data["StartInterval"] == 1800
     assert data["RunAtLoad"] is True
     assert data["ProgramArguments"][-1] == "--once"
+    assert data["EnvironmentVariables"]["PATH"]
 
 
 def test_render_plist_with_calendar_interval():
@@ -31,3 +32,4 @@ def test_render_plist_with_calendar_interval():
 
     data = plistlib.loads(text.encode("utf-8"))
     assert data["StartCalendarInterval"] == {"Hour": 2, "Minute": 0}
+    assert data["EnvironmentVariables"]["PATH"]

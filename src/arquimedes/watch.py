@@ -88,6 +88,11 @@ def default_runner(args: list[str], cwd: Path, env: dict[str, str]) -> subproces
     return subprocess.run(args, cwd=cwd, env=env, text=True, capture_output=True, check=False)
 
 
+def _command_failure_detail(result: subprocess.CompletedProcess[str]) -> str:
+    detail = (result.stderr or result.stdout or "").strip()
+    return detail or f"command exited with status {result.returncode}"
+
+
 def _is_supported(path: Path) -> bool:
     return path.is_file() and path.suffix.lower() in SUPPORTED_EXTENSIONS
 
@@ -229,6 +234,13 @@ class BatchPipeline:
             extract_result = self._run_checked(self._arq("extract"), retry=int(self.config.get("watch", {}).get("enrich_retries", 1) or 0), tolerate_failure=True)
         else:
             extract_result = None
+        if extract_result and extract_result.returncode != 0:
+            raise RuntimeError(
+                "command failed: "
+                + " ".join(self._arq("extract"))
+                + "\n"
+                + _command_failure_detail(extract_result)
+            )
 
         self._run_checked(self._arq("index", "rebuild"))
         self._run_checked(self._arq("compile"))

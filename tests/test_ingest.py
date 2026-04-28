@@ -58,3 +58,27 @@ def test_ingest_rehomes_existing_material_and_refreshes_extracted_scope(tmp_path
     assert meta["source_path"] == "Practice/codes/doc.pdf"
     assert meta["domain"] == "practice"
     assert meta["collection"] == "codes"
+
+
+def test_ingest_accepts_multiple_explicit_paths(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    manifest_dir = project_root / "manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    first = library_root / "Research" / "papers" / "one.pdf"
+    second = library_root / "Practice" / "notes" / "two.pdf"
+    first.parent.mkdir(parents=True, exist_ok=True)
+    second.parent.mkdir(parents=True, exist_ok=True)
+    first.write_bytes(b"one")
+    second.write_bytes(b"two")
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(path=[str(first), str(second)], config={})
+
+    assert {item.relative_path for item in result} == {
+        "Research/papers/one.pdf",
+        "Practice/notes/two.pdf",
+    }

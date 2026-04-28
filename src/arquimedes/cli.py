@@ -827,13 +827,14 @@ def vault_info_cmd(human: bool):
 
 
 @cli.command()
-@click.argument("path", required=False)
-def ingest(path: str | None):
+@click.argument("path", nargs=-1)
+def ingest(path: tuple[str, ...]):
     """Scan library for new materials and register them."""
     from arquimedes.ingest import ingest as do_ingest
 
     try:
-        new_materials = do_ingest(path=path)
+        requested_path = None if not path else (path[0] if len(path) == 1 else list(path))
+        new_materials = do_ingest(path=requested_path)
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
 

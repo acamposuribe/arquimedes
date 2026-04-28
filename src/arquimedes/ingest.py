@@ -135,14 +135,15 @@ def _refresh_extracted_scope(project_root: Path, entry: MaterialManifest) -> Non
 
 
 def ingest(
-    path: str | None = None,
+    path: str | list[str] | tuple[str, ...] | None = None,
     config: dict | None = None,
 ) -> list[MaterialManifest]:
     """Scan the library for new materials and register them in the manifest.
 
     Args:
         path: Optional specific file or directory to ingest (relative to library root
-              or absolute). If None, scans the entire library.
+              or absolute). May also be a list/tuple of explicit file or directory
+              paths. If None, scans the entire library.
         config: Optional config dict. Loaded from disk if not provided.
 
     Returns:
@@ -158,18 +159,22 @@ def ingest(
         raise FileNotFoundError(f"Library root does not exist: {library_root}")
 
     # Determine what to scan
-    if path:
-        target = Path(path)
-        if not target.is_absolute():
-            target = library_root / target
-        if target.is_file():
-            files = [target]
-        elif target.is_dir():
-            files = scan_library(target)
-        else:
-            raise FileNotFoundError(f"Path does not exist: {target}")
-    else:
+    if path is None:
         files = scan_library(library_root)
+    else:
+        raw_targets = [path] if isinstance(path, str) else list(path)
+        files = []
+        for raw_target in raw_targets:
+            target = Path(raw_target)
+            if not target.is_absolute():
+                target = library_root / target
+            if target.is_file():
+                files.append(target)
+            elif target.is_dir():
+                files.extend(scan_library(target))
+            else:
+                raise FileNotFoundError(f"Path does not exist: {target}")
+        files = list(dict.fromkeys(files))
 
     # Load existing manifest
     manifest = load_manifest(project_root)

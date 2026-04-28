@@ -82,6 +82,41 @@ def _delete_chunk_work(output_dir: Path) -> None:
         pass
 
 
+def _save_failed_response(output_dir: Path, raw_text: str, detail: str) -> None:
+    debug_dir = output_dir / "debug"
+    debug_dir.mkdir(exist_ok=True)
+    response_path = debug_dir / "chunks.failed.response.txt"
+    meta_path = debug_dir / "chunks.failed.meta.json"
+    response_path.write_text(raw_text or "", encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(
+            {
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "detail": detail,
+                "response_chars": len(raw_text or ""),
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _failed_with_response(output_dir: Path, raw_text: str, detail: str) -> dict:
+    try:
+        _save_failed_response(output_dir, raw_text, detail)
+    except Exception:
+        pass
+    return {"status": "failed", "detail": detail}
+
+
+def _format_batch_responses(batch_responses: dict[int, str]) -> str:
+    parts: list[str] = []
+    for batch_idx in sorted(batch_responses):
+        parts.append(f"--- batch {batch_idx + 1} raw response ---\n{batch_responses[batch_idx] or ''}")
+    return "\n\n".join(parts)
+
+
 def _has_complete_work_entry(entry: dict | None, target_stamp: dict) -> bool:
     if not isinstance(entry, dict):
         return False
@@ -366,7 +401,7 @@ def enrich_chunks_stage(
             f"worker_count={worker_count} clone_factory={'yes' if callable(llm_factory) else 'no'}"
         )
 
-    def _run_batch(batch_idx: int, batch: list[dict]) -> tuple[int, dict[str, dict], str]:
+    def _run_batch(batch_idx: int, batch: list[dict]) -> tuple[int, dict[str, dict], str, str]:
         batch_llm_fn = llm_factory() if worker_count > 1 else llm_fn
         if _debug_enabled():
             batch_ids = ",".join(c.get("chunk_id", "") for c in batch)
@@ -386,7 +421,7 @@ def enrich_chunks_stage(
             for chunk_id, parsed in parsed_batch.items()
             if parsed and chunk_id in batch_chunk_ids
         }
-        return batch_idx, batch_enrichments, actual_model
+        return batch_idx, batch_enrichments, actual_model, raw_text
 
     def _checkpoint_batch(batch_enrichments: dict[str, dict], actual_model: str) -> dict[str, dict]:
         enriched_at = datetime.now(timezone.utc).isoformat()
@@ -411,6 +446,7 @@ def enrich_chunks_stage(
         return batch_stamps
 
     batch_results: dict[int, tuple[dict[str, dict], dict[str, dict]]] = {}
+    batch_raw_responses: dict[int, str] = {}
     if worker_count > 1:
         with ThreadPoolExecutor(max_workers=worker_count) as pool:
             next_batch_idx = 0
@@ -425,7 +461,7 @@ def enrich_chunks_stage(
                 next_batch_idx = wave_end
 
                 done, _ = wait(set(wave_futures.keys()))
-                successful_results: list[tuple[int, dict[str, dict], str]] = []
+                successful_results: list[tuple[int, dict[str, dict], str, str]] = []
                 for future in done:
                     batch_idx = wave_futures[future]
                     try:
@@ -443,8 +479,9 @@ def enrich_chunks_stage(
                                 f"Batch {batch_idx + 1}/{n_batches} error: {exc}",
                             )
 
-                for result_idx, batch_enrichments, actual_model in successful_results:
+                for result_idx, batch_enrichments, actual_model, raw_text in successful_results:
                     batch_idx = result_idx
+                    batch_raw_responses[result_idx] = raw_text
                     try:
                         batch_stamps = _checkpoint_batch(batch_enrichments, actual_model)
                     except Exception as exc:
@@ -457,11 +494,13 @@ def enrich_chunks_stage(
                     batch_results[result_idx] = (batch_enrichments, batch_stamps)
 
                 if first_failure is not None:
-                    return {"status": "failed", "detail": first_failure[1]}
+                    raw_text = batch_raw_responses.get(first_failure[0], _format_batch_responses(batch_raw_responses))
+                    return _failed_with_response(output_dir, raw_text, first_failure[1])
     else:
         for batch_idx, batch in enumerate(batches):
             try:
-                result_idx, batch_enrichments, actual_model = _run_batch(batch_idx, batch)
+                result_idx, batch_enrichments, actual_model, raw_text = _run_batch(batch_idx, batch)
+                batch_raw_responses[result_idx] = raw_text
             except llm.EnrichmentError as exc:
                 return {"status": "failed", "detail": f"Batch {batch_idx + 1}/{n_batches} LLM error: {exc}"}
             except Exception as exc:
@@ -469,7 +508,8 @@ def enrich_chunks_stage(
             try:
                 batch_stamps = _checkpoint_batch(batch_enrichments, actual_model)
             except Exception as exc:
-                return {"status": "failed", "detail": f"Batch {batch_idx + 1}/{n_batches} error: {exc}"}
+                detail = f"Batch {batch_idx + 1}/{n_batches} error: {exc}"
+                return _failed_with_response(output_dir, raw_text, detail)
             batch_results[result_idx] = (batch_enrichments, batch_stamps)
 
     for batch_idx in range(n_batches):
@@ -493,10 +533,8 @@ def enrich_chunks_stage(
     stale_ids = {c.get("chunk_id", "") for c in stale_chunks if c.get("chunk_id")}
     missing_ids = stale_ids - set(chunk_enrichments.keys())
     if len(missing_ids) > 3:
-        return {
-            "status": "failed",
-            "detail": f"LLM output missing {len(missing_ids)} chunk(s): {sorted(missing_ids)[:5]}",
-        }
+        detail = f"LLM output missing {len(missing_ids)} chunk(s): {sorted(missing_ids)[:5]}"
+        return _failed_with_response(output_dir, _format_batch_responses(batch_raw_responses), detail)
     if missing_ids:
         print(
             f"  [chunk] warning: {len(missing_ids)} chunk(s) not returned by LLM "
@@ -507,10 +545,8 @@ def enrich_chunks_stage(
     # Validate each resumed or newly enriched chunk has required summary field.
     for cid, enrichment in chunk_enrichments.items():
         if "summary" not in enrichment:
-            return {
-                "status": "failed",
-                "detail": f"Chunk '{cid}' missing required field: summary",
-            }
+            detail = f"Chunk '{cid}' missing required field: summary"
+            return _failed_with_response(output_dir, _format_batch_responses(batch_raw_responses), detail)
 
     try:
         _promote_chunks(chunks, enriched_chunks_map, chunks_path, output_dir, existing_stamps)

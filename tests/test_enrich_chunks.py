@@ -388,6 +388,9 @@ class TestEnrichChunksStage:
         result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "failed"
         assert "missing" in result["detail"].lower()
+        assert (output_dir / "debug" / "chunks.failed.response.txt").read_text(encoding="utf-8").endswith(incomplete)
+        failure_meta = json.loads((output_dir / "debug" / "chunks.failed.meta.json").read_text(encoding="utf-8"))
+        assert failure_meta["detail"] == result["detail"]
 
     def test_tolerates_few_missing_chunks(self, tmp_path):
         """Up to 3 missing chunks should produce a warning but succeed."""

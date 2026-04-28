@@ -9,6 +9,7 @@ and search depend on it.
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 from arquimedes import enrich_prompts, enrich_stamps, llm
@@ -44,6 +45,34 @@ def _load_json(path: Path, default=None):
     if not path.exists():
         return default
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _save_failed_response(output_dir: Path, stage: str, raw_text: str, detail: str) -> None:
+    debug_dir = output_dir / "debug"
+    debug_dir.mkdir(exist_ok=True)
+    response_path = debug_dir / f"{stage}.failed.response.txt"
+    meta_path = debug_dir / f"{stage}.failed.meta.json"
+    response_path.write_text(raw_text or "", encoding="utf-8")
+    meta_path.write_text(
+        json.dumps(
+            {
+                "failed_at": datetime.now(timezone.utc).isoformat(),
+                "detail": detail,
+                "response_chars": len(raw_text or ""),
+            },
+            separators=(",", ":"),
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _failed_with_response(output_dir: Path, raw_text: str, detail: str) -> dict:
+    try:
+        _save_failed_response(output_dir, "document", raw_text, detail)
+    except Exception:
+        pass
+    return {"status": "failed", "detail": detail}
 
 
 # ---------------------------------------------------------------------------
@@ -212,15 +241,21 @@ def enrich_document_stage(
         raw_text = llm_fn(system, messages)
         parsed = llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_PATCH_SCHEMA)
         if not isinstance(parsed, dict):
-            return {"status": "failed", "detail": "LLM did not return a JSON object"}
+            return _failed_with_response(output_dir, raw_text, "LLM did not return a JSON object")
         if parsed.get("_finished") is not True:
-            return {"status": "failed", "detail": "LLM output missing _finished=true"}
+            return _failed_with_response(output_dir, raw_text, "LLM output missing _finished=true")
         parsed = dict(parsed)
         parsed.pop("_finished", None)
         missing_output_fields = [field for field in _REQUIRED_DOCUMENT_OUTPUT_FIELDS if field not in parsed]
         if missing_output_fields:
-            return {"status": "failed", "detail": f"LLM output missing required fields: {', '.join(missing_output_fields)}"}
+            return _failed_with_response(
+                output_dir,
+                raw_text,
+                f"LLM output missing required fields: {', '.join(missing_output_fields)}",
+            )
     except llm.EnrichmentError as exc:
+        if "raw_text" in locals():
+            return _failed_with_response(output_dir, raw_text, str(exc))
         return {"status": "failed", "detail": str(exc)}
     except Exception as exc:
         return {"status": "failed", "detail": f"LLM error: {exc}"}
@@ -246,7 +281,7 @@ def enrich_document_stage(
     for field in ("summary", "document_type", "keywords", "methodological_conclusions", "main_content_learnings"):
         value = parsed.get(field)
         if isinstance(value, dict) and "value" not in value:
-            return {"status": "failed", "detail": f"LLM output field '{field}' missing 'value'"}
+            return _failed_with_response(output_dir, raw_text, f"LLM output field '{field}' missing 'value'")
 
     # Normalize each facet value
     facets = parsed.get("facets") or {}
@@ -254,22 +289,22 @@ def enrich_document_stage(
         for fkey in list(facets):
             _normalize_field(facets, fkey)
             if isinstance(facets.get(fkey), dict) and "value" not in facets[fkey]:
-                return {"status": "failed", "detail": f"LLM output facet '{fkey}' missing 'value'"}
+                return _failed_with_response(output_dir, raw_text, f"LLM output facet '{fkey}' missing 'value'")
 
     summary_value = parsed.get("summary", {}).get("value") if isinstance(parsed.get("summary"), dict) else None
     if not isinstance(summary_value, str) or not summary_value.strip():
-        return {"status": "failed", "detail": "LLM output summary is empty"}
+        return _failed_with_response(output_dir, raw_text, "LLM output summary is empty")
     summary_lower = summary_value.lower()
     if any(marker in summary_lower for marker in _SUMMARY_REFUSAL_MARKERS):
-        return {"status": "failed", "detail": "LLM output summary is a refusal or no-access response"}
+        return _failed_with_response(output_dir, raw_text, "LLM output summary is a refusal or no-access response")
 
     document_type_value = parsed.get("document_type", {}).get("value") if isinstance(parsed.get("document_type"), dict) else None
     if not isinstance(document_type_value, str) or not document_type_value.strip():
-        return {"status": "failed", "detail": "LLM output document_type is empty"}
+        return _failed_with_response(output_dir, raw_text, "LLM output document_type is empty")
 
     keywords_value = parsed.get("keywords", {}).get("value") if isinstance(parsed.get("keywords"), dict) else None
     if not isinstance(keywords_value, list) or not any(isinstance(item, str) and item.strip() for item in keywords_value):
-        return {"status": "failed", "detail": "LLM output keywords are empty"}
+        return _failed_with_response(output_dir, raw_text, "LLM output keywords are empty")
 
     # 6. Map parsed JSON to model objects and merge into meta dict
     #    Use actual responding model for provenance (not the config fallback list)
@@ -296,7 +331,7 @@ def enrich_document_stage(
 
         facets_data = parsed.get("facets", {})
         if not isinstance(facets_data, dict):
-            return {"status": "failed", "detail": "LLM output field 'facets' must be an object"}
+            return _failed_with_response(output_dir, raw_text, "LLM output field 'facets' must be an object")
         if facets_data:
             facets = _make_facets(facets_data, actual_model, prompt_version)
             meta_out["facets"] = facets.to_dict()
@@ -327,15 +362,15 @@ def enrich_document_stage(
             else:
                 meta_out.pop("bibliography", None)
         else:
-            return {"status": "failed", "detail": "LLM output field 'bibliography' must be an object or null"}
+            return _failed_with_response(output_dir, raw_text, "LLM output field 'bibliography' must be an object or null")
 
         concepts_local_data = parsed.get("concepts_local")
         if not isinstance(concepts_local_data, list):
-            return {"status": "failed", "detail": "LLM output field 'concepts_local' must be a list"}
+            return _failed_with_response(output_dir, raw_text, "LLM output field 'concepts_local' must be a list")
 
         concepts_bridge_data = parsed.get("concepts_bridge_candidates", [])
         if not isinstance(concepts_bridge_data, list):
-            return {"status": "failed", "detail": "LLM output field 'concepts_bridge_candidates' must be a list"}
+            return _failed_with_response(output_dir, raw_text, "LLM output field 'concepts_bridge_candidates' must be a list")
 
         concepts: list[ConceptCandidate] = []
         concepts.extend(_make_concepts(concepts_local_data, actual_model, prompt_version, concept_type="local"))
@@ -348,7 +383,7 @@ def enrich_document_stage(
         existing_toc = json.loads(toc_path.read_text(encoding="utf-8")) if toc_path.exists() else []
         toc_data = parsed.get("toc")
         if not isinstance(toc_data, list):
-            return {"status": "failed", "detail": "LLM output field 'toc' must be a list"}
+            return _failed_with_response(output_dir, raw_text, "LLM output field 'toc' must be a list")
         if not existing_toc:
             if toc_data:
                 toc_out = toc_data
@@ -357,13 +392,21 @@ def enrich_document_stage(
         required_fields = ("summary", "document_type", "keywords")
         missing = [field for field in required_fields if field not in meta_out or not isinstance(meta_out[field], dict)]
         if missing:
-            return {"status": "failed", "detail": f"Document metadata missing required fields after patch apply: {', '.join(missing)}"}
+            return _failed_with_response(
+                output_dir,
+                raw_text,
+                f"Document metadata missing required fields after patch apply: {', '.join(missing)}",
+            )
         for field in required_fields:
             if "value" not in meta_out[field]:
-                return {"status": "failed", "detail": f"Document metadata field '{field}' missing 'value' after patch apply"}
+                return _failed_with_response(
+                    output_dir,
+                    raw_text,
+                    f"Document metadata field '{field}' missing 'value' after patch apply",
+                )
 
     except Exception as exc:
-        return {"status": "failed", "detail": f"Mapping error: {exc}"}
+        return _failed_with_response(output_dir, raw_text, f"Mapping error: {exc}")
 
     # 7. Atomic write: stage all files first, then commit all renames
     try:

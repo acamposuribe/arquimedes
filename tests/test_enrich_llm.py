@@ -327,7 +327,9 @@ class TestBuildStageRequest:
         assert "--print" in cmd
         assert "--no-session" in cmd
         assert "--no-context-files" in cmd
-        assert "--no-tools" in cmd
+        assert "--tools" in cmd
+        assert cmd[cmd.index("--tools") + 1] == "read"
+        assert "--no-tools" not in cmd
         assert "--no-extensions" in cmd
         assert "--no-skills" in cmd
         assert "--no-prompt-templates" in cmd
@@ -335,6 +337,35 @@ class TestBuildStageRequest:
         assert cmd[cmd.index("--model") + 1] == "copilot/gpt-4.1"
         assert cmd[cmd.index("--thinking") + 1] == "off"
         assert cmd[cmd.index("--system-prompt") + 1] == "system"
+
+    def test_pi_route_can_override_tools(self):
+        cmd, stdin_text = _build_stage_request(
+            ["pi"],
+            "pi",
+            "system",
+            "user prompt",
+            model="openai-codex/gpt-5.5",
+            thinking="off",
+            route={"tools": ["read"]},
+        )
+        assert stdin_text == "user prompt"
+        assert "--tools" in cmd
+        assert cmd[cmd.index("--tools") + 1] == "read"
+        assert "--no-tools" not in cmd
+
+    def test_pi_route_can_disable_tools_explicitly(self):
+        cmd, stdin_text = _build_stage_request(
+            ["pi"],
+            "pi",
+            "system",
+            "user prompt",
+            model="openai-codex/gpt-5.5",
+            thinking="off",
+            route={"no_tools": True},
+        )
+        assert stdin_text == "user prompt"
+        assert "--no-tools" in cmd
+        assert "--tools" not in cmd
 
 
 # ---------------------------------------------------------------------------

@@ -851,8 +851,15 @@ def _build_stage_request(
             cmd.append("--no-session")
         if _route_flag(route, "no_context_files", True) and not _has_option(cmd, "--no-context-files", "-nc"):
             cmd.append("--no-context-files")
-        if _route_flag(route, "no_tools", True) and not _has_option(cmd, "--no-tools", "-nt", "--tools", "-t", "--no-builtin-tools", "-nbt"):
-            cmd.append("--no-tools")
+        tools_value = _tools_arg(route.get("tools"))
+        if tools_value is not None:
+            if not _has_option(cmd, "--tools", "-t", "--no-tools", "-nt", "--no-builtin-tools", "-nbt"):
+                cmd.extend(["--tools", tools_value])
+        elif _route_flag(route, "no_tools", False):
+            if not _has_option(cmd, "--no-tools", "-nt", "--tools", "-t", "--no-builtin-tools", "-nbt"):
+                cmd.append("--no-tools")
+        elif not _has_option(cmd, "--tools", "-t", "--no-tools", "-nt", "--no-builtin-tools", "-nbt"):
+            cmd.extend(["--tools", "read"])
         if _route_flag(route, "no_extensions", True) and not _has_option(cmd, "--no-extensions", "-e", "--extension"):
             cmd.append("--no-extensions")
         if _route_flag(route, "no_skills", True) and not _has_option(cmd, "--no-skills", "--skill"):

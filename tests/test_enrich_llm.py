@@ -148,6 +148,9 @@ class TestGetAgentModelName:
     def test_copilot_with_model(self):
         assert get_agent_model_name(["copilot", "--model", "gpt-4.1"]) == "copilot:gpt-4.1"
 
+    def test_pi_with_model(self):
+        assert get_agent_model_name(["pi", "--model", "copilot/gpt-4.1"]) == "pi:copilot/gpt-4.1"
+
     def test_other_agent(self):
         assert get_agent_model_name(["myagent", "run"]) == "myagent"
 
@@ -206,7 +209,7 @@ class TestBuildAgentCmd:
         assert "-m" in cmd
         assert cmd[cmd.index("-m") + 1] == "gpt-5.4-mini"
         assert "-c" in cmd
-        assert cmd[cmd.index("-c") + 1] == "model_reasoning_effort=high"  # no extra quotes
+        assert cmd[cmd.index("-c") + 1] == 'model_reasoning_effort="high"'
 
     def test_codex_no_model_when_not_specified(self):
         cmd = _build_agent_cmd(["codex", "exec"], "sys")
@@ -310,6 +313,28 @@ class TestBuildStageRequest:
         assert stdin_text.startswith("[SYSTEM]")
         assert "--ephemeral" in cmd
         assert cmd[cmd.index("-m") + 1] == "gpt-5.4-mini"
+
+    def test_pi_uses_print_mode_stdin_and_minimal_resources(self):
+        cmd, stdin_text = _build_stage_request(
+            ["pi"],
+            "pi",
+            "system",
+            "user prompt",
+            model="copilot/gpt-4.1",
+            thinking="off",
+        )
+        assert stdin_text == "user prompt"
+        assert "--print" in cmd
+        assert "--no-session" in cmd
+        assert "--no-context-files" in cmd
+        assert "--no-tools" in cmd
+        assert "--no-extensions" in cmd
+        assert "--no-skills" in cmd
+        assert "--no-prompt-templates" in cmd
+        assert "--no-themes" in cmd
+        assert cmd[cmd.index("--model") + 1] == "copilot/gpt-4.1"
+        assert cmd[cmd.index("--thinking") + 1] == "off"
+        assert cmd[cmd.index("--system-prompt") + 1] == "system"
 
 
 # ---------------------------------------------------------------------------

@@ -375,6 +375,7 @@ def get_agent_model_name(base_parts: list[str]) -> str:
     For ``claude``: reads the ``--model`` arg if present, else ``"claude"``.
     For ``codex``: reads ``-m`` if present, else ``"codex"``.
     For ``copilot``: reads ``--model`` if present, else ``"copilot"``.
+    For ``pi``: reads ``--model`` if present, else ``"pi"``.
     Otherwise: returns the executable basename.
     """
     exe = os.path.basename(base_parts[0])
@@ -390,6 +391,12 @@ def get_agent_model_name(base_parts: list[str]) -> str:
             return f"copilot:{base_parts[idx + 1]}"
         except (ValueError, IndexError):
             return "copilot"
+    if exe == "pi":
+        try:
+            idx = base_parts.index("--model")
+            return f"pi:{base_parts[idx + 1]}"
+        except (ValueError, IndexError):
+            return "pi"
     if exe == "codex":
         try:
             idx = base_parts.index("-m")
@@ -484,10 +491,18 @@ def _stage_route_config(config: dict, stage: str | None) -> list[dict]:
             "command_parts": parts,
             "model": entry.get("model"),
             "effort": entry.get("effort"),
+            "thinking": entry.get("thinking"),
             "tools": entry.get("tools"),
             "agent": entry.get("agent"),
             "timeout_seconds": entry.get("timeout_seconds"),
             "prompt_mode": entry.get("prompt_mode"),
+            "no_session": entry.get("no_session"),
+            "no_context_files": entry.get("no_context_files"),
+            "no_tools": entry.get("no_tools"),
+            "no_extensions": entry.get("no_extensions"),
+            "no_skills": entry.get("no_skills"),
+            "no_prompt_templates": entry.get("no_prompt_templates"),
+            "no_themes": entry.get("no_themes"),
             "silent": entry.get("silent"),
             "allow_all": entry.get("allow_all"),
             "allow_all_tools": entry.get("allow_all_tools"),
@@ -508,6 +523,7 @@ def _route_signature(route: dict) -> str:
     provider = str(route.get("provider") or "unknown")
     model = route.get("model")
     effort = route.get("effort")
+    thinking = route.get("thinking")
     command_parts = route.get("command_parts") or []
     command = " ".join(command_parts) if isinstance(command_parts, list) else str(command_parts)
     bits = [provider]
@@ -515,6 +531,8 @@ def _route_signature(route: dict) -> str:
         bits.append(str(model))
     if effort:
         bits.append(str(effort))
+    if thinking:
+        bits.append(str(thinking))
     if command:
         bits.append(command)
     return ":".join(bits)
@@ -537,6 +555,10 @@ def _tools_arg(tools) -> str | None:
         cleaned = [str(tool).strip() for tool in tools if str(tool).strip()]
         return ",".join(cleaned)
     return None
+
+
+def _has_option(cmd: list[str], *names: str) -> bool:
+    return any(part in names or any(part.startswith(f"{name}=") for name in names) for part in cmd)
 
 
 
@@ -723,7 +745,7 @@ def _build_agent_cmd(
     - ``--model``: per-stage model override (e.g. haiku for chunks)
 
     For ``codex``: adds ``--ephemeral`` and optional ``-m`` /
-    ``-c model_reasoning_effort=...`` overrides.
+    ``-c model_reasoning_effort=\"...\"`` overrides.
 
     Other agents get the base command as-is (system prompt stays in stdin).
     """
@@ -776,7 +798,7 @@ def _build_agent_cmd(
         if model_override and "-m" not in cmd:
             cmd.extend(["-m", model_override])
         if effort:
-            cmd.extend(["-c", f"model_reasoning_effort={effort}"])
+            cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
         return cmd
     return list(base_parts)
 
@@ -789,6 +811,7 @@ def _build_stage_request(
     *,
     model: str | None = None,
     effort: str | None = None,
+    thinking: str | None = None,
     route: dict | None = None,
 ) -> tuple[list[str], str]:
     """Return (cmd, stdin_text) for a provider-specific attempt."""
@@ -817,8 +840,39 @@ def _build_stage_request(
             if idx + 1 < len(cmd):
                 cmd[idx + 1] = model
         if effort and "-c" not in cmd:
-            cmd.extend(["-c", f"model_reasoning_effort={effort}"])
+            cmd.extend(["-c", f'model_reasoning_effort="{effort}"'])
         return cmd, f"[SYSTEM]\n{system}\n\n{user_prompt}"
+
+    if provider == "pi":
+        cmd = list(base_parts)
+        if not _has_option(cmd, "-p", "--print") and not _has_option(cmd, "--mode"):
+            cmd.append("--print")
+        if _route_flag(route, "no_session", True) and not _has_option(cmd, "--no-session", "--session", "--session-dir"):
+            cmd.append("--no-session")
+        if _route_flag(route, "no_context_files", True) and not _has_option(cmd, "--no-context-files", "-nc"):
+            cmd.append("--no-context-files")
+        if _route_flag(route, "no_tools", True) and not _has_option(cmd, "--no-tools", "-nt", "--tools", "-t", "--no-builtin-tools", "-nbt"):
+            cmd.append("--no-tools")
+        if _route_flag(route, "no_extensions", True) and not _has_option(cmd, "--no-extensions", "-e", "--extension"):
+            cmd.append("--no-extensions")
+        if _route_flag(route, "no_skills", True) and not _has_option(cmd, "--no-skills", "--skill"):
+            cmd.append("--no-skills")
+        if _route_flag(route, "no_prompt_templates", True) and not _has_option(cmd, "--no-prompt-templates", "--prompt-template"):
+            cmd.append("--no-prompt-templates")
+        if _route_flag(route, "no_themes", True) and not _has_option(cmd, "--no-themes", "--theme"):
+            cmd.append("--no-themes")
+        if model and not _has_option(cmd, "--model"):
+            cmd.extend(["--model", model])
+        elif model and "--model" in cmd:
+            idx = cmd.index("--model")
+            if idx + 1 < len(cmd):
+                cmd[idx + 1] = model
+        pi_thinking = thinking or effort
+        if pi_thinking and not _has_option(cmd, "--thinking"):
+            cmd.extend(["--thinking", str(pi_thinking)])
+        if not _has_option(cmd, "--system-prompt"):
+            cmd.extend(["--system-prompt", system])
+        return cmd, user_prompt
 
     if provider == "copilot":
         cmd = list(base_parts)
@@ -968,6 +1022,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
             if use_stage_routes:
                 model = attempt_cfg.get("model")
                 effort_value = attempt_cfg.get("effort")
+                thinking_value = attempt_cfg.get("thinking")
                 timeout_seconds = _coerce_timeout_seconds(
                     attempt_cfg.get("timeout_seconds"),
                     default_timeout_seconds,
@@ -992,6 +1047,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
                         user_prompt,
                         model=model,
                         effort=effort_value,
+                        thinking=thinking_value,
                         route=attempt_cfg,
                     )
             else:

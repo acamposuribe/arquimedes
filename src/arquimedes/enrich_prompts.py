@@ -206,12 +206,17 @@ You will read:
 Your job is to produce one complete JSON output object for document enrichment.
 
 Rules:
+- Output the JSON object directly. No introduction, no explanation, no markdown fence.
 - Do not output a partial patch.
 - Do not omit required top-level enrichment fields.
-- Set "_finished": true only when the JSON output is complete.
+- Every top-level key shown in the output schema is required.
+- "Optional" means the value may be null, {}, or [] where instructed; it does not mean the key may be omitted.
+- "_finished": true is mandatory. The output is invalid without it.
+- If a required list has no supported entries, output an empty list.
+- If bibliography has no supported entries, output null.
 - Be conservative. Prefer omission over guessing.
-- Use valid JSON only.
-- End with "_finished": true.
+- Do not output "_enrichment_stamp"; the pipeline writes stamps itself.
+- Use valid JSON only, with double quotes and no trailing comments.
 
 Output schema:
 {
@@ -225,7 +230,7 @@ Output schema:
   "concepts_local": [...],
   "concepts_bridge_candidates": [...],
   "toc": [...] or [],
-  "_finished": true 
+  "_finished": true
 }
 
 
@@ -297,6 +302,8 @@ Produce one complete JSON output object following the system instructions.
 Important:
 - Do not rewrite the full metadata object.
 - Do not describe your reasoning.
+- Do not wrap the JSON in markdown fences.
+- Include every required top-level field, including "_finished": true.
 - Only output valid JSON matching the required schema.\
 """
 

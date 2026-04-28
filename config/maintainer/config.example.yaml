@@ -56,28 +56,26 @@ enrichment:
         no_ask_user: true
         no_auto_update: true
         no_custom_instructions: true
-        allow_all: false
+        allow_all: true
     chunk:
       - provider: copilot
         command: "copilot"
-        agent: copilot-no-tools-json
         model: gpt-4.1
         silent: true
         no_ask_user: true
         no_auto_update: true
         no_custom_instructions: true
-        allow_all: false
+        allow_all: true
     figure:
       - provider: copilot
         command: "copilot"
-        agent: copilot-no-tools-json
         model: gpt-5-mini
         effort: medium
         silent: true
         no_ask_user: true
         no_auto_update: true
         no_custom_instructions: true
-        allow_all: false
+        allow_all: true
       - provider: codex
         command: "codex exec"
         model: gpt-5.4-mini
@@ -93,7 +91,6 @@ enrichment:
         effort: high
       - provider: copilot
         command: "copilot"
-        agent: copilot-no-tools-json
         model: gpt-4.1
         silent: true
         no_ask_user: true
@@ -111,7 +108,6 @@ enrichment:
         effort: high
       - provider: copilot
         command: "copilot"
-        agent: copilot-no-tools-json
         model: gpt-4.1
         silent: true
         no_ask_user: true

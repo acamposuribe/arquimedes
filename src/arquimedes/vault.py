@@ -136,34 +136,32 @@ _DEFAULT_MAINTAINER_CONFIG = {
                     "no_ask_user": True,
                     "no_auto_update": True,
                     "no_custom_instructions": True,
-                    "allow_all": False,
+                    "allow_all": True,
                 },
             ],
             "chunk": [
                 {
                     "provider": "copilot",
                     "command": "copilot",
-                    "agent": "copilot-no-tools-json",
                     "model": "gpt-4.1",
                     "silent": True,
                     "no_ask_user": True,
                     "no_auto_update": True,
                     "no_custom_instructions": True,
-                    "allow_all": False,
+                    "allow_all": True,
                 }
             ],
             "figure": [
                 {
                     "provider": "copilot",
                     "command": "copilot",
-                    "agent": "copilot-no-tools-json",
                     "model": "gpt-5-mini",
                     "effort": "medium",
                     "silent": True,
                     "no_ask_user": True,
                     "no_auto_update": True,
                     "no_custom_instructions": True,
-                    "allow_all": False,
+                    "allow_all": True,
                 },
                 {
                     "provider": "codex",
@@ -188,7 +186,6 @@ _DEFAULT_MAINTAINER_CONFIG = {
                 {
                     "provider": "copilot",
                     "command": "copilot",
-                    "agent": "copilot-no-tools-json",
                     "model": "gpt-4.1",
                     "silent": True,
                     "no_ask_user": True,
@@ -213,7 +210,6 @@ _DEFAULT_MAINTAINER_CONFIG = {
                 {
                     "provider": "copilot",
                     "command": "copilot",
-                    "agent": "copilot-no-tools-json",
                     "model": "gpt-4.1",
                     "silent": True,
                     "no_ask_user": True,

@@ -711,11 +711,14 @@ def _build_agent_cmd(
 
     For ``claude``: adds flags to minimize startup overhead without
     breaking credential discovery. ``--bare`` is always disabled, even if a
-    route still sets it or the base command includes it.
+    route still sets it or the base command includes it (it breaks OAuth/
+    keychain auth — only API-key auth works under ``--bare``).
     - ``--no-session-persistence``: skip saving session to disk
     - ``--system-prompt``: pass system prompt natively
-    - ``--tools Read,Write,Bash``: default tool surface for our Claude routes
+    - ``--tools Read``: minimal tool surface (document enrichment reads
+      meta.json and document text from disk; Write/Bash are not needed)
     - ``--disable-slash-commands``: skip skill resolution
+    - ``--strict-mcp-config``: load no MCP servers
     - ``--effort``: control thinking budget (low/medium/high)
     - ``--model``: per-stage model override (e.g. haiku for chunks)
 
@@ -745,10 +748,12 @@ def _build_agent_cmd(
             cmd.append("--no-session-persistence")
         if disable_slash_commands and "--disable-slash-commands" not in cmd:
             cmd.append("--disable-slash-commands")
-        tools_value = _tools_arg(tools if tools is not None else ["Read", "Write", "Bash"])
+        if "--strict-mcp-config" not in cmd:
+            cmd.append("--strict-mcp-config")
+        tools_value = _tools_arg(tools if tools is not None else ["Read"])
         if "--tools" not in cmd and "--allowedTools" not in cmd and "--allowed-tools" not in cmd:
             if tools_value is None:
-                cmd.extend(["--tools", "Read,Write,Bash"])
+                cmd.extend(["--tools", "Read"])
             else:
                 cmd.extend(["--tools", tools_value])
         # Model: per-stage override takes precedence, then default to sonnet
@@ -853,6 +858,14 @@ def _build_stage_request(
                 cmd.extend(["--excluded-tools", tools_arg])
         if _route_flag(route, "no_custom_instructions", True) and "--no-custom-instructions" not in cmd:
             cmd.append("--no-custom-instructions")
+        if "--disable-builtin-mcps" not in cmd:
+            cmd.append("--disable-builtin-mcps")
+        if "--no-color" not in cmd:
+            cmd.append("--no-color")
+        if not any(part == "--log-level" or part.startswith("--log-level=") for part in cmd):
+            cmd.extend(["--log-level", "error"])
+        if not any(part == "--stream" or part.startswith("--stream=") for part in cmd):
+            cmd.extend(["--stream", "off"])
         if model and "--model" not in cmd:
             cmd.extend(["--model", model])
         elif model and "--model" in cmd:

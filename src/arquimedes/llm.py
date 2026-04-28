@@ -948,7 +948,7 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
 
         active_routes = resolved
 
-        for attempt_cfg in active_routes:
+        for route_index, attempt_cfg in enumerate(active_routes, start=1):
             base_parts = attempt_cfg["command_parts"]
             provider = str(attempt_cfg.get("provider") or _provider_from_parts(base_parts))
 
@@ -1007,6 +1007,12 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
 
             for attempt in range(max_retries):
                 try:
+                    if sys.stderr.isatty():
+                        print(
+                            f"  [llm {stage or 'default'}] launching {get_agent_model_name(cmd)} "
+                            f"(provider {route_index}/{len(active_routes)}, attempt {attempt + 1}/{max_retries})",
+                            file=sys.stderr,
+                        )
                     result = _run_agent_subprocess(
                         cmd,
                         stdin_text,

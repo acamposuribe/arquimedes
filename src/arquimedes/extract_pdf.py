@@ -1,9 +1,10 @@
-"""Deterministic PDF extraction: text, pages, TOC, tables, annotations."""
+"""Deterministic PDF extraction: text, OCR fallback, pages, TOC, tables, annotations."""
 
 from __future__ import annotations
 
 import json
 import re
+import warnings
 from pathlib import Path
 
 import fitz  # PyMuPDF
@@ -12,6 +13,8 @@ import pdfplumber
 from arquimedes.classify import classify_document_type, extract_keywords
 from arquimedes.models import Annotation, MaterialMeta, Page, Table
 from arquimedes.text_normalization import normalize_extracted_pages
+
+_PDF_OCR_DPI = 300
 
 
 def _strip_nuls(text: str) -> str:
@@ -30,7 +33,34 @@ def _sanitize_strings(value):
     return value
 
 
-def extract_text_and_pages(pdf_path: Path) -> tuple[list[Page], list[dict]]:
+def _tesseract_available() -> bool:
+    """Check if the Tesseract binary is installed and reachable."""
+    try:
+        import pytesseract
+    except ImportError:
+        return False
+    try:
+        pytesseract.get_tesseract_version()
+        return True
+    except pytesseract.TesseractNotFoundError:
+        return False
+
+
+def _ocr_page(page: fitz.Page, dpi: int = _PDF_OCR_DPI) -> str:
+    """OCR a PDF page by rasterizing it at a text-friendly resolution."""
+    import pytesseract
+    from PIL import Image
+
+    scale = dpi / 72
+    pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale), colorspace=fitz.csRGB, alpha=False)
+    image = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    return _strip_nuls(pytesseract.image_to_string(image))
+
+
+def extract_text_and_pages(
+    pdf_path: Path,
+    ocr_fallback: bool = True,
+) -> tuple[list[Page], list[dict]]:
     """Extract page-level data from a PDF.
 
     Returns:
@@ -52,6 +82,23 @@ def extract_text_and_pages(pdf_path: Path) -> tuple[list[Page], list[dict]]:
             footnote_text="",
             headings=headings,
         ))
+
+    if ocr_fallback and pages and not any(page.text.strip() for page in pages):
+        if not _tesseract_available():
+            warnings.warn(
+                "Tesseract binary not found. Install Tesseract to enable OCR fallback for scanned PDFs: "
+                "brew install tesseract (macOS) or apt install tesseract-ocr (Linux).",
+                stacklevel=2,
+            )
+        else:
+            for i, page in enumerate(pages):
+                try:
+                    ocr_text = _ocr_page(doc[i])
+                except Exception as exc:
+                    warnings.warn(f"OCR failed for {pdf_path} page {i + 1}: {exc}", stacklevel=2)
+                    continue
+                if ocr_text.strip():
+                    page.text = ocr_text
 
     # Extract TOC from PDF outline
     toc = []
@@ -296,6 +343,7 @@ def extract_raw_pdf(
     output_dir: Path,
     material_id: str,
     manifest_entry: dict,
+    ocr_fallback: bool = True,
 ) -> MaterialMeta:
     """Run the full deterministic extraction pipeline for a PDF.
 
@@ -311,7 +359,7 @@ def extract_raw_pdf(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # 1. Text and pages
-    pages, toc = extract_text_and_pages(pdf_path)
+    pages, toc = extract_text_and_pages(pdf_path, ocr_fallback=ocr_fallback)
     pages, full_text = normalize_extracted_pages(pages)
 
     # 2. Annotations

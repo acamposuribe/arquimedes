@@ -85,6 +85,7 @@ def extract_raw(
             _extract_pdf_material(
                 source_path, output_dir, mid, entry_dict,
                 chunk_size=chunk_size,
+                ocr_fallback=ocr_fallback,
                 generate_thumbs=generate_thumbs,
                 extract_embedded=extract_embedded,
                 extract_rasterized=extract_rasterized,
@@ -108,6 +109,7 @@ def _extract_pdf_material(
     material_id: str,
     manifest_entry: dict,
     chunk_size: int = 500,
+    ocr_fallback: bool = True,
     generate_thumbs: bool = True,
     extract_embedded: bool = True,
     extract_rasterized: bool = True,
@@ -115,7 +117,13 @@ def _extract_pdf_material(
 ) -> None:
     """Full PDF extraction pipeline."""
     # 1. Core extraction: text, pages, TOC, tables, annotations
-    extract_raw_pdf(pdf_path, output_dir, material_id, manifest_entry)
+    extract_raw_pdf(
+        pdf_path,
+        output_dir,
+        material_id,
+        manifest_entry,
+        ocr_fallback=ocr_fallback,
+    )
 
     # 2. Figures (embedded + rasterized)
     figures = extract_all_figures(

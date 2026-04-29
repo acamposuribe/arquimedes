@@ -100,6 +100,10 @@ def _global_bridge_memory_path(root: Path, domain: str) -> Path:
     return _global_bridge_stage_dir(root, domain) / "global_bridge.memory.json"
 
 
+def _global_bridge_no_progress_path(root: Path, domain: str) -> Path:
+    return _global_bridge_stage_dir(root, domain) / "global_bridge.no_progress.json"
+
+
 def _collection_scope_key(domain: str, collection: str) -> str:
     deps = _deps()
     scope_domain, scope_collection = deps._collection_scope(domain, collection)
@@ -733,6 +737,47 @@ def _finalize_global_bridges(
     return sorted(output, key=lambda row: (row["canonical_name"].casefold(), row["bridge_id"]))
 
 
+def _represented_pending_cluster_ids(bridges: list[dict], pending_ids: set[str]) -> set[str]:
+    represented = set()
+    for bridge in bridges:
+        for member in _dict_rows(bridge.get("member_local_clusters", [])):
+            cluster_id = str(member.get("cluster_id", "")).strip()
+            if cluster_id in pending_ids:
+                represented.add(cluster_id)
+    return represented
+
+
+def _write_global_bridge_no_progress_diagnostic(
+    root: Path,
+    domain: str,
+    *,
+    raw: str,
+    parsed: Any,
+    normalized: dict,
+    pending_ids: set[str],
+    represented_ids: set[str],
+    bridge_count: int,
+) -> Path:
+    deps = _deps()
+    path = _global_bridge_no_progress_path(root, domain)
+    deps._write_json(
+        path,
+        {
+            "domain": _bridge_domain(domain),
+            "diagnostic": "global bridge output made no progress",
+            "written_at": datetime.now(timezone.utc).isoformat(),
+            "pending_cluster_ids": sorted(pending_ids),
+            "represented_pending_cluster_ids": sorted(represented_ids),
+            "unrepresented_pending_cluster_ids": sorted(pending_ids - represented_ids),
+            "bridge_count": bridge_count,
+            "raw_response": raw,
+            "parsed_response": parsed,
+            "normalized_response": normalized,
+        },
+    )
+    return path
+
+
 def load_global_bridge_clusters(root: Path, domain: str | None = None) -> list[dict]:
     deps = _deps()
     rows = []
@@ -1254,11 +1299,13 @@ def _run_global_bridge_impl(
 
         packet_path = _global_bridge_packet_path(root, domain)
         memory_path = _global_bridge_memory_path(root, domain)
+        no_progress_path = _global_bridge_no_progress_path(root, domain)
         deps._write_json(packet_path, bundle["packet"])
         deps._write_json(memory_path, bundle["memory"])
 
         system, user = _global_bridge_prompt(packet_path, memory_path, domain)
         succeeded = False
+        no_progress_diagnostic_path: Path | None = None
         try:
             raw = llm_fn(system, [{"role": "user", "content": user}])
             parsed = parse_json_or_repair(llm_fn, raw, _GLOBAL_BRIDGE_DELTA_SCHEMA)
@@ -1271,6 +1318,11 @@ def _run_global_bridge_impl(
                     if str(row.get("cluster_id", "")).strip()
                 },
             )
+            pending_ids = {
+                row["cluster_id"]
+                for row in bundle["packet"].get("pending_local_clusters", [])
+                if str(row.get("cluster_id", "")).strip()
+            }
             bridges = _finalize_global_bridges(
                 bundle["existing_bridges"],
                 normalized,
@@ -1278,6 +1330,18 @@ def _run_global_bridge_impl(
                 bundle["collection_context_by_key"],
                 domain=domain,
             )
+            represented_pending_ids = _represented_pending_cluster_ids(bridges, pending_ids)
+            if pending_ids and not represented_pending_ids:
+                no_progress_diagnostic_path = _write_global_bridge_no_progress_diagnostic(
+                    root,
+                    domain,
+                    raw=raw,
+                    parsed=parsed,
+                    normalized=normalized,
+                    pending_ids=pending_ids,
+                    represented_ids=represented_pending_ids,
+                    bridge_count=len(bridges),
+                )
             run_at = datetime.now(timezone.utc).isoformat()
             run_at_any = run_at
             deps._attach_run_provenance(bridges, route_signature, run_at)
@@ -1310,6 +1374,9 @@ def _run_global_bridge_impl(
                 "global_bridge_skipped": False,
                 "global_bridge_skip_reason": "",
             }
+            if no_progress_diagnostic_path is not None:
+                domain_results[domain]["global_bridge_no_progress"] = True
+                domain_results[domain]["global_bridge_diagnostic_path"] = str(no_progress_diagnostic_path)
         except BaseException as exc:
             failures.append(exc)
             domain_results[domain] = {
@@ -1319,7 +1386,10 @@ def _run_global_bridge_impl(
             }
         finally:
             if succeeded:
-                deps._cleanup_paths(packet_path, memory_path)
+                cleanup_paths = [packet_path, memory_path]
+                if no_progress_diagnostic_path is None:
+                    cleanup_paths.append(no_progress_path)
+                deps._cleanup_paths(*cleanup_paths)
 
     if run_at_any is not None:
         deps._write_lint_stage_stamp(root, global_bridge_at=run_at_any)

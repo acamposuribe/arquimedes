@@ -4385,6 +4385,74 @@ def test_global_bridge_runner_skips_with_empty_pending_packet_even_with_stale_fi
     assert bridge_rows[0]["bridge_id"] == "global_bridge__research__archive-and-space"
 
 
+def test_global_bridge_runner_writes_diagnostic_when_output_makes_no_progress(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+    from arquimedes.lint_global_bridge import _run_global_bridge_impl
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+
+    local_clusters = [
+        {
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "collection_key": "research/papers",
+            "canonical_name": "Archive and Space",
+            "slug": "archive-and-space",
+            "descriptor": "Archive as a spatial ordering device.",
+            "material_ids": ["mat_001"],
+            "confidence": 0.92,
+        },
+        {
+            "cluster_id": "research__projects__local_0001",
+            "domain": "research",
+            "collection": "projects",
+            "collection_key": "research/projects",
+            "canonical_name": "Archive and Space",
+            "slug": "archive-and-space",
+            "descriptor": "Archive as a project-scale memory scaffold.",
+            "material_ids": ["mat_010"],
+            "confidence": 0.61,
+        },
+    ]
+    collection_refs = [
+        {"collection_key": "research/papers", "domain": "research", "collection": "papers"},
+        {"collection_key": "research/projects", "domain": "research", "collection": "projects"},
+    ]
+
+    def llm_factory(_stage: str):
+        def fn(_system: str, _messages: list[dict]) -> str:
+            return json.dumps({"links_to_existing": [], "new_clusters": [], "_finished": True})
+
+        return fn
+
+    result = _run_global_bridge_impl(
+        lint_mod,
+        root,
+        local_clusters,
+        collection_refs,
+        llm_factory,
+        None,
+        "",
+    )
+
+    diagnostic_path = root / "derived" / "tmp" / "global_bridge" / "research" / "global_bridge.no_progress.json"
+    diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
+
+    assert result["domains"]["research"]["global_bridge_no_progress"] is True
+    assert result["domains"]["research"]["global_bridge_diagnostic_path"] == str(diagnostic_path)
+    assert diagnostic["diagnostic"] == "global bridge output made no progress"
+    assert diagnostic["parsed_response"] == {"links_to_existing": [], "new_clusters": [], "_finished": True}
+    assert diagnostic["normalized_response"] == {"links_to_existing": [], "new_clusters": []}
+    assert diagnostic["unrepresented_pending_cluster_ids"] == [
+        "research__papers__local_0001",
+        "research__projects__local_0001",
+    ]
+    assert (root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl").exists()
+    assert (root / "derived" / "domains" / "research" / "global_bridge_stamp.json").exists()
+
+
 def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)

@@ -11,6 +11,9 @@ extraction:
   chunk_size: 500
   generate_thumbnails: true
   ocr_fallback: true
+  # builtin | auto | opendataloader
+  # auto uses OpenDataLoader only for PDFs with an embedded text layer.
+  pdf_backend: builtin
   figure_extraction:
     embedded: true
     rasterize: true

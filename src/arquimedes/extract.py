@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import shutil
+import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
@@ -10,6 +12,11 @@ from arquimedes.chunking import chunk_pages
 from arquimedes.config import get_library_root, get_project_root, load_config
 from arquimedes.extract_figures import extract_all_figures
 from arquimedes.extract_image import extract_raw_image
+from arquimedes.extract_opendataloader import (
+    extract_raw_pdf_opendataloader,
+    pdf_has_usable_text_layer,
+    warn_opendataloader_fallback,
+)
 from arquimedes.extract_pdf import _sanitize_strings, extract_raw_pdf
 from arquimedes.ingest import load_manifest
 from arquimedes.models import Annotation, Page
@@ -42,6 +49,7 @@ def extract_raw(
     chunk_size = extraction_config.get("chunk_size", 500)
     generate_thumbs = extraction_config.get("generate_thumbnails", True)
     ocr_fallback = extraction_config.get("ocr_fallback", True)
+    pdf_backend = extraction_config.get("pdf_backend", "builtin")
     fig_config = extraction_config.get("figure_extraction", {})
     extract_embedded = fig_config.get("embedded", True)
     extract_rasterized = fig_config.get("rasterize", True)
@@ -90,6 +98,7 @@ def extract_raw(
                 extract_embedded=extract_embedded,
                 extract_rasterized=extract_rasterized,
                 rasterize_dpi=rasterize_dpi,
+                pdf_backend=pdf_backend,
             )
         elif entry.file_type in ("image", "scanned_document"):
             _extract_image_material(
@@ -114,16 +123,25 @@ def _extract_pdf_material(
     extract_embedded: bool = True,
     extract_rasterized: bool = True,
     rasterize_dpi: int = 200,
+    pdf_backend: str = "builtin",
 ) -> None:
     """Full PDF extraction pipeline."""
     # 1. Core extraction: text, pages, TOC, tables, annotations
-    extract_raw_pdf(
-        pdf_path,
-        output_dir,
-        material_id,
-        manifest_entry,
-        ocr_fallback=ocr_fallback,
-    )
+    if _should_use_opendataloader(pdf_path, pdf_backend):
+        extract_raw_pdf_opendataloader(
+            pdf_path,
+            output_dir,
+            material_id,
+            manifest_entry,
+        )
+    else:
+        extract_raw_pdf(
+            pdf_path,
+            output_dir,
+            material_id,
+            manifest_entry,
+            ocr_fallback=ocr_fallback,
+        )
 
     # 2. Figures (embedded + rasterized)
     figures = extract_all_figures(
@@ -183,6 +201,47 @@ def _extract_image_material(
         with open(output_dir / "chunks.jsonl", "w", encoding="utf-8") as f:
             for chunk in chunks:
                 f.write(json.dumps(_sanitize_strings(chunk.to_dict()), ensure_ascii=False) + "\n")
+
+
+def _should_use_opendataloader(pdf_path: Path, pdf_backend: str) -> bool:
+    """Decide whether to use OpenDataLoader for a PDF.
+
+    `auto` is intentionally conservative: use OpenDataLoader only for PDFs with
+    embedded text and fall back quietly when its runtime dependencies are absent.
+    """
+    backend = (pdf_backend or "builtin").strip().lower()
+    if backend in ("builtin", "pymupdf"):
+        return False
+    if backend not in ("auto", "opendataloader"):
+        raise ValueError(
+            "Unsupported extraction.pdf_backend value "
+            f"{pdf_backend!r}; expected builtin, auto, or opendataloader"
+        )
+
+    has_text_layer = pdf_has_usable_text_layer(pdf_path)
+    if not has_text_layer:
+        return False
+    if backend == "opendataloader":
+        return True
+
+    try:
+        import opendataloader_pdf  # noqa: F401
+    except ImportError:
+        warn_opendataloader_fallback("Python package is not installed")
+        return False
+    if shutil.which("java") is None:
+        warn_opendataloader_fallback("Java is not on PATH")
+        return False
+    java_check = subprocess.run(
+        ["java", "-version"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if java_check.returncode != 0:
+        warn_opendataloader_fallback("Java runtime is not available")
+        return False
+    return True
 
 
 def _load_pages(output_dir: Path) -> list[Page]:

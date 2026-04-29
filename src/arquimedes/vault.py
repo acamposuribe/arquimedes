@@ -80,6 +80,7 @@ _DEFAULT_MAINTAINER_CONFIG = {
         "chunk_size": 500,
         "generate_thumbnails": True,
         "ocr_fallback": True,
+        "pdf_backend": "builtin",
         "figure_extraction": {
             "embedded": True,
             "rasterize": True,

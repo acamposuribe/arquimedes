@@ -498,6 +498,25 @@ class TestEnrichFiguresStage:
         assert result["status"] == "failed"
         assert "fig_0002" in result["detail"]
 
+    def test_batch_failure_keeps_completed_figure_sidecars(self, tmp_path):
+        """Completed figure batches should be saved before a later batch failure."""
+        figure_ids = ["fig_0001", "fig_0002"]
+        output_dir = _make_extracted_dir(tmp_path, figure_ids=figure_ids, with_image=False)
+        llm_fn = _make_llm_fn([
+            _make_figure_response(["fig_0001"]),
+            _make_figure_response(["fig_9999"]),
+        ])
+        config = _make_config(figure_batch_size=1)
+
+        result = enrich_figures_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "failed"
+        assert "saved 1/2 figures" in result["detail"]
+        saved = json.loads((output_dir / "figures" / "fig_0001.json").read_text())
+        failed = json.loads((output_dir / "figures" / "fig_0002.json").read_text())
+        assert "_enrichment_stamp" in saved
+        assert "_enrichment_stamp" not in failed
+
     def test_fails_when_figure_id_not_in_response(self, tmp_path):
         """If LLM returns a line with a different figure_id, the expected one is missing."""
         output_dir = _make_extracted_dir(tmp_path, figure_ids=["fig_0001"], with_image=False)

@@ -867,6 +867,33 @@ def extract_raw(material_id: str | None, force: bool):
         click.echo("Nothing to extract (all materials already extracted).")
 
 
+@cli.command("refresh-markdown")
+@click.argument("material_id", required=False)
+@click.option("--apply", "apply_changes", is_flag=True, help="Overwrite text.md files.")
+@click.option("--human", is_flag=True, help="Print a compact human summary.")
+def refresh_markdown(material_id: str | None, apply_changes: bool, human: bool):
+    """Refresh only extracted text.md files using OpenDataLoader Markdown."""
+    from arquimedes.refresh_markdown import refresh_markdowns
+
+    try:
+        summary = refresh_markdowns(material_id=material_id, apply=apply_changes)
+    except (ValueError, FileNotFoundError, RuntimeError) as e:
+        raise click.ClickException(str(e))
+
+    data = summary.to_dict()
+    if not human:
+        click.echo(json.dumps(data, ensure_ascii=False, indent=2))
+        return
+
+    mode = "APPLY" if apply_changes else "DRY RUN"
+    click.echo(f"Markdown-only refresh ({mode})")
+    for key, value in data["counts"].items():
+        click.echo(f"  {key}: {value}")
+    for result in data["results"]:
+        if result["status"] in {"would_update", "updated"}:
+            click.echo(f"  {result['status']}: {result['material_id']}  {result['relative_path']}")
+
+
 @cli.command()
 @click.argument("material_id", required=False)
 @click.option("--force", is_flag=True, help="Re-enrich even if not stale.")

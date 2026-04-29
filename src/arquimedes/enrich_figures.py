@@ -496,14 +496,55 @@ def enrich_figures_stage(
         for i in range(0, len(stale_figures), figure_batch_size)
     ]
 
-    # Accumulate enriched sidecar data per figure path (in memory, write at end)
-    # Map: sidecar_path → {enriched fields + analysis_mode + stamp}
-    enriched_by_path: dict[Path, dict] = {}
-
     llm_factory = llm_fn.__dict__.get("_arq_factory") if hasattr(llm_fn, "__dict__") else None
     requested_parallelism = _configured_parallel_requests(config, "figure_parallel_requests")
     can_parallelize = callable(llm_factory) and len(batches) > 1
     worker_count = min(requested_parallelism, len(batches)) if can_parallelize else 1
+
+    def _write_enriched_sidecars(enriched_batch: dict[Path, dict]) -> None:
+        """Persist one completed figure batch immediately.
+
+        Keep the batch write atomic relative to its sidecar set, but do not wait
+        for the whole stage. This preserves completed work if a later/parallel
+        LLM batch fails.
+        """
+        temp_pairs: list[tuple[Path, Path]] = []
+        backup_pairs: list[tuple[Path, Path]] = []
+        committed: list[tuple[Path, Path]] = []
+        try:
+            for sidecar_path, enriched in enriched_batch.items():
+                tmp = sidecar_path.with_suffix(".json.tmp")
+                tmp.write_text(
+                    json.dumps(enriched, separators=(",", ":"), ensure_ascii=False),
+                    encoding="utf-8",
+                )
+                temp_pairs.append((tmp, sidecar_path))
+
+            for _tmp, final in temp_pairs:
+                bak = final.with_suffix(".json.bak")
+                if final.exists():
+                    final.replace(bak)
+                backup_pairs.append((final, bak))
+
+            for tmp, final in temp_pairs:
+                tmp.replace(final)
+                committed.append((final, final.with_suffix(".json.bak")))
+
+            for _final, bak in backup_pairs:
+                bak.unlink(missing_ok=True)
+        except Exception:
+            for final_path, backup_path in committed:
+                try:
+                    if backup_path.exists():
+                        backup_path.replace(final_path)
+                except Exception:
+                    pass
+            for tmp, _final in temp_pairs:
+                try:
+                    tmp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+            raise
 
     def _run_batch(batch_idx: int, batch: list[dict]) -> tuple[int, dict[Path, dict], bool]:
         batch_llm_fn = llm_factory() if worker_count > 1 else llm_fn
@@ -573,7 +614,20 @@ def enrich_figures_stage(
 
         return batch_idx, enriched_batch, batch_has_vision
 
-    batch_results: dict[int, tuple[dict[Path, dict], bool]] = {}
+    completed_batches = 0
+    completed_figures = 0
+    first_error: str | None = None
+
+    def _record_completed_batch(enriched_batch: dict[Path, dict], batch_has_vision: bool) -> None:
+        nonlocal completed_batches, completed_figures, n_vision_batches, n_text_batches
+        _write_enriched_sidecars(enriched_batch)
+        completed_batches += 1
+        completed_figures += len(enriched_batch)
+        if batch_has_vision:
+            n_vision_batches += 1
+        else:
+            n_text_batches += 1
+
     if worker_count > 1:
         with ThreadPoolExecutor(max_workers=worker_count) as pool:
             future_to_idx = {
@@ -583,92 +637,34 @@ def enrich_figures_stage(
             for future in as_completed(future_to_idx):
                 batch_idx = future_to_idx[future]
                 try:
-                    result_idx, enriched_batch, batch_has_vision = future.result()
+                    _result_idx, enriched_batch, batch_has_vision = future.result()
+                    _record_completed_batch(enriched_batch, batch_has_vision)
                 except llm.EnrichmentError as exc:
-                    return {
-                        "status": "failed",
-                        "detail": f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}",
-                    }
+                    if first_error is None:
+                        first_error = f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}"
                 except Exception as exc:
-                    return {
-                        "status": "failed",
-                        "detail": f"Batch {batch_idx + 1}/{len(batches)} error: {exc}",
-                    }
-                batch_results[result_idx] = (enriched_batch, batch_has_vision)
+                    if first_error is None:
+                        first_error = f"Batch {batch_idx + 1}/{len(batches)} error: {exc}"
     else:
         for batch_idx, batch in enumerate(batches):
             try:
-                result_idx, enriched_batch, batch_has_vision = _run_batch(batch_idx, batch)
+                _result_idx, enriched_batch, batch_has_vision = _run_batch(batch_idx, batch)
+                _record_completed_batch(enriched_batch, batch_has_vision)
             except llm.EnrichmentError as exc:
-                return {
-                    "status": "failed",
-                    "detail": f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}",
-                }
+                first_error = f"Batch {batch_idx + 1}/{len(batches)} LLM error: {exc}"
+                break
             except Exception as exc:
-                return {
-                    "status": "failed",
-                    "detail": f"Batch {batch_idx + 1}/{len(batches)} error: {exc}",
-                }
-            batch_results[result_idx] = (enriched_batch, batch_has_vision)
+                first_error = f"Batch {batch_idx + 1}/{len(batches)} error: {exc}"
+                break
 
-    for batch_idx in range(len(batches)):
-        enriched_batch, batch_has_vision = batch_results[batch_idx]
-        if batch_has_vision:
-            n_vision_batches += 1
-        else:
-            n_text_batches += 1
-        enriched_by_path.update(enriched_batch)
-
-    # 9. Atomic write: stage all sidecar files, then commit with rollback
-    try:
-        # Stage: write all to temp files
-        temp_pairs: list[tuple[Path, Path]] = []
-        for sidecar_path, enriched in enriched_by_path.items():
-            tmp = sidecar_path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(enriched, separators=(',', ':'), ensure_ascii=False), encoding="utf-8"
-            )
-            temp_pairs.append((tmp, sidecar_path))
-
-        # Backup originals for rollback
-        backup_pairs: list[tuple[Path, Path]] = []  # (final, backup)
-        for _tmp, final in temp_pairs:
-            bak = final.with_suffix(".json.bak")
-            if final.exists():
-                final.replace(bak)
-            backup_pairs.append((final, bak))
-
-        # Commit: rename all temps to final
-        committed: list[tuple[Path, Path]] = []
-        try:
-            for tmp, final in temp_pairs:
-                tmp.replace(final)
-                bak = final.with_suffix(".json.bak")
-                committed.append((final, bak))
-        except Exception:
-            # Rollback: restore backups for committed files
-            for final_path, backup_path in committed:
-                try:
-                    if backup_path.exists():
-                        backup_path.replace(final_path)
-                except Exception:
-                    pass
-            # Clean up remaining temp files
-            for tmp, _ in temp_pairs:
-                try:
-                    tmp.unlink(missing_ok=True)
-                except Exception:
-                    pass
-            raise
-
-        # Clean up backups on success
-        for _final, bak in backup_pairs:
-            try:
-                bak.unlink(missing_ok=True)
-            except Exception:
-                pass
-    except Exception as exc:
-        return {"status": "failed", "detail": f"Write sidecar error: {exc}"}
+    if first_error is not None:
+        return {
+            "status": "failed",
+            "detail": (
+                f"{first_error}; saved {completed_figures}/{len(stale_figures)} "
+                f"figures from {completed_batches}/{len(batches)} completed batches"
+            ),
+        }
 
     # 10. Deterministic cleanup of non-substantive/artifact figures
     deleted_count = _cleanup_non_substantive_figures(output_dir)

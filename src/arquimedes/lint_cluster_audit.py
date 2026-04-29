@@ -722,7 +722,7 @@ def _cluster_audit_prompt(root: Path, input_path: Path, bridge_input_path: Path,
     system = (
         "You are an architecture research librarian auditing the bridge concept graph.\n"
         "\n"
-        "You will receive exactly three read-only inputs: the uncovered local bridge packet, the staged bridge memory file with the existing clusters under review, and the current cluster-review audit log. "
+        "You will receive exactly three read-only inputs: the uncovered local bridge packet, the staged audit-target cluster file with the existing clusters under review, and the current cluster-review audit log. "
         "If you need more context for your decisions, do not guess. Return a JSON object that includes a context_requests array with up to 4 read-only SQL-index lookups. "
         "Use context requests only for targeted material evidence queries or a collection open_record."
         " Each request should look like {\"tool\":\"search_material_evidence\",\"kind\":\"chunk|annotation|figure\",\"material_id\":\"...\",\"query\":\"...\",\"limit\":5} "
@@ -732,14 +732,17 @@ def _cluster_audit_prompt(root: Path, input_path: Path, bridge_input_path: Path,
         f"Return exactly one final JSON object matching this schema: {deps._CLUSTER_AUDIT_DELTA_SCHEMA}\n"
         "The top-level keys must be bridge_updates, new_bridges, review_updates, new_reviews, context_requests, and _finished. "
         "Do not return legacy or summary keys such as reviews, cluster_reviews, audit_results, audit_results[].decision, proposed_changes, or rationale.\n"
-        "- Use bridge_updates for existing clusters in the staged bridge memory file. You may rename if strictly necessary, replace aliases, attach uncovered local concepts and remove materials that no longer belong.\n"
+        "- Use bridge_updates for existing clusters in the staged audit-target file. You may rename if strictly necessary, replace aliases, attach uncovered local concepts and remove materials that no longer belong.\n"
         "- Use new_bridges for genuinely new cross-material bridges built from the uncovered local concepts in the bridge packet.\n"
+        "- The staged audit-target file contains the existing cluster targets for this audit. You must produce one review row for every staged target cluster under review.\n"
+        "- If a staged target cluster has no current review row, use new_reviews with cluster_ref equal to that existing target cluster_id. Do this even when you make no bridge_updates and even when the bridge packet contains no extra bridge candidates.\n"
         "- Every new_bridges entry that you keep must have exactly one matching new_reviews row using the same temporary bridge_ref. If you decide a candidate is not a real bridge, omit both that new_bridges entry and its review row.\n"
         "- new_source_concepts is the authoritative way to attach uncovered local concepts to a reviewed bridge. If you include new_materials, it is only a convenience hint; the pipeline will derive the actual added materials from new_source_concepts.\n"
-        "The cluster_reviews file is an audit log for the next round and contains only the current review rows for the staged bridge clusters under review: what changed, why it changed, what still seems doubtful, and what is validated for now. There must be exactly one canonical audit-log row per bridge cluster when the audit is done. Status must always be open or validated.\n"
+        "The cluster_reviews file is an audit log for the next round and contains only the current review rows for the staged target clusters under review: what changed, why it changed, what still seems doubtful, and what is validated for now. There must be exactly one canonical audit-log row per target cluster when the audit is done. Status must always be open or validated.\n"
         "- Use review_updates for clusters that already have a canonical audit-log row, keyed by cluster_id.\n"
-        "- Use new_reviews for clusters that do not yet have a canonical audit-log row. When the row is for a newly proposed bridge, cluster_ref must repeat the exact bridge_ref from new_bridges.\n"
-        "There must be exactly one canonical audit-log row per bridge cluster, and review status must be open or validated.\n\n"
+        "- Use new_reviews for clusters that do not yet have a canonical audit-log row. For existing staged targets, cluster_ref must be the existing cluster_id. For newly proposed bridges, cluster_ref must repeat the exact bridge_ref from new_bridges.\n"
+        "- Empty bridge arrays inside the bridge packet do not mean the audit is complete. They only mean that file has no extra candidate bridge hints for that material; you still must review the staged target clusters and write their review rows.\n"
+        "There must be exactly one canonical audit-log row per staged target cluster, and review status must be open or validated.\n\n"
         "ABOUT CLUSTER NAMES: Bridge concepts are ambitious cross-material ideas. "
         "Only change existing names for clear improvement, and only if strictly necessary."
         "For new clustrers: Cluster names may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like history, power, space, or memory unless sharply qualified. Prefer cluster names that carry analytical charge and group local and bridge concepts together, like spatial justice, racial capitalism, architecture as care, counter-mapping methods, or collecting as spatial practice, and many others. IMP: Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.\n\n"
@@ -747,7 +750,7 @@ def _cluster_audit_prompt(root: Path, input_path: Path, bridge_input_path: Path,
         "\n"
         "## TODO\n"
         "- [ ] Read the existing review rows and recommendations.\n"
-        "- [ ] Audit the staged bridge-memory clusters: improve names or aliases when strictly necessary, attach uncovered local concepts when they clearly belong, and remove materials that clearly do not belong.\n"
+        "- [ ] Audit the staged target clusters: improve names or aliases when strictly necessary, attach uncovered local concepts when they clearly belong, and remove materials that clearly do not belong.\n"
         "- [ ] Create genuinely new bridges only for uncovered local concepts that do not fit one of the reviewed bridges.\n"
         "- [ ] Return explicit bridge and review deltas in the final JSON object.\n"
         "- [ ] Finish only when the final JSON object is complete and _finished is true.\n"
@@ -759,13 +762,16 @@ def _cluster_audit_prompt(root: Path, input_path: Path, bridge_input_path: Path,
         f"- {reviews_input_path}\n"
         f"- {bridge_input_path}\n"
         "\n"
-        "The bridge input file is JSONL and contains only the existing bridge clusters you are allowed to review. Treat it as read-only input.\n"
-        "The cluster_reviews input file contains only the current audit rows for the staged bridge clusters under review. Treat it as read-only input.\n"
+        "The audit-target input file is JSONL and contains the existing clusters you are required to review. Treat it as read-only input.\n"
+        "The cluster_reviews input file contains only the current audit rows for the staged target clusters under review. Treat it as read-only input.\n"
         "Do not invent concepts that are not present in the bridge packet.\n"
         f"Return exactly one final JSON object matching this schema: {deps._CLUSTER_AUDIT_DELTA_SCHEMA}\n"
         "Your top-level keys must be bridge_updates, new_bridges, review_updates, new_reviews, context_requests, and _finished. "
         "Set _finished to true in the final object.\n"
         "Do not return legacy or summary keys such as reviews, cluster_reviews, audit_results, audit_results[].decision, proposed_changes, or rationale.\n"
+        "You must return one review row for every staged target cluster under review. "
+        "If cluster_reviews is empty or lacks a row for a staged target, put that row in new_reviews with cluster_ref equal to the existing target cluster_id. "
+        "Empty bridge arrays inside the bridge packet do not mean there is nothing to audit.\n"
         "Do not respond until the work is complete. Return one response only, directly as JSON. "
         "Do not return markdown fences, commentary, drafts, progress updates, or partial JSON.\n"
     )
@@ -936,7 +942,7 @@ def _run_local_cluster_audit_impl(
                 if str(cluster.get("cluster_id", "")).strip() in target_cluster_ids
             ]
             packet = {
-                "bridge_memory": str(bridge_input_path),
+                "audit_targets": str(bridge_input_path),
                 "cluster_reviews": str(reviews_input_path),
                 "bridge_packets": str(bridge_packets_path) if bridge_packets_path else "",
             }

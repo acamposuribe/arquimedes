@@ -602,7 +602,7 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
         root / "derived" / "tmp" / "cluster_reviews.audit.input.jsonl",
     )
     assert "## TODO" in prompt_system
-    assert "- [ ] Audit the staged bridge-memory clusters:" in prompt_system
+    assert "- [ ] Audit the staged target clusters:" in prompt_system
     assert "- [ ] Create genuinely new bridges only for uncovered local concepts" in prompt_system
     assert "bridge_updates" in prompt_system
     assert "new_bridges" in prompt_system
@@ -610,6 +610,8 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     assert "new_reviews" in prompt_system
     assert "Every new_bridges entry that you keep must have exactly one matching new_reviews row" in prompt_system
     assert "cluster_ref must repeat the exact bridge_ref from new_bridges" in prompt_system
+    assert "cluster_ref equal to that existing target cluster_id" in prompt_system
+    assert "Empty bridge arrays inside the bridge packet do not mean the audit is complete" in prompt_system
     assert '"_finished"' in prompt_system
     assert "new_name" in prompt_system
     assert "new_aliases" in prompt_system
@@ -625,12 +627,15 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     assert "bridge_concept_clusters.audit.input.jsonl" in prompt_user
     assert "cluster_reviews.audit.input.jsonl" in prompt_user
     assert "Treat it as read-only input" in prompt_user
-    assert "only the existing bridge clusters you are allowed to review" in prompt_user
-    assert "only the current audit rows for the staged bridge clusters under review" in prompt_user
+    assert "existing clusters you are required to review" in prompt_user
+    assert "only the current audit rows for the staged target clusters under review" in prompt_user
     assert "Do not invent concepts that are not present in the bridge packet" in prompt_user
     assert "Return exactly one final JSON object matching this schema" in prompt_user
     assert "Your top-level keys must be bridge_updates" in prompt_user
     assert "Do not return legacy or summary keys" in prompt_user
+    assert "one review row for every staged target cluster" in prompt_user
+    assert "cluster_ref equal to the existing target cluster_id" in prompt_user
+    assert "Empty bridge arrays inside the bridge packet do not mean there is nothing to audit" in prompt_user
     assert "Do not respond until the work is complete" in prompt_user
     assert "PROCESS_FINISHED" not in prompt_user
     for record in first:

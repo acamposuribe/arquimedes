@@ -13,7 +13,7 @@ from arquimedes.llm import EnrichmentError
 from arquimedes.llm import parse_json_or_repair
 
 _GLOBAL_BRIDGE_DELTA_SCHEMA = '{"links_to_existing":[{"bridge_id":"required existing bridge id","member_local_clusters":[{"cluster_id":"required pending local cluster id"}],"canonical_name":"string(optional)","descriptor":"string(optional)","aliases":["strings(optional)"]}],"new_clusters":[{"canonical_name":"required string","descriptor":"short bridge description","aliases":["max 4 strings"],"member_local_clusters":[{"cluster_id":"required pending local cluster id"}]}],"_finished":true}'
-_GLOBAL_BRIDGE_REFLECTION_SCHEMA = '{"canonical_name":"string(optional)","descriptor":"string(optional)","aliases":["strings(optional)"],"bridge_takeaways":["strings"],"bridge_tensions":["strings"],"bridge_open_questions":["strings"],"helpful_new_sources":["strings"],"why_this_bridge_matters":"string","supporting_collection_reflections":[{"collection_key":"required string","why_this_collection_matters":"string"}],"_finished":true}'
+_GLOBAL_BRIDGE_REFLECTION_SCHEMA = '{"canonical_name":"string(optional)","descriptor":"string(optional)","aliases":["strings(optional)"],"bridge_takeaways":["strings"],"bridge_tensions":["strings"],"bridge_open_questions":["strings"],"helpful_new_sources":["strings"],"why_this_bridge_matters":"string","supporting_collection_reflections":[{"collection_key":"copy exact collection_key from packet supporting_collection_reflections","why_this_collection_matters":"string"}],"_finished":true}'
 _REQUIRED_GLOBAL_BRIDGE_FIELDS = ("links_to_existing", "new_clusters")
 
 
@@ -533,7 +533,12 @@ def _global_bridge_reflection_prompt(bridge_path: Path, domain: str) -> tuple[st
             "- Escribe todos los textos libres y listas en español.\n"
             "- Incluye bridge_takeaways, bridge_tensions, bridge_open_questions, helpful_new_sources y why_this_bridge_matters.\n"
             "- Trata why_this_bridge_matters como el cuerpo principal de la página: un miniensayo fundamentado de 2 a 4 párrafos, aproximadamente entre 140 y 260 palabras.\n"
+            "- Usa las reflexiones conectadas de clusters locales y las señales de colección para sintetizar ideas puente útiles como página, no para repetirlas como consignas.\n"
+            "- Prefiere entre 4 y 6 bridge_takeaways concretos y entre 2 y 4 tensiones o preguntas sustantivas cuando la evidencia lo permita.\n"
+            "- helpful_new_sources debe priorizar normas, reglamentos, precedentes construidos, comparables, detalles, manuales técnicos y documentación de fabricante cuando ayuden a resolver lagunas reales.\n"
             "- Incluye supporting_collection_reflections con una entrada por colección conectada y una explicación breve de por qué esa colección importa para este puente.\n"
+            "- En supporting_collection_reflections, collection_key debe copiarse exactamente de supporting_collection_reflections[].collection_key del paquete.\n"
+            "- No inventes collection_key y no uses bridge_id, slug de puente, cluster_id, slug de concepto, nombre de archivo ni wiki_path como collection_key.\n"
             "- Devuelve solo JSON estructurado una vez, al final.\n"
         )
         user = (
@@ -555,6 +560,11 @@ def _global_bridge_reflection_prompt(bridge_path: Path, domain: str) -> tuple[st
         "- Treat why_this_bridge_matters as the main prose body of the bridge page: a grounded mini-essay in 2 to 4 paragraphs, roughly 140 to 260 words.\n"
         "- Include supporting_collection_reflections with one entry per connected collection and a concise explanation of why that collection matters to this bridge.\n"
         "- Use the connected local-cluster reflections and collection signals to write page-worthy bridge synthesis, not just short labels.\n"
+        "- Prefer 4 to 6 concrete bridge_takeaways and 2 to 4 substantive bridge_tensions or bridge_open_questions when the evidence supports them.\n"
+        "- helpful_new_sources should prioritize standards, regulations, built precedents, comparables, details, technical manuals, and manufacturer documentation when they help resolve real gaps.\n"
+        "- In supporting_collection_reflections, collection_key must be copied exactly from supporting_collection_reflections[].collection_key in the packet.\n"
+        "- Do not invent collection_key values. Do not use bridge_id, bridge slugs, cluster_id, concept slugs, filenames, or wiki_path values as collection_key.\n"
+        "- Valid collection_key values look like research/Intersectionality or research/Feminism and Decolonial thinking.\n"
         "- Return structured JSON only once, at the end.\n"
     )
     user = (
@@ -659,7 +669,7 @@ def _normalize_bridge_collection_reflections(value: Any, valid_keys: set[str]) -
         if not collection_key:
             raise EnrichmentError(f"supporting_collection_reflections[{idx}] is missing collection_key")
         if collection_key not in valid_keys:
-            raise EnrichmentError(f"supporting_collection_reflections[{idx}] references unknown collection_key '{collection_key}'")
+            continue
         if collection_key in seen:
             continue
         seen.add(collection_key)

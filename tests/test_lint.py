@@ -3903,6 +3903,10 @@ def test_global_bridge_reflection_prompt_requests_page_worthy_bridge_essay():
     assert "grounded mini-essay" in system
     assert "2 to 4 paragraphs" in system
     assert "supporting_collection_reflections" in system
+    assert "copy exact collection_key from packet" in system
+    assert "Do not invent collection_key values" in system
+    assert "4 to 6 concrete bridge_takeaways" in system
+    assert "helpful_new_sources should prioritize standards" in system
     assert "page-worthy bridge synthesis" in system
     assert "bridge.packet.json" in user
 
@@ -4735,6 +4739,68 @@ def test_global_bridge_reflection_packet_allows_member_collection_keys_without_c
     assert count == 1
     assert rows[0]["supporting_collection_reflections"][0]["collection_key"] == "research/Intersectionality"
     assert rows[0]["supporting_collection_reflections"][0]["why_this_collection_matters"] == "It supplies the core legal and political method."
+
+
+def test_global_bridge_reflection_ignores_unknown_collection_signal_keys(tmp_path, monkeypatch):
+    from arquimedes.lint_global_bridge import _run_global_bridge_reflections
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    bridge = {
+        "bridge_id": "global_bridge__research__intersectionality",
+        "domain": "research",
+        "canonical_name": "Intersectionality",
+        "slug": "intersectionality",
+        "descriptor": "Category failure across institutions.",
+        "aliases": [],
+        "member_local_clusters": [
+            {
+                "cluster_id": "research__Intersectionality__local_0001",
+                "collection_key": "research/Intersectionality",
+                "canonical_name": "Single-axis frameworks",
+                "descriptor": "Single-axis erasure.",
+                "reflection": {"main_takeaways": ["Categories erase compounded harm."]},
+            }
+        ],
+        "supporting_collection_reflections": [],
+        "why_this_bridge_matters": "",
+    }
+
+    def llm_factory(_stage: str):
+        def fn(_system: str, _messages: list[dict]) -> str:
+            return json.dumps(
+                {
+                    "bridge_takeaways": ["Intersectionality exposes category failure."],
+                    "bridge_tensions": [],
+                    "bridge_open_questions": [],
+                    "helpful_new_sources": [],
+                    "why_this_bridge_matters": "It shows how institutional categories erase compounded harm.",
+                    "supporting_collection_reflections": [
+                        {
+                            "collection_key": "colonial-knowledge-regimes",
+                            "why_this_collection_matters": "This is a bridge slug, not a collection key.",
+                        },
+                        {
+                            "collection_key": "research/Intersectionality",
+                            "why_this_collection_matters": "It supplies the core method.",
+                        },
+                    ],
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    rows, count = _run_global_bridge_reflections(
+        root,
+        [bridge],
+        {"global_bridge__research__intersectionality"},
+        llm_factory,
+        domain="research",
+    )
+
+    assert count == 1
+    assert [row["collection_key"] for row in rows[0]["supporting_collection_reflections"]] == ["research/Intersectionality"]
 
 
 def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):

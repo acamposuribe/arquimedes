@@ -61,11 +61,17 @@ def _cluster_audit_parsed_response_path(root: Path) -> Path:
     return root / deps.LINT_DIR / "cluster_audit_last_response.parsed.json"
 
 
+def _cluster_audit_failure_path(root: Path) -> Path:
+    deps = _deps()
+    return root / deps.LINT_DIR / "cluster_audit_failure.json"
+
+
 def _cleanup_cluster_audit_debug_artifacts(root: Path) -> None:
     for path in (
         _cluster_audit_raw_response_path(root, "initial"),
         _cluster_audit_raw_response_path(root, "final"),
         _cluster_audit_parsed_response_path(root),
+        _cluster_audit_failure_path(root),
     ):
         try:
             path.unlink(missing_ok=True)
@@ -221,6 +227,25 @@ def _cluster_audit_pending_local_changed(
         return False, current_fingerprint
 
     return True, current_fingerprint
+
+
+def _cluster_audit_output_error(root: Path, message: str) -> EnrichmentError:
+    deps = _deps()
+    paths = {
+        "initial_raw_response": str(_cluster_audit_raw_response_path(root, "initial")),
+        "final_raw_response": str(_cluster_audit_raw_response_path(root, "final")),
+        "parsed_response": str(_cluster_audit_parsed_response_path(root)),
+        "failure": str(_cluster_audit_failure_path(root)),
+    }
+    failure_path = _cluster_audit_failure_path(root)
+    deps._write_json(failure_path, {"error": message, "artifacts": paths})
+    return EnrichmentError(
+        f"{message}; preserved cluster-audit artifacts: "
+        f"initial={paths['initial_raw_response']} "
+        f"final={paths['final_raw_response']} "
+        f"parsed={paths['parsed_response']} "
+        f"failure={paths['failure']}"
+    )
 
 
 def _cluster_audit_target_clusters(
@@ -705,6 +730,8 @@ def _cluster_audit_prompt(root: Path, input_path: Path, bridge_input_path: Path,
         "You will get only one read-only context round, so request everything you need at once.\n"
         "\n"
         f"Return exactly one final JSON object matching this schema: {deps._CLUSTER_AUDIT_DELTA_SCHEMA}\n"
+        "The top-level keys must be bridge_updates, new_bridges, review_updates, new_reviews, context_requests, and _finished. "
+        "Do not return legacy or summary keys such as reviews, cluster_reviews, audit_results, audit_results[].decision, proposed_changes, or rationale.\n"
         "- Use bridge_updates for existing clusters in the staged bridge memory file. You may rename if strictly necessary, replace aliases, attach uncovered local concepts and remove materials that no longer belong.\n"
         "- Use new_bridges for genuinely new cross-material bridges built from the uncovered local concepts in the bridge packet.\n"
         "- Every new_bridges entry that you keep must have exactly one matching new_reviews row using the same temporary bridge_ref. If you decide a candidate is not a real bridge, omit both that new_bridges entry and its review row.\n"
@@ -735,6 +762,10 @@ def _cluster_audit_prompt(root: Path, input_path: Path, bridge_input_path: Path,
         "The bridge input file is JSONL and contains only the existing bridge clusters you are allowed to review. Treat it as read-only input.\n"
         "The cluster_reviews input file contains only the current audit rows for the staged bridge clusters under review. Treat it as read-only input.\n"
         "Do not invent concepts that are not present in the bridge packet.\n"
+        f"Return exactly one final JSON object matching this schema: {deps._CLUSTER_AUDIT_DELTA_SCHEMA}\n"
+        "Your top-level keys must be bridge_updates, new_bridges, review_updates, new_reviews, context_requests, and _finished. "
+        "Set _finished to true in the final object.\n"
+        "Do not return legacy or summary keys such as reviews, cluster_reviews, audit_results, audit_results[].decision, proposed_changes, or rationale.\n"
         "Return final JSON only.\n"
     )
     return system, user
@@ -930,9 +961,9 @@ def _run_local_cluster_audit_impl(
             )
             deps._write_json(deps._cluster_audit_parsed_response_path(scope_root), parsed if isinstance(parsed, dict) else {"raw": parsed})
             if not isinstance(parsed, dict):
-                raise EnrichmentError("Cluster audit output must be a JSON object")
+                raise _cluster_audit_output_error(scope_root, "Cluster audit output must be a JSON object")
             if parsed.get("_finished") is not True:
-                raise EnrichmentError("Cluster audit output missing _finished=true")
+                raise _cluster_audit_output_error(scope_root, "Cluster audit output missing _finished=true")
             parsed.pop("_finished", None)
 
             bridge_updates = parsed.get("bridge_updates", [])

@@ -620,6 +620,7 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     assert "do not guess" in prompt_system
     assert "context_requests array with up to 4 read-only SQL-index lookups" in prompt_system
     assert "You will get only one read-only context round" in prompt_system
+    assert "Do not return legacy or summary keys" in prompt_system
     assert "Read these files:" in prompt_user
     assert "bridge_concept_clusters.audit.input.jsonl" in prompt_user
     assert "cluster_reviews.audit.input.jsonl" in prompt_user
@@ -627,6 +628,9 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     assert "only the existing bridge clusters you are allowed to review" in prompt_user
     assert "only the current audit rows for the staged bridge clusters under review" in prompt_user
     assert "Do not invent concepts that are not present in the bridge packet" in prompt_user
+    assert "Return exactly one final JSON object matching this schema" in prompt_user
+    assert "Your top-level keys must be bridge_updates" in prompt_user
+    assert "Do not return legacy or summary keys" in prompt_user
     assert "Return final JSON only." in prompt_user
     assert "PROCESS_FINISHED" not in prompt_user
     for record in first:
@@ -818,6 +822,67 @@ def test_local_cluster_audit_writes_collection_scoped_findings(tmp_path, monkeyp
     assert reviews[0]["wiki_path"] == "wiki/research/papers/concepts/archive-and-space.md"
     assert audit_stamp["cluster_reviews"] == 1
     assert [row["cluster_id"] for row in stored] == ["research__papers__local_0001"]
+
+
+def test_local_cluster_audit_preserves_failed_llm_artifacts(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive and Space",
+        "slug": "archive-and-space",
+        "material_ids": ["mat_001"],
+        "source_concepts": [
+            {
+                "material_id": "mat_001",
+                "concept_name": "archive and space",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["archive and space"],
+                "confidence": 0.9,
+            }
+        ],
+        "wiki_path": "wiki/research/papers/concepts/archive-and-space.md",
+    }
+    _write_jsonl(root / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl", [cluster])
+
+    monkeypatch.setattr(
+        "arquimedes.lint._local_rows_in_scope_not_in_clusters",
+        lambda *_args, **_kwargs: (
+            [("archive and space", "archive and space", "mat_001", "high", "[1]", '["archive and space"]', 0.9, "local", "")],
+            [("mat_001", "One", "Summary", '["archive"]')],
+        ),
+    )
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            return json.dumps({
+                "bridge_updates": [],
+                "new_bridges": [],
+                "review_updates": [],
+                "new_reviews": [],
+            })
+
+        return fn
+
+    material_info = _build_material_info(root, [{"material_id": "mat_001"}])
+
+    with pytest.raises(EnrichmentError, match="preserved cluster-audit artifacts"):
+        _run_cluster_audit(root, [cluster], material_info, "test-route", llm_factory)
+
+    scope_root = root / "derived" / "collections" / "research__papers"
+    raw_path = scope_root / "derived" / "lint" / "cluster_audit_last_response.initial.txt"
+    parsed_path = scope_root / "derived" / "lint" / "cluster_audit_last_response.parsed.json"
+    failure_path = scope_root / "derived" / "lint" / "cluster_audit_failure.json"
+    assert raw_path.exists()
+    assert parsed_path.exists()
+    assert failure_path.exists()
+    assert "_finished" not in raw_path.read_text(encoding="utf-8")
+    failure = json.loads(failure_path.read_text(encoding="utf-8"))
+    assert failure["error"] == "Cluster audit output missing _finished=true"
+    assert failure["artifacts"]["initial_raw_response"] == str(raw_path)
 
 
 def test_local_cluster_audit_skips_busy_collection_scope(tmp_path, monkeypatch):

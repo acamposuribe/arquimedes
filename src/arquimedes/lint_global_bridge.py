@@ -1,16 +1,19 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 from typing import Any
 
 from arquimedes import practice_prompts
+from arquimedes.config import load_config
 from arquimedes.domain_profiles import is_practice_domain
 from arquimedes.llm import EnrichmentError
 from arquimedes.llm import parse_json_or_repair
 
-_GLOBAL_BRIDGE_DELTA_SCHEMA = '{"links_to_existing":[{"bridge_id":"required existing bridge id","member_local_clusters":[{"cluster_id":"required pending local cluster id"}],"canonical_name":"string(optional)","descriptor":"string(optional)","aliases":["strings(optional)"],"bridge_takeaways":["strings(optional)"],"bridge_tensions":["strings(optional)"],"bridge_open_questions":["strings(optional)"],"helpful_new_sources":["strings(optional)"],"why_this_bridge_matters":"string(optional)"}],"new_clusters":[{"canonical_name":"required string","descriptor":"short bridge description","aliases":["max 4 strings"],"member_local_clusters":[{"cluster_id":"required pending local cluster id"}],"bridge_takeaways":["strings"],"bridge_tensions":["strings"],"bridge_open_questions":["strings"],"helpful_new_sources":["strings"],"why_this_bridge_matters":"string"}],"_finished":true}'
+_GLOBAL_BRIDGE_DELTA_SCHEMA = '{"links_to_existing":[{"bridge_id":"required existing bridge id","member_local_clusters":[{"cluster_id":"required pending local cluster id"}],"canonical_name":"string(optional)","descriptor":"string(optional)","aliases":["strings(optional)"]}],"new_clusters":[{"canonical_name":"required string","descriptor":"short bridge description","aliases":["max 4 strings"],"member_local_clusters":[{"cluster_id":"required pending local cluster id"}]}],"_finished":true}'
+_GLOBAL_BRIDGE_REFLECTION_SCHEMA = '{"canonical_name":"string(optional)","descriptor":"string(optional)","aliases":["strings(optional)"],"bridge_takeaways":["strings"],"bridge_tensions":["strings"],"bridge_open_questions":["strings"],"helpful_new_sources":["strings"],"why_this_bridge_matters":"string","supporting_collection_reflections":[{"collection_key":"required string","why_this_collection_matters":"string"}],"_finished":true}'
 _REQUIRED_GLOBAL_BRIDGE_FIELDS = ("links_to_existing", "new_clusters")
 
 
@@ -161,11 +164,10 @@ def _collection_context_rows(collection_refs: list[dict]) -> list[dict]:
         rows.append(
             {
                 "collection_key": collection_key,
-                "domain": domain,
                 "collection": collection,
                 "title": collection,
                 "main_takeaways": deps._dedupe_strings(deps._safe_list(row.get("main_takeaways", [])))[:4],
-                "main_tensions": deps._dedupe_strings(deps._safe_list(row.get("main_tensions", [])))[:4],
+                "main_tensions": deps._dedupe_strings(deps._safe_list(row.get("main_tensions", [])))[:2],
                 "why_this_collection_matters": str(row.get("why_this_collection_matters", "")).strip(),
             }
         )
@@ -271,6 +273,91 @@ def _bridge_memory_snapshot(
     return sorted(rows, key=lambda row: (row["canonical_name"].casefold(), row["bridge_id"]))
 
 
+def _compact_reflection_snapshot(reflection: dict) -> dict:
+    deps = _deps()
+    return {
+        "main_takeaways": deps._dedupe_strings(deps._safe_list(reflection.get("main_takeaways", [])))[:3],
+        "main_tensions": deps._dedupe_strings(deps._safe_list(reflection.get("main_tensions", [])))[:1],
+        "why_this_concept_matters": str(reflection.get("why_this_concept_matters", "")).strip(),
+    }
+
+
+def _bridge_member_reflection_snapshot(reflection: Any) -> dict:
+    if not isinstance(reflection, dict):
+        return {}
+    deps = _deps()
+    return {
+        "main_takeaways": deps._dedupe_strings(deps._safe_list(reflection.get("main_takeaways", []))),
+        "main_tensions": deps._dedupe_strings(deps._safe_list(reflection.get("main_tensions", [])))[:1],
+        "why_this_concept_matters": str(reflection.get("why_this_concept_matters", "")).strip(),
+    }
+
+
+def _bridge_collection_reflection_snapshot(collection: dict) -> dict:
+    deps = _deps()
+    return {
+        "collection_key": str(collection.get("collection_key", "")).strip(),
+        "collection": str(collection.get("collection", "")).strip(),
+        "main_takeaways": deps._dedupe_strings(deps._safe_list(collection.get("main_takeaways", [])))[:3],
+        "why_this_collection_matters": str(collection.get("why_this_collection_matters", "")).strip(),
+    }
+
+
+def _compact_local_cluster_snapshot(row: dict) -> dict:
+    deps = _deps()
+    output = {
+        "cluster_id": str(row.get("cluster_id", "")).strip(),
+        "collection_key": str(row.get("collection_key", "")).strip(),
+        "canonical_name": str(row.get("canonical_name", "")).strip(),
+        "descriptor": str(row.get("descriptor", "")).strip(),
+    }
+    reflection = row.get("reflection")
+    if isinstance(reflection, dict):
+        output["reflection"] = _compact_reflection_snapshot(reflection)
+    return output
+
+
+def _bridge_link_memory_snapshot(clusters: list[dict], local_cluster_index: dict[str, dict], *, domain: str | None = None) -> list[dict]:
+    deps = _deps()
+    target_domain = _bridge_domain(domain) if domain else None
+    rows = []
+    for row in clusters:
+        if not isinstance(row, dict):
+            continue
+        bridge_id = _safe_cluster_id(row)
+        if not bridge_id:
+            continue
+        bridge_domain = _bridge_domain(str(row.get("domain", "")).strip()) if str(row.get("domain", "")).strip() else ""
+        if target_domain and bridge_domain and bridge_domain != target_domain:
+            continue
+        members = []
+        for member in _dict_rows(row.get("member_local_clusters", [])):
+            cluster_id = str(member.get("cluster_id", "")).strip()
+            if not cluster_id:
+                continue
+            current = local_cluster_index.get(cluster_id, member)
+            members.append(
+                {
+                    "cluster_id": cluster_id,
+                    "collection_key": str(current.get("collection_key", "")).strip(),
+                    "canonical_name": str(current.get("canonical_name", "")).strip(),
+                    "descriptor": str(current.get("descriptor", "")).strip(),
+                }
+            )
+        rows.append(
+            {
+                "bridge_id": bridge_id,
+                "domain": bridge_domain,
+                "canonical_name": str(row.get("canonical_name", "")).strip(),
+                "descriptor": str(row.get("descriptor", "")).strip(),
+                "aliases": deps._dedupe_strings(deps._safe_list(row.get("aliases", [])))[:3],
+                "why_this_bridge_matters": str(row.get("why_this_bridge_matters", "")).strip(),
+                "member_local_clusters": members,
+            }
+        )
+    return sorted(rows, key=lambda row: (row["canonical_name"].casefold(), row["bridge_id"]))
+
+
 def _global_bridge_inputs(
     root: Path,
     local_clusters: list[dict],
@@ -328,7 +415,10 @@ def _global_bridge_inputs(
     pending_collection_keys = {row["collection_key"] for row in pending_local_clusters}
     packet = {
         "kind": "global_bridge_packet",
-        "pending_local_clusters": pending_local_clusters,
+        "pending_local_clusters": [
+            _compact_local_cluster_snapshot(row)
+            for row in pending_local_clusters
+        ],
         "collection_context": [
             collection_context_by_key[key]
             for key in sorted(pending_collection_keys)
@@ -337,10 +427,9 @@ def _global_bridge_inputs(
     }
     memory = {
         "kind": "global_bridge_memory",
-        "bridges": _bridge_memory_snapshot(
+        "bridges": _bridge_link_memory_snapshot(
             existing_bridges,
             local_cluster_index,
-            collection_context_by_key,
             domain=target_domain,
         ),
     }
@@ -404,18 +493,15 @@ def _global_bridge_prompt(packet_path: Path, memory_path: Path, domain: str) -> 
         "\n"
         "Rules:\n"
         "- Work only with the pending collection-local clusters in the packet. Do not invent members that are not present there.\n"
+        "- This pass only decides bridge membership. Do not write bridge reflections, essays, takeaways, tensions, questions, or source recommendations here.\n"
         "- Use the existing global bridge memory only to decide whether pending local clusters belong to an existing bridge or should create a new bridge.\n"
         f"- Every bridge in this pass must stay inside the {domain.title()} domain. Never connect Research and Practice in the same bridge.\n"
         "- Prefer bridges that connect multiple collections when the conceptual relation is real.\n"
         "- It is acceptable to create a within-collection bridge only when it synthesizes at least three local clusters into a genuinely broader learning, position, or perspective.\n"
         "- Do not rely on name similarity alone. Use descriptors, local-cluster reflections, and collection context to judge semantic fit.\n"
         "- Global bridge canonicals should be broad, analytically meaningful, and useful as shared conceptual pages across the whole knowledge system. Keep the total number of bridges limited to the most significant and widely applicable ones.\n"
-        "- Each bridge must also include bridge takeaways, bridge tensions, bridge open questions, helpful new sources, and why the bridge matters.\n"
-        "- Treat why_this_bridge_matters as the main prose body of the bridge page. Write it as a grounded mini-essay in 2 to 4 paragraphs, roughly 140 to 260 words, explaining the shared problem, what becomes legible only at the bridge level, and why the connector matters across collections.\n"
-        "- Use the full connected local-cluster reflections and collection signals in the packet and memory. Synthesize them into bridge-level insight instead of repeating them as slogans.\n"
-        "- Prefer 4 to 6 concrete bridge takeaways and 2 to 4 substantive tensions or questions when the evidence supports them.\n"
-        "- Prefer refocusing an existing bridge with links_to_existing when its title, descriptor, aliases, or bridge-level synthesis can be adjusted to honestly include the pending clusters.\n"
-        "- links_to_existing may update an existing bridge's name, descriptor, aliases, and bridge-level synthesis if the pending members materially change it.\n"
+        "- Prefer refocusing an existing bridge with links_to_existing when its title, descriptor, or aliases can be adjusted to honestly include the pending clusters.\n"
+        "- links_to_existing may update an existing bridge's name, descriptor, and aliases if the pending members materially change its focus.\n"
         "- New bridges with members from one collection must include at least 4 local clusters. New bridges spanning multiple collections must include at least 3 local clusters.\n"
         "- Complete the full clustering pass before you answer. Return structured JSON only once, at the end.\n"
     )
@@ -423,11 +509,57 @@ def _global_bridge_prompt(packet_path: Path, memory_path: Path, domain: str) -> 
         f"Read the pending global bridge packet from {packet_path}.\n"
         f"Read the existing global bridge memory from {memory_path}.\n"
         "Treat both files as source material for the current bridge-clustering pass.\n"
-        "Use the connected local-cluster reflections and collection signals to write page-worthy bridge synthesis, not just short labels.\n"
+        "Use the compact local-cluster reflections and collection signals only to decide membership.\n"
         "Use links_to_existing to attach pending local clusters to existing bridges by bridge_id.\n"
         "Use new_clusters when pending local clusters should form a new global bridge instead.\n"
         "Only reference collection-local cluster ids that appear in the pending packet.\n"
         f"Return exactly one final JSON object matching this schema: {_GLOBAL_BRIDGE_DELTA_SCHEMA}\n"
+        "Do not respond until the work is complete. Return one response only, directly as JSON, with _finished set to true. "
+        "Do not return markdown fences, commentary, drafts, progress updates, or partial JSON.\n"
+    )
+    return system, user
+
+
+def _global_bridge_reflection_prompt(bridge_path: Path, domain: str) -> tuple[str, str]:
+    if is_practice_domain(domain):
+        system = (
+            f"Eres una bibliotecaria de arquitectura orientada a la práctica. Estás escribiendo la reflexión de un puente global del dominio {domain.title()}.\n"
+            "\n"
+            "Esquema de salida:\n"
+            f"{_GLOBAL_BRIDGE_REFLECTION_SCHEMA}\n"
+            "\n"
+            "Reglas:\n"
+            "- Lee un único paquete de puente y sintetiza solo ese puente.\n"
+            "- Escribe todos los textos libres y listas en español.\n"
+            "- Incluye bridge_takeaways, bridge_tensions, bridge_open_questions, helpful_new_sources y why_this_bridge_matters.\n"
+            "- Trata why_this_bridge_matters como el cuerpo principal de la página: un miniensayo fundamentado de 2 a 4 párrafos, aproximadamente entre 140 y 260 palabras.\n"
+            "- Incluye supporting_collection_reflections con una entrada por colección conectada y una explicación breve de por qué esa colección importa para este puente.\n"
+            "- Devuelve solo JSON estructurado una vez, al final.\n"
+        )
+        user = (
+            f"Lee el paquete de reflexión de puente en {bridge_path}.\n"
+            f"Devuelve exactamente un único objeto JSON final que siga este esquema: {_GLOBAL_BRIDGE_REFLECTION_SCHEMA}\n"
+            "No respondas hasta que el trabajo esté completo. Devuelve una sola respuesta, directamente como JSON, con _finished en true. "
+            "No devuelvas markdown, comentarios, borradores ni JSON parcial.\n"
+        )
+        return system, user
+    system = (
+        f"You are an architecture research librarian. You are writing the reflection for one {domain.title()} global bridge.\n"
+        "\n"
+        "Output schema:\n"
+        f"{_GLOBAL_BRIDGE_REFLECTION_SCHEMA}\n"
+        "\n"
+        "Rules:\n"
+        "- Read one bridge packet and synthesize only that bridge.\n"
+        "- Include bridge_takeaways, bridge_tensions, bridge_open_questions, helpful_new_sources, and why_this_bridge_matters.\n"
+        "- Treat why_this_bridge_matters as the main prose body of the bridge page: a grounded mini-essay in 2 to 4 paragraphs, roughly 140 to 260 words.\n"
+        "- Include supporting_collection_reflections with one entry per connected collection and a concise explanation of why that collection matters to this bridge.\n"
+        "- Use the connected local-cluster reflections and collection signals to write page-worthy bridge synthesis, not just short labels.\n"
+        "- Return structured JSON only once, at the end.\n"
+    )
+    user = (
+        f"Read the global bridge reflection packet from {bridge_path}.\n"
+        f"Return exactly one final JSON object matching this schema: {_GLOBAL_BRIDGE_REFLECTION_SCHEMA}\n"
         "Do not respond until the work is complete. Return one response only, directly as JSON, with _finished set to true. "
         "Do not return markdown fences, commentary, drafts, progress updates, or partial JSON.\n"
     )
@@ -493,11 +625,6 @@ def _normalize_global_bridge_response(parsed: Any, existing_bridges: list[dict],
                 "canonical_name": str(row.get("canonical_name", "")).strip(),
                 "descriptor": str(row.get("descriptor", "")).strip(),
                 "aliases": _optional_string_list(row.get("aliases"), label=f"links_to_existing[{idx}].aliases"),
-                "bridge_takeaways": _optional_string_list(row.get("bridge_takeaways"), label=f"links_to_existing[{idx}].bridge_takeaways"),
-                "bridge_tensions": _optional_string_list(row.get("bridge_tensions"), label=f"links_to_existing[{idx}].bridge_tensions"),
-                "bridge_open_questions": _optional_string_list(row.get("bridge_open_questions"), label=f"links_to_existing[{idx}].bridge_open_questions"),
-                "helpful_new_sources": _optional_string_list(row.get("helpful_new_sources"), label=f"links_to_existing[{idx}].helpful_new_sources"),
-                "why_this_bridge_matters": str(row.get("why_this_bridge_matters", "")).strip(),
             }
         )
     normalized_new = []
@@ -513,14 +640,57 @@ def _normalize_global_bridge_response(parsed: Any, existing_bridges: list[dict],
                 "descriptor": str(row.get("descriptor", "")).strip(),
                 "aliases": _optional_string_list(row.get("aliases"), label=f"new_clusters[{idx}].aliases"),
                 "member_local_clusters": _normalize_bridge_member_refs(row.get("member_local_clusters"), pending_ids, label=f"new_clusters[{idx}]"),
-                "bridge_takeaways": _optional_string_list(row.get("bridge_takeaways"), label=f"new_clusters[{idx}].bridge_takeaways"),
-                "bridge_tensions": _optional_string_list(row.get("bridge_tensions"), label=f"new_clusters[{idx}].bridge_tensions"),
-                "bridge_open_questions": _optional_string_list(row.get("bridge_open_questions"), label=f"new_clusters[{idx}].bridge_open_questions"),
-                "helpful_new_sources": _optional_string_list(row.get("helpful_new_sources"), label=f"new_clusters[{idx}].helpful_new_sources"),
-                "why_this_bridge_matters": str(row.get("why_this_bridge_matters", "")).strip(),
             }
         )
     return {"links_to_existing": normalized_links, "new_clusters": normalized_new}
+
+
+def _normalize_bridge_collection_reflections(value: Any, valid_keys: set[str]) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise EnrichmentError("supporting_collection_reflections must be a list")
+    rows = []
+    seen = set()
+    for idx, row in enumerate(value, start=1):
+        if not isinstance(row, dict):
+            raise EnrichmentError(f"supporting_collection_reflections[{idx}] must be an object")
+        collection_key = str(row.get("collection_key", "")).strip()
+        if not collection_key:
+            raise EnrichmentError(f"supporting_collection_reflections[{idx}] is missing collection_key")
+        if collection_key not in valid_keys:
+            raise EnrichmentError(f"supporting_collection_reflections[{idx}] references unknown collection_key '{collection_key}'")
+        if collection_key in seen:
+            continue
+        seen.add(collection_key)
+        rows.append(
+            {
+                "collection_key": collection_key,
+                "why_this_collection_matters": str(row.get("why_this_collection_matters", "")).strip(),
+            }
+        )
+    return rows
+
+
+def _normalize_global_bridge_reflection_response(parsed: Any, valid_collection_keys: set[str]) -> dict:
+    if not isinstance(parsed, dict):
+        raise EnrichmentError("Global bridge reflection output must be a JSON object")
+    if parsed.get("_finished") is not True:
+        raise EnrichmentError("Global bridge reflection output missing _finished=true")
+    return {
+        "canonical_name": str(parsed.get("canonical_name", "")).strip(),
+        "descriptor": str(parsed.get("descriptor", "")).strip(),
+        "aliases": _optional_string_list(parsed.get("aliases"), label="aliases"),
+        "bridge_takeaways": _optional_string_list(parsed.get("bridge_takeaways"), label="bridge_takeaways"),
+        "bridge_tensions": _optional_string_list(parsed.get("bridge_tensions"), label="bridge_tensions"),
+        "bridge_open_questions": _optional_string_list(parsed.get("bridge_open_questions"), label="bridge_open_questions"),
+        "helpful_new_sources": _optional_string_list(parsed.get("helpful_new_sources"), label="helpful_new_sources"),
+        "why_this_bridge_matters": str(parsed.get("why_this_bridge_matters", "")).strip(),
+        "supporting_collection_reflections": _normalize_bridge_collection_reflections(
+            parsed.get("supporting_collection_reflections"),
+            valid_collection_keys,
+        ),
+    }
 
 
 def _member_cluster_row(cluster: dict) -> dict:
@@ -620,11 +790,6 @@ def _finalize_global_bridges(
             "canonical_name",
             "descriptor",
             "aliases",
-            "bridge_takeaways",
-            "bridge_tensions",
-            "bridge_open_questions",
-            "helpful_new_sources",
-            "why_this_bridge_matters",
         ):
             value = row.get(field)
             if value:
@@ -639,11 +804,11 @@ def _finalize_global_bridges(
                 "descriptor": row.get("descriptor", ""),
                 "aliases": row.get("aliases", []),
                 "member_cluster_ids": [member["cluster_id"] for member in row.get("member_local_clusters", [])],
-                "bridge_takeaways": row.get("bridge_takeaways", []),
-                "bridge_tensions": row.get("bridge_tensions", []),
-                "bridge_open_questions": row.get("bridge_open_questions", []),
-                "helpful_new_sources": row.get("helpful_new_sources", []),
-                "why_this_bridge_matters": row.get("why_this_bridge_matters", ""),
+                "bridge_takeaways": [],
+                "bridge_tensions": [],
+                "bridge_open_questions": [],
+                "helpful_new_sources": [],
+                "why_this_bridge_matters": "",
             }
         )
     rows = [*working, *new_rows]
@@ -745,6 +910,178 @@ def _represented_pending_cluster_ids(bridges: list[dict], pending_ids: set[str])
             if cluster_id in pending_ids:
                 represented.add(cluster_id)
     return represented
+
+
+def _bridge_reflection_packet_path(root: Path, domain: str, bridge_id: str) -> Path:
+    deps = _deps()
+    safe_name = deps.slugify(bridge_id.removeprefix(f"global_bridge__{_bridge_domain(domain)}__")) or deps.slugify(bridge_id) or "bridge"
+    return _global_bridge_stage_dir(root, domain) / "reflections" / f"{safe_name}.packet.json"
+
+
+def _bridge_reflection_fingerprint(row: dict) -> str:
+    deps = _deps()
+    return deps.canonical_hash(
+        {
+            "bridge_id": str(row.get("bridge_id", "")).strip(),
+            "canonical_name": str(row.get("canonical_name", "")).strip(),
+            "descriptor": str(row.get("descriptor", "")).strip(),
+            "aliases": deps._dedupe_strings(deps._safe_list(row.get("aliases", []))),
+            "member_cluster_ids": [
+                str(member.get("cluster_id", "")).strip()
+                for member in _dict_rows(row.get("member_local_clusters", []))
+                if str(member.get("cluster_id", "")).strip()
+            ],
+            "member_reflections": [
+                {
+                    "cluster_id": str(member.get("cluster_id", "")).strip(),
+                    "reflection": member.get("reflection", {}),
+                }
+                for member in _dict_rows(row.get("member_local_clusters", []))
+                if str(member.get("cluster_id", "")).strip()
+            ],
+            "collection_keys": deps._safe_list(row.get("domain_collection_keys", [])),
+            "supporting_collection_reflections": row.get("supporting_collection_reflections", []),
+        }
+    )
+
+
+def _bridge_reflection_packet(row: dict) -> dict:
+    deps = _deps()
+    return {
+        "kind": "global_bridge_reflection_packet",
+        "bridge_id": str(row.get("bridge_id", "")).strip(),
+        "domain": str(row.get("domain", "")).strip(),
+        "canonical_name": str(row.get("canonical_name", "")).strip(),
+        "descriptor": str(row.get("descriptor", "")).strip(),
+        "aliases": deps._dedupe_strings(deps._safe_list(row.get("aliases", [])))[:8],
+        "member_local_clusters": [
+            {
+                "cluster_id": str(member.get("cluster_id", "")).strip(),
+                "collection_key": str(member.get("collection_key", "")).strip(),
+                "canonical_name": str(member.get("canonical_name", "")).strip(),
+                "descriptor": str(member.get("descriptor", "")).strip(),
+                "reflection": _bridge_member_reflection_snapshot(member.get("reflection", {})),
+            }
+            for member in _dict_rows(row.get("member_local_clusters", []))
+            if str(member.get("cluster_id", "")).strip()
+        ],
+        "supporting_collection_reflections": [
+            _bridge_collection_reflection_snapshot(collection)
+            for collection in _dict_rows(row.get("supporting_collection_reflections", []))
+            if str(collection.get("collection_key", "")).strip()
+        ],
+        "prior_reflection": {
+            "bridge_takeaways": deps._safe_list(row.get("bridge_takeaways", [])),
+            "bridge_tensions": deps._safe_list(row.get("bridge_tensions", [])),
+            "bridge_open_questions": deps._safe_list(row.get("bridge_open_questions", [])),
+            "helpful_new_sources": deps._safe_list(row.get("helpful_new_sources", [])),
+            "why_this_bridge_matters": str(row.get("why_this_bridge_matters", "")).strip(),
+        },
+    }
+
+
+def _apply_bridge_reflection(row: dict, reflection: dict, fingerprint: str) -> dict:
+    deps = _deps()
+    updated = dict(row)
+    for field in ("canonical_name", "descriptor", "why_this_bridge_matters"):
+        value = str(reflection.get(field, "")).strip()
+        if value:
+            updated[field] = value
+    for field, limit in (
+        ("aliases", 8),
+        ("bridge_takeaways", 6),
+        ("bridge_tensions", 6),
+        ("bridge_open_questions", 6),
+        ("helpful_new_sources", 6),
+    ):
+        values = deps._dedupe_strings(deps._safe_list(reflection.get(field, [])))
+        if values:
+            updated[field] = values[:limit]
+    by_key = {
+        str(item.get("collection_key", "")).strip(): dict(item)
+        for item in _dict_rows(row.get("supporting_collection_reflections", []))
+        if str(item.get("collection_key", "")).strip()
+    }
+    for item in _dict_rows(reflection.get("supporting_collection_reflections", [])):
+        key = str(item.get("collection_key", "")).strip()
+        if not key:
+            continue
+        merged = dict(by_key.get(key, {"collection_key": key}))
+        why = str(item.get("why_this_collection_matters", "")).strip()
+        if why:
+            merged["why_this_collection_matters"] = why
+        by_key[key] = merged
+    if by_key:
+        updated["supporting_collection_reflections"] = [by_key[key] for key in sorted(by_key)]
+    updated["bridge_reflection_fingerprint"] = fingerprint
+    return updated
+
+
+def _run_global_bridge_reflections(root: Path, bridges: list[dict], changed_bridge_ids: set[str], llm_factory, *, domain: str, route_signature: str = "") -> tuple[list[dict], int]:
+    if not bridges:
+        return bridges, 0
+    eligible = []
+    for row in bridges:
+        bridge_id = str(row.get("bridge_id", "")).strip()
+        if not bridge_id:
+            continue
+        fingerprint = _bridge_reflection_fingerprint(row)
+        stale = bridge_id in changed_bridge_ids or not str(row.get("why_this_bridge_matters", "")).strip() or row.get("bridge_reflection_fingerprint") != fingerprint
+        if stale:
+            eligible.append((row, fingerprint))
+    if not eligible:
+        return bridges, 0
+
+    workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
+    by_id = {str(row.get("bridge_id", "")).strip(): dict(row) for row in bridges}
+    failures: list[BaseException] = []
+
+    def _one(row: dict, fingerprint: str) -> dict:
+        llm_fn = llm_factory("lint")
+        bridge_id = str(row.get("bridge_id", "")).strip()
+        packet_path = _bridge_reflection_packet_path(root, domain, bridge_id)
+        packet = _bridge_reflection_packet(row)
+        _deps()._write_json(packet_path, packet)
+        valid_collection_keys = {
+            str(item.get("collection_key", "")).strip()
+            for item in _dict_rows(packet.get("supporting_collection_reflections", []))
+            if str(item.get("collection_key", "")).strip()
+        }
+        system, user = _global_bridge_reflection_prompt(packet_path, domain)
+        succeeded = False
+        try:
+            raw = llm_fn(system, [{"role": "user", "content": user}])
+            parsed = parse_json_or_repair(llm_fn, raw, _GLOBAL_BRIDGE_REFLECTION_SCHEMA)
+            normalized = _normalize_global_bridge_reflection_response(parsed, valid_collection_keys)
+            updated = _apply_bridge_reflection(row, normalized, fingerprint)
+            succeeded = True
+            return updated
+        finally:
+            if succeeded:
+                _deps()._cleanup_paths(packet_path)
+
+    if len(eligible) > 1 and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_one, row, fingerprint) for row, fingerprint in eligible]
+            for fut in as_completed(futures):
+                try:
+                    row = fut.result()
+                    by_id[str(row.get("bridge_id", "")).strip()] = row
+                except BaseException as exc:
+                    failures.append(exc)
+    else:
+        for row, fingerprint in eligible:
+            try:
+                updated = _one(row, fingerprint)
+                by_id[str(updated.get("bridge_id", "")).strip()] = updated
+            except BaseException as exc:
+                failures.append(exc)
+    if failures:
+        raise failures[0]
+    output = [by_id[str(row.get("bridge_id", "")).strip()] for row in bridges if str(row.get("bridge_id", "")).strip() in by_id]
+    run_at = datetime.now(timezone.utc).isoformat()
+    _deps()._attach_run_provenance(output, route_signature, run_at)
+    return sorted(output, key=lambda row: (row["canonical_name"].casefold(), row["bridge_id"])), len(eligible)
 
 
 def _write_global_bridge_no_progress_diagnostic(
@@ -1348,6 +1685,23 @@ def _run_global_bridge_impl(
                     represented_ids=represented_pending_ids,
                     bridge_count=len(bridges),
                 )
+            changed_bridge_ids = {
+                str(bridge.get("bridge_id", "")).strip()
+                for bridge in bridges
+                for member in _dict_rows(bridge.get("member_local_clusters", []))
+                if str(member.get("cluster_id", "")).strip() in pending_ids
+                and str(bridge.get("bridge_id", "")).strip()
+            }
+            bridge_reflection_count = 0
+            if changed_bridge_ids:
+                bridges, bridge_reflection_count = _run_global_bridge_reflections(
+                    root,
+                    bridges,
+                    changed_bridge_ids,
+                    llm_factory,
+                    domain=domain,
+                    route_signature=route_signature,
+                )
             run_at = datetime.now(timezone.utc).isoformat()
             run_at_any = run_at
             deps._attach_run_provenance(bridges, route_signature, run_at)
@@ -1379,6 +1733,7 @@ def _run_global_bridge_impl(
                 "global_bridges": len(bridges),
                 "global_bridge_skipped": False,
                 "global_bridge_skip_reason": "",
+                "global_bridge_reflections": bridge_reflection_count,
             }
             if no_progress_diagnostic_path is not None:
                 domain_results[domain]["global_bridge_no_progress"] = True

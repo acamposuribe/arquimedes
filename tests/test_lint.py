@@ -3728,6 +3728,30 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
 
     def llm_factory(_stage: str):
         def fn(system: str, messages: list[dict]) -> str:
+            if "global bridge reflection packet" in messages[0]["content"].lower():
+                return json.dumps(
+                    {
+                        "canonical_name": "Archive and Space",
+                        "descriptor": "A domain bridge connecting archive theory and project-scale memory work.",
+                        "aliases": ["Archive as Spatial Framework"],
+                        "bridge_takeaways": ["Archive thinking recurs across research collections."],
+                        "bridge_tensions": ["Theory and project method frame archival space differently."],
+                        "bridge_open_questions": ["Which other collections should join this bridge?"],
+                        "helpful_new_sources": ["comparative archive project case studies"],
+                        "why_this_bridge_matters": "It turns archive into a shared research-domain perspective.",
+                        "supporting_collection_reflections": [
+                            {
+                                "collection_key": "research/papers",
+                                "why_this_collection_matters": "Papers define the theoretical archive frame for this bridge.",
+                            },
+                            {
+                                "collection_key": "research/projects",
+                                "why_this_collection_matters": "Projects test archive thinking as spatial memory.",
+                            },
+                        ],
+                        "_finished": True,
+                    }
+                )
             assert "global bridge packet" in system.lower() or "global bridge packet" in messages[0]["content"].lower()
             return json.dumps(
                 {
@@ -3741,11 +3765,6 @@ def test_run_reflective_lint_global_bridge_stage_writes_artifact(tmp_path, monke
                                 {"cluster_id": "research__papers__local_0001"},
                                 {"cluster_id": "research__projects__local_0001"},
                             ],
-                            "bridge_takeaways": ["Archive thinking recurs across research collections."],
-                            "bridge_tensions": ["Theory and project method frame archival space differently."],
-                            "bridge_open_questions": ["Which other collections should join this bridge?"],
-                            "helpful_new_sources": ["comparative archive project case studies"],
-                            "why_this_bridge_matters": "It turns archive into a shared research-domain perspective.",
                         }
                     ],
                     "_finished": True,
@@ -3863,18 +3882,81 @@ def test_global_bridge_memory_snapshot_includes_connected_cluster_reflections():
     assert "helpful_new_sources" not in rows[0]
 
 
-def test_global_bridge_prompt_requests_page_worthy_bridge_essay():
+def test_global_bridge_prompt_requests_membership_only_linking():
     from arquimedes.lint_global_bridge import _global_bridge_prompt
 
     system, user = _global_bridge_prompt(Path("packet.json"), Path("memory.json"), "research")
 
-    assert "grounded mini-essay" in system
-    assert "2 to 4 paragraphs" in system
-    assert "full connected local-cluster reflections and collection signals" in system
+    assert "only decides bridge membership" in system
+    assert "Do not write bridge reflections" in system
     assert "inside the Research domain" in system
     assert "Keep the total number of bridges limited" in system
     assert "Prefer refocusing an existing bridge with links_to_existing" in system
-    assert "page-worthy bridge synthesis" in user
+    assert "only to decide membership" in user
+
+
+def test_global_bridge_reflection_prompt_requests_page_worthy_bridge_essay():
+    from arquimedes.lint_global_bridge import _global_bridge_reflection_prompt
+
+    system, user = _global_bridge_reflection_prompt(Path("bridge.packet.json"), "research")
+
+    assert "grounded mini-essay" in system
+    assert "2 to 4 paragraphs" in system
+    assert "supporting_collection_reflections" in system
+    assert "page-worthy bridge synthesis" in system
+    assert "bridge.packet.json" in user
+
+
+def test_global_bridge_link_inputs_are_compact():
+    from arquimedes.lint_global_bridge import _bridge_link_memory_snapshot, _collection_context_rows, _compact_local_cluster_snapshot
+
+    cluster = _compact_local_cluster_snapshot(
+        {
+            "cluster_id": "research__papers__local_0001",
+            "collection_key": "research/papers",
+            "canonical_name": "Archive and Space",
+            "descriptor": "Archive as a spatial ordering device.",
+            "aliases": ["Spatial Archive"],
+            "reflection": {
+                "main_takeaways": ["one", "two", "three", "four"],
+                "main_tensions": ["tension one", "tension two"],
+                "why_this_concept_matters": "It anchors the research side.",
+            },
+        }
+    )
+    collections = _collection_context_rows(
+        [
+            {
+                "collection_key": "research/papers",
+                "domain": "research",
+                "collection": "papers",
+                "main_takeaways": ["one", "two", "three", "four", "five"],
+                "main_tensions": ["a", "b", "c"],
+                "why_this_collection_matters": "Papers define the theoretical archive frame.",
+            }
+        ]
+    )
+    memory = _bridge_link_memory_snapshot(
+        [
+            {
+                "bridge_id": "global_bridge__research__archive-and-space",
+                "domain": "research",
+                "canonical_name": "Archive and Space",
+                "descriptor": "Shared archive bridge.",
+                "aliases": ["a", "b", "c", "d"],
+                "why_this_bridge_matters": "It makes archive legible across collections.",
+                "member_local_clusters": [{"cluster_id": "research__papers__local_0001"}],
+            }
+        ],
+        {"research__papers__local_0001": {"collection_key": "research/papers", "canonical_name": "Archive and Space", "descriptor": "Archive as a spatial ordering device."}},
+        domain="research",
+    )
+
+    assert "aliases" not in cluster
+    assert cluster["reflection"]["main_takeaways"] == ["one", "two", "three"]
+    assert "domain" not in collections[0]
+    assert collections[0]["main_tensions"] == ["a", "b"]
+    assert memory[0]["aliases"] == ["a", "b", "c"]
 
 
 def test_global_bridge_prompt_for_practice_is_spanish():
@@ -3886,6 +3968,7 @@ def test_global_bridge_prompt_for_practice_is_spanish():
     assert "orientada a la práctica" in system
     assert "Mantén el número total de puentes limitado" in system
     assert "Prefiere reenfocar un puente existente con links_to_existing" in system
+    assert "solo decide membresía" in system
     assert "Todos los textos libres y listas deben estar en español." in user
     assert concept_reflection_figure_limit("practice") > concept_reflection_figure_limit("research")
     assert collection_reflection_figure_limit("practice") > collection_reflection_figure_limit("research")
@@ -4457,6 +4540,132 @@ def test_global_bridge_runner_writes_diagnostic_when_output_makes_no_progress(tm
     assert memory_path.exists()
     assert (root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl").exists()
     assert (root / "derived" / "domains" / "research" / "global_bridge_stamp.json").exists()
+
+
+def test_global_bridge_reflection_pass_updates_changed_bridge_fields(tmp_path, monkeypatch):
+    from arquimedes.lint_global_bridge import _bridge_reflection_packet, _run_global_bridge_reflections
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    bridge = {
+        "bridge_id": "global_bridge__research__archive-and-space",
+        "domain": "research",
+        "canonical_name": "Archive and Space",
+        "slug": "archive-and-space",
+        "descriptor": "Archive link.",
+        "aliases": ["Archive Bridge"],
+        "member_local_clusters": [
+            {
+                "cluster_id": "research__papers__local_0001",
+                "domain": "research",
+                "collection": "papers",
+                "collection_key": "research/papers",
+                "canonical_name": "Archive and Space",
+                "descriptor": "Archive as a spatial ordering device.",
+                "material_ids": ["mat_001"],
+                "confidence": 0.92,
+                "reflection": {
+                    "main_takeaways": ["one", "two", "three", "four"],
+                    "main_tensions": ["tension one", "tension two"],
+                    "open_questions": ["not needed here"],
+                    "helpful_new_sources": ["not needed here"],
+                    "why_this_concept_matters": "It anchors the research side.",
+                },
+            },
+            {
+                "cluster_id": "research__projects__local_0001",
+                "domain": "research",
+                "collection": "projects",
+                "collection_key": "research/projects",
+                "canonical_name": "Archive and Space",
+                "descriptor": "Archive as project memory.",
+                "material_ids": ["mat_010"],
+                "confidence": 0.61,
+                "reflection": {
+                    "main_takeaways": ["project one"],
+                    "main_tensions": [],
+                    "open_questions": ["not needed here"],
+                    "helpful_new_sources": ["not needed here"],
+                    "why_this_concept_matters": "It grounds archive thinking in projects.",
+                },
+            },
+        ],
+        "domain_collection_keys": ["research/papers", "research/projects"],
+        "supporting_collection_reflections": [
+            {
+                "collection_key": "research/papers",
+                "collection": "papers",
+                "main_takeaways": ["one", "two", "three", "four"],
+                "main_tensions": ["not needed here"],
+                "why_this_collection_matters": "Papers define the theoretical archive frame.",
+            },
+            {
+                "collection_key": "research/projects",
+                "collection": "projects",
+                "main_takeaways": ["not needed here"],
+                "main_tensions": ["not needed here"],
+                "why_this_collection_matters": "Projects keep returning to archive.",
+            },
+        ],
+        "bridge_takeaways": [],
+        "bridge_tensions": [],
+        "bridge_open_questions": [],
+        "helpful_new_sources": [],
+        "why_this_bridge_matters": "",
+    }
+    packet = _bridge_reflection_packet(bridge)
+    member_reflection = packet["member_local_clusters"][0]["reflection"]
+    assert member_reflection["main_takeaways"] == ["one", "two", "three", "four"]
+    assert member_reflection["main_tensions"] == ["tension one"]
+    assert "open_questions" not in member_reflection
+    assert "helpful_new_sources" not in member_reflection
+    collection_reflection = packet["supporting_collection_reflections"][0]
+    assert collection_reflection == {
+        "collection_key": "research/papers",
+        "collection": "papers",
+        "main_takeaways": ["one", "two", "three"],
+        "why_this_collection_matters": "Papers define the theoretical archive frame.",
+    }
+
+    def llm_factory(_stage: str):
+        def fn(_system: str, _messages: list[dict]) -> str:
+            return json.dumps(
+                {
+                    "canonical_name": "Archive and Space",
+                    "descriptor": "A bridge between archive theory and project memory.",
+                    "aliases": ["Archive as Spatial Framework"],
+                    "bridge_takeaways": ["Archive thinking recurs across research collections."],
+                    "bridge_tensions": ["Theory and project method frame archival space differently."],
+                    "bridge_open_questions": ["Which other collections should join this bridge?"],
+                    "helpful_new_sources": ["comparative archive project case studies"],
+                    "why_this_bridge_matters": "It turns archive into a shared research-domain perspective.",
+                    "supporting_collection_reflections": [
+                        {"collection_key": "research/papers", "why_this_collection_matters": "Papers supply the theoretical frame."},
+                        {"collection_key": "research/projects", "why_this_collection_matters": "Projects test archive as spatial memory."},
+                    ],
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    rows, count = _run_global_bridge_reflections(
+        root,
+        [bridge],
+        {"global_bridge__research__archive-and-space"},
+        llm_factory,
+        domain="research",
+    )
+
+    assert count == 1
+    assert rows[0]["descriptor"] == "A bridge between archive theory and project memory."
+    assert rows[0]["bridge_takeaways"] == ["Archive thinking recurs across research collections."]
+    assert rows[0]["bridge_tensions"] == ["Theory and project method frame archival space differently."]
+    assert rows[0]["bridge_open_questions"] == ["Which other collections should join this bridge?"]
+    assert rows[0]["helpful_new_sources"] == ["comparative archive project case studies"]
+    assert rows[0]["why_this_bridge_matters"] == "It turns archive into a shared research-domain perspective."
+    assert rows[0]["supporting_collection_reflections"][0]["why_this_collection_matters"] == "Papers supply the theoretical frame."
+    assert rows[0]["bridge_reflection_fingerprint"]
 
 
 def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):

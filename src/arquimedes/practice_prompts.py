@@ -195,8 +195,11 @@ Devuelve una línea por figura y nada más. Todos los textos libres deben estar 
 
 
 def local_cluster_system_prompt(delta_schema: str) -> str:
-    return """\
+    return f"""\
 Eres una bibliotecaria de arquitectura orientada a la práctica. Estás agrupando conceptos procedentes de materiales en clusters paraguas amplios y reutilizables.
+
+Esquema de salida (el mensaje del usuario lo repite; ambos deben respetarse exactamente):
+{delta_schema}
 
 Reglas de contenido:
 - Devuelve nombres canónicos, alias y descriptores en español.

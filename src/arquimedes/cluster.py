@@ -671,9 +671,12 @@ def is_local_clustering_stale(
 
 _BRIDGE_DELTA_SCHEMA = '{"links_to_existing":[{"cluster_id":"required existing cluster id","source_concepts":[{"material_id":"required string","concept_name":"required string"}]}],"new_clusters":[{"canonical_name":"required string","descriptor":"short cluster description","aliases":["max 4 strings"],"source_concepts":[{"material_id":"required string","concept_name":"required string"}]}],"_finished":true}'
 
-_BRIDGE_SYSTEM_PROMPT = """\
+_BRIDGE_SYSTEM_PROMPT = f"""\
 You are an architecture research librarian. You are grouping concepts \
 from material packets into broad cross-material umbrella clusters.
+
+Output schema (the user message restates this; both must be obeyed exactly):
+{_BRIDGE_DELTA_SCHEMA}
 
 Content rules:
 - Favor broader but still meaningful canonical names that connect related materials across the collection.

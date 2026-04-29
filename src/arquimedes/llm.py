@@ -1016,6 +1016,18 @@ def make_cli_llm_fn(config: dict, stage: str | None = None, *, state: dict | Non
     default_timeout_seconds = _coerce_timeout_seconds(enrichment_config.get("llm_timeout_seconds"))
     shared_state = state if isinstance(state, dict) else {}
 
+    # Stage-default tools. Stages that produce structured JSON benefit from Bash
+    # so the agent can build the response programmatically (jq, python -c) and
+    # write to a tmp file instead of free-typing JSON.
+    _stage_default_tools = {
+        "cluster": ["Read", "Bash", "Write"],
+    }
+    _stage_tools_default = _stage_default_tools.get(stage or "")
+    if _stage_tools_default:
+        for route in resolved:
+            if not route.get("tools"):
+                route["tools"] = list(_stage_tools_default)
+
     def llm_fn(system: str, messages: list[dict]) -> str:
         system_prompt, user_prompt = _build_prompt_text(system, messages)
         debug_enabled = _llm_debug_enabled()

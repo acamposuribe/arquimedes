@@ -4656,6 +4656,79 @@ def test_global_bridge_runner_records_bridge_membership_before_reflection_failur
     assert failures["failures"][0]["bridge_id"] == "global_bridge__research__archive-bridge"
 
 
+def test_global_bridge_runner_cleans_obsolete_reflection_packets(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+    from arquimedes.lint_global_bridge import _bridge_reflection_packet_path, _run_global_bridge_impl
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    stale_packet = _bridge_reflection_packet_path(root, "research", "global_bridge__research__stale")
+    _write_json(
+        stale_packet,
+        {
+            "kind": "global_bridge_reflection_packet",
+            "bridge_id": "global_bridge__research__stale",
+            "canonical_name": "Stale",
+        },
+    )
+    local_clusters = [
+        {
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "collection_key": "research/papers",
+            "canonical_name": "Archive",
+            "slug": "archive",
+            "descriptor": "Archive as a spatial ordering device.",
+            "material_ids": ["mat_001"],
+            "confidence": 0.92,
+        },
+        {
+            "cluster_id": "research__projects__local_0001",
+            "domain": "research",
+            "collection": "projects",
+            "collection_key": "research/projects",
+            "canonical_name": "Archive",
+            "slug": "archive",
+            "descriptor": "Archive as a project memory scaffold.",
+            "material_ids": ["mat_010"],
+            "confidence": 0.61,
+        },
+    ]
+    collection_refs = [
+        {"collection_key": "research/papers", "domain": "research", "collection": "papers"},
+        {"collection_key": "research/projects", "domain": "research", "collection": "projects"},
+    ]
+
+    def llm_factory(_stage: str):
+        def fn(_system: str, messages: list[dict]) -> str:
+            if "global bridge reflection packet" in messages[0]["content"].lower():
+                return json.dumps({"bridge_takeaways": [], "_finished": False})
+            return json.dumps(
+                {
+                    "links_to_existing": [],
+                    "new_clusters": [
+                        {
+                            "canonical_name": "Archive Bridge",
+                            "member_local_clusters": [
+                                {"cluster_id": "research__papers__local_0001"},
+                                {"cluster_id": "research__projects__local_0001"},
+                            ],
+                        }
+                    ],
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    _run_global_bridge_impl(lint_mod, root, local_clusters, collection_refs, llm_factory, None, "")
+    current_packet = _bridge_reflection_packet_path(root, "research", "global_bridge__research__archive-bridge")
+
+    assert not stale_packet.exists()
+    assert current_packet.exists()
+
+
 def test_global_bridge_reflection_pass_updates_changed_bridge_fields(tmp_path, monkeypatch):
     from arquimedes.lint_global_bridge import _bridge_reflection_packet, _run_global_bridge_reflections
 

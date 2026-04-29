@@ -944,6 +944,23 @@ def _bridge_reflection_failures_path(root: Path, domain: str) -> Path:
     return _global_bridge_stage_dir(root, domain) / "global_bridge.reflection_failures.json"
 
 
+def _cleanup_obsolete_bridge_reflection_packets(root: Path, domain: str, bridges: list[dict]) -> None:
+    valid_bridge_ids = {
+        str(row.get("bridge_id", "")).strip()
+        for row in bridges
+        if str(row.get("bridge_id", "")).strip()
+    }
+    reflections_dir = _global_bridge_stage_dir(root, domain) / "reflections"
+    if not reflections_dir.exists():
+        return
+    deps = _deps()
+    for packet_path in reflections_dir.glob("*.packet.json"):
+        packet = deps._load_json(packet_path) or {}
+        bridge_id = str(packet.get("bridge_id", "")).strip() if isinstance(packet, dict) else ""
+        if bridge_id not in valid_bridge_ids:
+            deps._cleanup_paths(packet_path)
+
+
 def _bridge_reflection_fingerprint(row: dict) -> str:
     deps = _deps()
     return deps.canonical_hash(
@@ -1750,6 +1767,7 @@ def _run_global_bridge_impl(
             pre_reflection_run_at = datetime.now(timezone.utc).isoformat()
             deps._attach_run_provenance(bridges, route_signature, pre_reflection_run_at)
             deps._write_jsonl(artifact_path, bridges)
+            _cleanup_obsolete_bridge_reflection_packets(root, domain, bridges)
             bridge_reflection_count = 0
             if changed_bridge_ids:
                 bridges, bridge_reflection_count = _run_global_bridge_reflections(
@@ -1764,6 +1782,7 @@ def _run_global_bridge_impl(
             run_at_any = run_at
             deps._attach_run_provenance(bridges, route_signature, run_at)
             deps._write_jsonl(artifact_path, bridges)
+            _cleanup_obsolete_bridge_reflection_packets(root, domain, bridges)
             post_run_bundle = _global_bridge_inputs(
                 root,
                 local_clusters,

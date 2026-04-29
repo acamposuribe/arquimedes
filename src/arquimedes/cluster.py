@@ -675,7 +675,7 @@ _BRIDGE_SYSTEM_PROMPT = f"""\
 You are an architecture research librarian. You are grouping concepts \
 from material packets into broad cross-material umbrella clusters.
 
-Output schema:
+NON_NEGOTIABLE Output schema:
 {_BRIDGE_DELTA_SCHEMA}
 
 Rules:
@@ -690,9 +690,9 @@ Rules:
 - It is acceptable for one material to contribute more than one source concept to the same cluster when they support the same umbrella idea.
 - Avoid trivial canonical names like "space", "history", "power", or "memory" unless sharply qualified into a real concept phrase.
 - Clusters must connect at least two materials, but prefer broader clusters that connect more materials when the analytical connection is strong enough.
-- Cluster names may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like "history", "power", "space", or "memory" unless sharply qualified. Prefer cluster names that carry analytical charge and group local and bridge concepts together, like "spatial justice", "racial capitalism", "architecture as care", "counter-mapping methods", "authoritarian urbanism", or "collecting as spatial practice", and many others.
+- Canonical names are REQUIRTED and may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like "history", "power", "space", or "memory" unless sharply qualified. Prefer cluster names that carry analytical charge and group local and bridge concepts together, like "spatial justice", "racial capitalism", "architecture as care", "counter-mapping methods", "authoritarian urbanism", or "collecting as spatial practice", and many others.
 - Complete the full clustering pass before you answer. Do not emit partial work, draft JSON, commentary, or progress updates.
-- Return structured JSON only once, at the very end. Do not return markdown fences, prose, or anything outside the required JSON object."""
+- Return structured JSON only once, closely following output schema and required fields, at the very end. Do not return markdown fences, prose, or anything outside the required JSON object."""
 
 _REQUIRED_BRIDGE_DELTA_FIELDS = (
         "links_to_existing",
@@ -753,7 +753,7 @@ def _build_bridge_prompt(
         "New clusters must connect at least two materials.\n"
         "Do not return single-material clusters.\n"
         "Do all reasoning silently first, then return exactly one final JSON object only when the full clustering job is complete.\n"
-        "Do not output partial JSON, drafts, commentary, or progress updates.\n"
+        "Do not output partial JSON, drafts, commentary, or progress updates. Follow required output schema closely. This is non-negotiable.\n"
         "Set _finished to true only in that final completed JSON object.\n"
         "Return JSON only.\n"
     )

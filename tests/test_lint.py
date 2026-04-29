@@ -1446,6 +1446,81 @@ def test_cluster_audit_material_fingerprint_ignores_renames_and_alias_changes():
     assert fingerprints["concept_001"] == canonical_reviews["concept_001"]["input_fingerprint"]
 
 
+def test_cluster_audit_pending_local_fingerprint_ignores_route_signature():
+    from arquimedes.lint import _cluster_audit_pending_local_fingerprint
+
+    local_rows = [
+        ("memory archive continuum", "memory archive continuum", "mat_001", "medium", "[1]", '["memory archive continuum"]', 0.82, "local", ""),
+        ("memory archive continuum", "memory archive continuum", "mat_002", "medium", "[1]", '["memory archive continuum"]', 0.81, "local", ""),
+    ]
+
+    first = _cluster_audit_pending_local_fingerprint(local_rows, "claude:sonnet:medium")
+    second = _cluster_audit_pending_local_fingerprint(local_rows, "copilot:gpt-4.1")
+
+    assert first == second
+
+
+def test_cluster_audit_legacy_pending_hash_skips_when_count_and_stamp_are_current(tmp_path):
+    from arquimedes.lint import _cluster_audit_pending_local_changed, _local_audit_stamp_path, _local_audit_state_path, local_cluster_stamp_path
+
+    root, _config = _setup_repo(tmp_path)
+    domain = "research"
+    collection = "papers"
+    local_rows = [
+        ("memory archive continuum", "memory archive continuum", "mat_001", "medium", "[1]", '["memory archive continuum"]', 0.82, "local", ""),
+        ("memory archive continuum", "memory archive continuum", "mat_002", "medium", "[1]", '["memory archive continuum"]', 0.81, "local", ""),
+    ]
+    material_rows = [
+        ("mat_001", "One", "Summary", '["archive"]'),
+        ("mat_002", "Two", "Summary", '["archive"]'),
+    ]
+    clustered_at = "2026-04-18T17:11:43+00:00"
+    _write_json(local_cluster_stamp_path(root, domain, collection), {"clustered_at": clustered_at})
+    _write_json(_local_audit_stamp_path(root, domain, collection), {"audited_at": clustered_at})
+    _write_json(
+        _local_audit_state_path(root, domain, collection),
+        {
+            "pending_local_fingerprint": "legacy-route-dependent-hash",
+            "pending_local_concepts": len(local_rows),
+        },
+    )
+
+    changed, current = _cluster_audit_pending_local_changed(root, domain, collection, local_rows, material_rows, "new-route")
+
+    assert changed is False
+    assert current != "legacy-route-dependent-hash"
+
+
+def test_cluster_audit_pending_local_waits_when_collection_audit_is_current(tmp_path):
+    from arquimedes.lint import _cluster_audit_pending_local_changed, _local_audit_stamp_path, _local_audit_state_path, local_cluster_stamp_path
+
+    root, _config = _setup_repo(tmp_path)
+    domain = "research"
+    collection = "papers"
+    local_rows = [
+        ("memory archive continuum", "memory archive continuum", "mat_001", "medium", "[1]", '["memory archive continuum"]', 0.82, "local", ""),
+        ("new residual concept", "new residual concept", "mat_002", "medium", "[2]", '["new residual concept"]', 0.81, "local", ""),
+    ]
+    material_rows = [
+        ("mat_001", "One", "Summary", '["archive"]'),
+        ("mat_002", "Two", "Summary", '["archive"]'),
+    ]
+    clustered_at = "2026-04-18T17:11:43+00:00"
+    _write_json(local_cluster_stamp_path(root, domain, collection), {"clustered_at": clustered_at})
+    _write_json(_local_audit_stamp_path(root, domain, collection), {"audited_at": clustered_at})
+    _write_json(
+        _local_audit_state_path(root, domain, collection),
+        {
+            "pending_local_fingerprint": "older-pending-hash",
+            "pending_local_concepts": 1,
+        },
+    )
+
+    changed, _current = _cluster_audit_pending_local_changed(root, domain, collection, local_rows, material_rows, "test-route")
+
+    assert changed is False
+
+
 def test_cluster_audit_open_review_waits_for_changed_input():
     from arquimedes.lint import _cluster_audit_cluster_fingerprint, _cluster_audit_target_clusters
 

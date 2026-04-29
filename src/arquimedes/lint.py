@@ -87,6 +87,7 @@ from arquimedes.lint_cluster_audit import (
     _cluster_audit_mutable_concept_index,
     _cluster_audit_normalize_review_row,
     _cluster_audit_parsed_response_path,
+    _cluster_audit_pending_local_changed,
     _cluster_audit_pending_local_fingerprint,
     _cluster_audit_prompt,
     _cluster_audit_raw_response_path,

@@ -174,6 +174,7 @@ def _cluster_audit_cluster_fingerprints(clusters: list[dict], route_signature: s
 
 def _cluster_audit_pending_local_fingerprint(local_rows: list[tuple], route_signature: str) -> str:
     deps = _deps()
+    del route_signature
     pending_local = []
     for row in local_rows:
         concept_name, concept_key, material_id, relevance, source_pages, evidence_spans, confidence, concept_type, descriptor = deps._split_concept_row(row)
@@ -190,9 +191,36 @@ def _cluster_audit_pending_local_fingerprint(local_rows: list[tuple], route_sign
         })
     pending_local.sort(key=lambda item: (item["material_id"], item["concept_key"], item["concept_name"]))
     return deps.canonical_hash({
-        "route_signature": route_signature,
         "pending_local_concepts": pending_local,
     })
+
+
+def _cluster_audit_pending_local_changed(
+    root: Path,
+    domain: str,
+    collection: str,
+    local_rows: list[tuple],
+    material_rows: list[tuple],
+    route_signature: str,
+) -> tuple[bool, str]:
+    deps = _deps()
+    current_fingerprint = _cluster_audit_pending_local_fingerprint(local_rows, route_signature)
+    audit_state = deps._read_stamp(deps._local_audit_state_path(root, domain, collection))
+    prior_fingerprint = str(audit_state.get("pending_local_fingerprint", "") or "")
+    if not (local_rows and material_rows):
+        return False, current_fingerprint
+
+    cluster_stamp = deps._read_stamp(deps.local_cluster_stamp_path(root, domain, collection))
+    clustered_at = deps._parse_iso_datetime(cluster_stamp.get("clustered_at"))
+    audit_stamp = deps._read_stamp(deps._local_audit_stamp_path(root, domain, collection))
+    audited_at = deps._parse_iso_datetime(audit_stamp.get("audited_at"))
+    if clustered_at is not None and audited_at is not None and audited_at >= clustered_at:
+        return False, current_fingerprint
+
+    if current_fingerprint == prior_fingerprint:
+        return False, current_fingerprint
+
+    return True, current_fingerprint
 
 
 def _cluster_audit_target_clusters(
@@ -825,9 +853,14 @@ def _run_local_cluster_audit_impl(
                 if str(target.get("cluster_id", "")).strip()
             }
             current_pending_local_fingerprint = deps._cluster_audit_pending_local_fingerprint(local_rows, route_signature)
-            audit_state = deps._read_stamp(deps._local_audit_state_path(root, domain, collection))
-            prior_pending_local_fingerprint = str(audit_state.get("pending_local_fingerprint", "") or "")
-            pending_local_changed = bool(local_rows and material_rows) and current_pending_local_fingerprint != prior_pending_local_fingerprint
+            pending_local_changed, current_pending_local_fingerprint = deps._cluster_audit_pending_local_changed(
+                root,
+                domain,
+                collection,
+                local_rows,
+                material_rows,
+                route_signature,
+            )
 
             normalized_reviews = [canonical_existing_reviews[key] for key in sorted(canonical_existing_reviews)]
             normalized_reviews = deps._ensure_cluster_audit_review_coverage(normalized_reviews, scope_clusters)

@@ -4668,6 +4668,75 @@ def test_global_bridge_reflection_pass_updates_changed_bridge_fields(tmp_path, m
     assert rows[0]["bridge_reflection_fingerprint"]
 
 
+def test_global_bridge_reflection_packet_allows_member_collection_keys_without_collection_reflections(tmp_path, monkeypatch):
+    from arquimedes.lint_global_bridge import _bridge_reflection_packet, _run_global_bridge_reflections
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    bridge = {
+        "bridge_id": "global_bridge__research__intersectionality",
+        "domain": "research",
+        "canonical_name": "Intersectionality",
+        "slug": "intersectionality",
+        "descriptor": "Category failure across institutions.",
+        "aliases": [],
+        "member_local_clusters": [
+            {
+                "cluster_id": "research__Intersectionality__local_0001",
+                "collection_key": "research/Intersectionality",
+                "canonical_name": "Single-axis frameworks",
+                "descriptor": "Single-axis erasure.",
+                "reflection": {"main_takeaways": ["Categories erase compounded harm."]},
+            }
+        ],
+        "domain_collection_keys": ["research/Intersectionality"],
+        "supporting_collection_reflections": [],
+        "why_this_bridge_matters": "",
+    }
+    packet = _bridge_reflection_packet(bridge)
+    assert packet["supporting_collection_reflections"] == [
+        {
+            "collection_key": "research/Intersectionality",
+            "collection": "Intersectionality",
+            "main_takeaways": [],
+            "why_this_collection_matters": "",
+        }
+    ]
+
+    def llm_factory(_stage: str):
+        def fn(_system: str, _messages: list[dict]) -> str:
+            return json.dumps(
+                {
+                    "bridge_takeaways": ["Intersectionality exposes category failure."],
+                    "bridge_tensions": [],
+                    "bridge_open_questions": [],
+                    "helpful_new_sources": [],
+                    "why_this_bridge_matters": "It shows how institutional categories erase compounded harm.",
+                    "supporting_collection_reflections": [
+                        {
+                            "collection_key": "research/Intersectionality",
+                            "why_this_collection_matters": "It supplies the core legal and political method.",
+                        }
+                    ],
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    rows, count = _run_global_bridge_reflections(
+        root,
+        [bridge],
+        {"global_bridge__research__intersectionality"},
+        llm_factory,
+        domain="research",
+    )
+
+    assert count == 1
+    assert rows[0]["supporting_collection_reflections"][0]["collection_key"] == "research/Intersectionality"
+    assert rows[0]["supporting_collection_reflections"][0]["why_this_collection_matters"] == "It supplies the core legal and political method."
+
+
 def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)

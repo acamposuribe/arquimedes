@@ -947,6 +947,32 @@ def _bridge_reflection_fingerprint(row: dict) -> str:
 
 def _bridge_reflection_packet(row: dict) -> dict:
     deps = _deps()
+    member_rows = [
+        {
+            "cluster_id": str(member.get("cluster_id", "")).strip(),
+            "collection_key": str(member.get("collection_key", "")).strip(),
+            "canonical_name": str(member.get("canonical_name", "")).strip(),
+            "descriptor": str(member.get("descriptor", "")).strip(),
+            "reflection": _bridge_member_reflection_snapshot(member.get("reflection", {})),
+        }
+        for member in _dict_rows(row.get("member_local_clusters", []))
+        if str(member.get("cluster_id", "")).strip()
+    ]
+    collection_context_by_key = {
+        str(collection.get("collection_key", "")).strip(): _bridge_collection_reflection_snapshot(collection)
+        for collection in _dict_rows(row.get("supporting_collection_reflections", []))
+        if str(collection.get("collection_key", "")).strip()
+    }
+    for collection_key in sorted({member["collection_key"] for member in member_rows if member.get("collection_key")}):
+        collection_context_by_key.setdefault(
+            collection_key,
+            {
+                "collection_key": collection_key,
+                "collection": collection_key.partition("/")[2],
+                "main_takeaways": [],
+                "why_this_collection_matters": "",
+            },
+        )
     return {
         "kind": "global_bridge_reflection_packet",
         "bridge_id": str(row.get("bridge_id", "")).strip(),
@@ -954,22 +980,8 @@ def _bridge_reflection_packet(row: dict) -> dict:
         "canonical_name": str(row.get("canonical_name", "")).strip(),
         "descriptor": str(row.get("descriptor", "")).strip(),
         "aliases": deps._dedupe_strings(deps._safe_list(row.get("aliases", [])))[:8],
-        "member_local_clusters": [
-            {
-                "cluster_id": str(member.get("cluster_id", "")).strip(),
-                "collection_key": str(member.get("collection_key", "")).strip(),
-                "canonical_name": str(member.get("canonical_name", "")).strip(),
-                "descriptor": str(member.get("descriptor", "")).strip(),
-                "reflection": _bridge_member_reflection_snapshot(member.get("reflection", {})),
-            }
-            for member in _dict_rows(row.get("member_local_clusters", []))
-            if str(member.get("cluster_id", "")).strip()
-        ],
-        "supporting_collection_reflections": [
-            _bridge_collection_reflection_snapshot(collection)
-            for collection in _dict_rows(row.get("supporting_collection_reflections", []))
-            if str(collection.get("collection_key", "")).strip()
-        ],
+        "member_local_clusters": member_rows,
+        "supporting_collection_reflections": [collection_context_by_key[key] for key in sorted(collection_context_by_key)],
         "prior_reflection": {
             "bridge_takeaways": deps._safe_list(row.get("bridge_takeaways", [])),
             "bridge_tensions": deps._safe_list(row.get("bridge_tensions", [])),
@@ -1045,6 +1057,10 @@ def _run_global_bridge_reflections(root: Path, bridges: list[dict], changed_brid
         valid_collection_keys = {
             str(item.get("collection_key", "")).strip()
             for item in _dict_rows(packet.get("supporting_collection_reflections", []))
+            if str(item.get("collection_key", "")).strip()
+        } | {
+            str(item.get("collection_key", "")).strip()
+            for item in _dict_rows(packet.get("member_local_clusters", []))
             if str(item.get("collection_key", "")).strip()
         }
         system, user = _global_bridge_reflection_prompt(packet_path, domain)

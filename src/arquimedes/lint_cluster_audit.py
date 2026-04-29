@@ -861,7 +861,7 @@ def _run_local_cluster_audit_impl(
     ]
     workers = max(1, min(len(local_groups), deps._parallel_collection_audit_workers(load_config())))
 
-    def _one(domain: str, collection: str, scope_clusters: list[dict]) -> tuple[list[dict], int]:
+    def _one(domain: str, collection: str, scope_clusters: list[dict]) -> tuple[tuple[str, str], list[dict], int]:
         gate_path = deps._local_audit_gate_path(root, domain, collection)
         gate_path.parent.mkdir(parents=True, exist_ok=True)
         scope_cluster_ids = {
@@ -874,7 +874,7 @@ def _run_local_cluster_audit_impl(
             if str(row.get("cluster_id", "")).strip() in scope_cluster_ids
         ]
         if not _acquire_cluster_audit_gate(gate_path):
-            return scope_existing_rows, 0
+            return (domain, collection), scope_existing_rows, 0
         try:
             scope_root = deps.local_cluster_dir(root, domain, collection)
             local_rows, material_rows = deps._local_rows_in_scope_not_in_clusters(root, domain, collection, scope_clusters, material_info)
@@ -922,7 +922,7 @@ def _run_local_cluster_audit_impl(
                         "cluster_reviews": len(normalized_reviews),
                     },
                 )
-                return normalized_reviews, 0
+                return (domain, collection), normalized_reviews, 0
 
             bridge_packets_path = None
             if local_rows and material_rows:
@@ -1177,26 +1177,53 @@ def _run_local_cluster_audit_impl(
             )
             deps._cleanup_paths(input_path, bridge_input_path, reviews_input_path, bridge_packets_path or Path())
             deps._cleanup_cluster_audit_debug_artifacts(scope_root)
-            return reviews_work, int(cluster_changed)
+            return (domain, collection), reviews_work, int(cluster_changed)
         finally:
             try:
                 gate_path.unlink()
             except OSError:
                 pass
 
-    results: list[tuple[list[dict], int]] = []
+    results: list[tuple[tuple[str, str], list[dict], int]] = []
+    failures: list[BaseException] = []
+    failed_scope_rows: list[dict] = []
     scope_items = sorted(local_groups.items())
+    scope_existing_rows_by_key: dict[tuple[str, str], list[dict]] = {}
+    for (domain, collection), scope_clusters in scope_items:
+        scope_cluster_ids = {
+            str(cluster.get("cluster_id", "")).strip()
+            for cluster in scope_clusters
+            if str(cluster.get("cluster_id", "")).strip()
+        }
+        scope_existing_rows_by_key[(domain, collection)] = [
+            row for row in existing_rows
+            if str(row.get("cluster_id", "")).strip() in scope_cluster_ids
+        ]
     if len(scope_items) > 1 and workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(_one, domain, collection, scope_clusters) for (domain, collection), scope_clusters in scope_items]
+            futures = {
+                pool.submit(_one, domain, collection, scope_clusters): (domain, collection)
+                for (domain, collection), scope_clusters in scope_items
+            }
             for fut in as_completed(futures):
-                results.append(fut.result())
+                scope_key = futures[fut]
+                try:
+                    results.append(fut.result())
+                except BaseException as exc:
+                    failures.append(exc)
+                    failed_scope_rows.extend(scope_existing_rows_by_key.get(scope_key, []))
     else:
         for (domain, collection), scope_clusters in scope_items:
-            results.append(_one(domain, collection, scope_clusters))
+            try:
+                results.append(_one(domain, collection, scope_clusters))
+            except BaseException as exc:
+                failures.append(exc)
+                failed_scope_rows.extend(scope_existing_rows_by_key.get((domain, collection), []))
 
-    merged_reviews = preserved_rows + [row for reviews, _changed in results for row in reviews]
+    merged_reviews = preserved_rows + failed_scope_rows + [row for _scope_key, reviews, _changed in results for row in reviews]
     merged_reviews.sort(key=lambda row: str(row.get("cluster_id", "")))
     deps._write_jsonl(existing_path, merged_reviews)
+    if failures:
+        raise failures[0]
     deps._write_lint_stage_stamp(root, audited_at=datetime.now(timezone.utc).isoformat())
-    return merged_reviews, sum(changed for _reviews, changed in results)
+    return merged_reviews, sum(changed for _scope_key, _reviews, changed in results)

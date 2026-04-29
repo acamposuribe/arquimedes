@@ -890,6 +890,87 @@ def test_local_cluster_audit_preserves_failed_llm_artifacts(tmp_path, monkeypatc
     assert failure["artifacts"]["initial_raw_response"] == str(raw_path)
 
 
+def test_local_cluster_audit_persists_successful_scopes_when_parallel_scope_fails(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    good_cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive and Space",
+        "material_ids": ["mat_001"],
+        "source_concepts": [{"material_id": "mat_001", "concept_name": "archive and space"}],
+        "wiki_path": "wiki/research/papers/concepts/archive-and-space.md",
+    }
+    bad_cluster = {
+        "cluster_id": "research__projects__local_0001",
+        "domain": "research",
+        "collection": "projects",
+        "canonical_name": "Project Archives",
+        "material_ids": ["mat_002"],
+        "source_concepts": [{"material_id": "mat_002", "concept_name": "project archive"}],
+        "wiki_path": "wiki/research/projects/concepts/project-archives.md",
+    }
+    _write_jsonl(root / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl", [good_cluster])
+    _write_jsonl(root / "derived" / "collections" / "research__projects" / "local_concept_clusters.jsonl", [bad_cluster])
+
+    def fake_rows(_root, domain, collection, *_args, **_kwargs):
+        material_id = "mat_001" if collection == "papers" else "mat_002"
+        return (
+            [(f"{collection} concept", f"{collection} concept", material_id, "high", "[1]", '["evidence"]', 0.9, "local", "")],
+            [(material_id, collection.title(), "Summary", '["archive"]')],
+        )
+
+    monkeypatch.setattr("arquimedes.lint._local_rows_in_scope_not_in_clusters", fake_rows)
+    monkeypatch.setattr("arquimedes.lint._parallel_collection_audit_workers", lambda *_args, **_kwargs: 2)
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            prompt = messages[0]["content"]
+            if "research__papers" in prompt:
+                return json.dumps({
+                    "bridge_updates": [],
+                    "new_bridges": [],
+                    "review_updates": [],
+                    "new_reviews": [
+                        {
+                            "cluster_ref": "research__papers__local_0001",
+                            "finding_type": "validated",
+                            "severity": "low",
+                            "status": "validated",
+                            "note": "Papers target is coherent.",
+                            "recommendation": "Keep it.",
+                        }
+                    ],
+                    "context_requests": [],
+                    "_finished": True,
+                })
+            return json.dumps({
+                "bridge_updates": [],
+                "new_bridges": [],
+                "review_updates": [],
+                "new_reviews": [],
+                "context_requests": [],
+                "_finished": True,
+            })
+
+        return fn
+
+    material_info = _build_material_info(root, [{"material_id": "mat_001"}, {"material_id": "mat_002"}])
+
+    with pytest.raises(EnrichmentError, match="research__projects__local_0001"):
+        _run_cluster_audit(root, [good_cluster, bad_cluster], material_info, "test-route", llm_factory)
+
+    stored = [
+        json.loads(line)
+        for line in (root / "derived" / "lint" / "cluster_reviews.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["cluster_id"] for row in stored] == ["research__papers__local_0001"]
+    assert (root / "derived" / "collections" / "research__papers" / "local_audit_stamp.json").exists()
+    assert not (root / "derived" / "collections" / "research__projects" / "local_audit_stamp.json").exists()
+
+
 def test_lint_prompts_repeat_schema_contract_in_user_message(tmp_path):
     from arquimedes.lint import (
         _CLUSTER_AUDIT_DELTA_SCHEMA,

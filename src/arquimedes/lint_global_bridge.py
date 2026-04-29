@@ -751,6 +751,8 @@ def _write_global_bridge_no_progress_diagnostic(
     root: Path,
     domain: str,
     *,
+    packet_path: Path,
+    memory_path: Path,
     raw: str,
     parsed: Any,
     normalized: dict,
@@ -766,6 +768,8 @@ def _write_global_bridge_no_progress_diagnostic(
             "domain": _bridge_domain(domain),
             "diagnostic": "global bridge output made no progress",
             "written_at": datetime.now(timezone.utc).isoformat(),
+            "packet_path": str(packet_path),
+            "memory_path": str(memory_path),
             "pending_cluster_ids": sorted(pending_ids),
             "represented_pending_cluster_ids": sorted(represented_ids),
             "unrepresented_pending_cluster_ids": sorted(pending_ids - represented_ids),
@@ -1335,6 +1339,8 @@ def _run_global_bridge_impl(
                 no_progress_diagnostic_path = _write_global_bridge_no_progress_diagnostic(
                     root,
                     domain,
+                    packet_path=packet_path,
+                    memory_path=memory_path,
                     raw=raw,
                     parsed=parsed,
                     normalized=normalized,
@@ -1386,10 +1392,8 @@ def _run_global_bridge_impl(
             }
         finally:
             if succeeded:
-                cleanup_paths = [packet_path, memory_path]
                 if no_progress_diagnostic_path is None:
-                    cleanup_paths.append(no_progress_path)
-                deps._cleanup_paths(*cleanup_paths)
+                    deps._cleanup_paths(packet_path, memory_path, no_progress_path)
 
     if run_at_any is not None:
         deps._write_lint_stage_stamp(root, global_bridge_at=run_at_any)

@@ -4438,17 +4438,23 @@ def test_global_bridge_runner_writes_diagnostic_when_output_makes_no_progress(tm
     )
 
     diagnostic_path = root / "derived" / "tmp" / "global_bridge" / "research" / "global_bridge.no_progress.json"
+    packet_path = root / "derived" / "tmp" / "global_bridge" / "research" / "global_bridge.packet.json"
+    memory_path = root / "derived" / "tmp" / "global_bridge" / "research" / "global_bridge.memory.json"
     diagnostic = json.loads(diagnostic_path.read_text(encoding="utf-8"))
 
     assert result["domains"]["research"]["global_bridge_no_progress"] is True
     assert result["domains"]["research"]["global_bridge_diagnostic_path"] == str(diagnostic_path)
     assert diagnostic["diagnostic"] == "global bridge output made no progress"
+    assert diagnostic["packet_path"] == str(packet_path)
+    assert diagnostic["memory_path"] == str(memory_path)
     assert diagnostic["parsed_response"] == {"links_to_existing": [], "new_clusters": [], "_finished": True}
     assert diagnostic["normalized_response"] == {"links_to_existing": [], "new_clusters": []}
     assert diagnostic["unrepresented_pending_cluster_ids"] == [
         "research__papers__local_0001",
         "research__projects__local_0001",
     ]
+    assert packet_path.exists()
+    assert memory_path.exists()
     assert (root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl").exists()
     assert (root / "derived" / "domains" / "research" / "global_bridge_stamp.json").exists()
 

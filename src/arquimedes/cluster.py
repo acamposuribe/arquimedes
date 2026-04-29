@@ -671,40 +671,9 @@ def is_local_clustering_stale(
 
 _BRIDGE_DELTA_SCHEMA = '{"links_to_existing":[{"cluster_id":"required existing cluster id","source_concepts":[{"material_id":"required string","concept_name":"required string"}]}],"new_clusters":[{"canonical_name":"required string","descriptor":"short cluster description","aliases":["max 4 strings"],"source_concepts":[{"material_id":"required string","concept_name":"required string"}]}],"_finished":true}'
 
-_BRIDGE_SCHEMA_REFERENCE = """\
-Output JSON object MUST use exactly these keys (no synonyms, no renaming, no extra keys):
-
-Top level:
-- "links_to_existing": array (may be empty). One entry per existing cluster you want to extend.
-- "new_clusters": array (may be empty). One entry per brand-new umbrella cluster.
-- "_finished": boolean, set to true only in the final completed answer.
-
-Each item in "links_to_existing" MUST have exactly:
-- "cluster_id": string, the id of an existing cluster taken verbatim from the bridge memory file.
-- "source_concepts": non-empty array of {"material_id": string, "concept_name": string}.
-
-Each item in "new_clusters" MUST have exactly:
-- "canonical_name": REQUIRED non-empty string. The umbrella concept phrase. Never omit. Do NOT use "label", "name", "title", or "cluster_id" instead.
-- "descriptor": REQUIRED string. Short cluster description (at most two brief lines) in plain language. Do NOT use "rationale", "summary", or "description".
-- "aliases": array of up to 4 strings (may be empty). Near-synonyms or alternate phrasings.
-- "source_concepts": REQUIRED non-empty array of {"material_id": string, "concept_name": string}. Do NOT use "concepts", "members", or "materials"; do NOT use "concept" instead of "concept_name".
-
-Do NOT include "cluster_id" inside "new_clusters" entries (ids are assigned downstream).
-Do NOT include any keys not listed above. Unknown keys cause the cluster to be discarded.
-
-Reference example (illustrative values only):
-{"links_to_existing":[{"cluster_id":"abc123","source_concepts":[{"material_id":"m1","concept_name":"counter-mapping methods"}]}],"new_clusters":[{"canonical_name":"architecture as care","descriptor":"Frames design practice as ongoing maintenance and attention to bodies, rather than authored objects.","aliases":["caring architecture","maintenance as design"],"source_concepts":[{"material_id":"m2","concept_name":"maintenance labor"},{"material_id":"m3","concept_name":"care infrastructures"}]}],"_finished":true}
-"""
-
-_BRIDGE_SYSTEM_PROMPT = f"""\
+_BRIDGE_SYSTEM_PROMPT = """\
 You are an architecture research librarian. You are grouping concepts \
 from material packets into broad cross-material umbrella clusters.
-
-NON-NEGOTIABLE compact output schema:
-{_BRIDGE_DELTA_SCHEMA}
-
-NON-NEGOTIABLE field reference (read carefully — wrong key names cause clusters to be dropped):
-{_BRIDGE_SCHEMA_REFERENCE}
 
 Content rules:
 - Favor broader but still meaningful canonical names that connect related materials across the collection.
@@ -718,11 +687,9 @@ Content rules:
 - It is acceptable for one material to contribute more than one source concept to the same cluster when they support the same umbrella idea.
 - Avoid trivial canonical names like "space", "history", "power", or "memory" unless sharply qualified into a real concept phrase.
 - Clusters must connect at least two materials, but prefer broader clusters that connect more materials when the analytical connection is strong enough.
-- Canonical names are REQUIRED and may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like "history", "power", "space", or "memory" unless sharply qualified. Prefer cluster names that carry analytical charge and group local and bridge concepts together, like "spatial justice", "racial capitalism", "architecture as care", "counter-mapping methods", "authoritarian urbanism", or "collecting as spatial practice", and many others.
+- Cluster names may be theoretically dense and multi-word. Avoid near-duplicate concepts, incidental topics, and generic labels like "history", "power", "space", or "memory" unless sharply qualified. Prefer cluster names that carry analytical charge and group local and bridge concepts together, like "spatial justice", "racial capitalism", "architecture as care", "counter-mapping methods", "authoritarian urbanism", or "collecting as spatial practice", and many others.
 
-Output rules:
-- Complete the full clustering pass before you answer. Do not emit partial work, draft JSON, commentary, or progress updates.
-- Return structured JSON only once, at the very end, using the exact keys specified above. Do not return markdown fences, prose, or anything outside the required JSON object."""
+The user message specifies the exact output schema. Return the final JSON object only, once, at the very end, with no markdown fences, commentary, drafts, or progress updates."""
 
 _REQUIRED_BRIDGE_DELTA_FIELDS = (
         "links_to_existing",

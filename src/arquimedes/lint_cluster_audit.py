@@ -211,10 +211,10 @@ def _cluster_audit_target_clusters(
         if review is None:
             reasons.append("missing_review")
         else:
-            if str(review.get("status", "")).strip().lower() == "open":
-                reasons.append("open_review")
             if str(review.get("input_fingerprint", "")).strip() != cluster_fingerprints.get(cluster_id, ""):
                 reasons.append("changed_since_last_audit")
+            if reasons and str(review.get("status", "")).strip().lower() == "open":
+                reasons.append("open_review")
         if reasons:
             targets.append({
                 "cluster_id": cluster_id,

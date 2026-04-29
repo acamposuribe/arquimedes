@@ -1446,6 +1446,68 @@ def test_cluster_audit_material_fingerprint_ignores_renames_and_alias_changes():
     assert fingerprints["concept_001"] == canonical_reviews["concept_001"]["input_fingerprint"]
 
 
+def test_cluster_audit_open_review_waits_for_changed_input():
+    from arquimedes.lint import _cluster_audit_cluster_fingerprint, _cluster_audit_target_clusters
+
+    cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive and Space",
+        "material_ids": ["mat_001"],
+    }
+    canonical_reviews = {
+        "research__papers__local_0001": {
+            "review_id": "cluster_audit__research__papers__local_0001",
+            "cluster_id": "research__papers__local_0001",
+            "finding_type": "ambiguous_scope",
+            "severity": "medium",
+            "status": "open",
+            "note": "Needs another pass once new evidence appears.",
+            "recommendation": "Wait for changed collection input.",
+            "input_fingerprint": _cluster_audit_cluster_fingerprint(cluster, "test-route"),
+        }
+    }
+
+    targets, fingerprints = _cluster_audit_target_clusters([cluster], canonical_reviews, "test-route")
+
+    assert targets == []
+    assert fingerprints["research__papers__local_0001"] == canonical_reviews["research__papers__local_0001"]["input_fingerprint"]
+
+
+def test_cluster_audit_changed_open_review_still_includes_open_context():
+    from arquimedes.lint import _cluster_audit_cluster_fingerprint, _cluster_audit_target_clusters
+
+    original_cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive and Space",
+        "material_ids": ["mat_001"],
+    }
+    changed_cluster = {
+        **original_cluster,
+        "material_ids": ["mat_001", "mat_002"],
+    }
+    canonical_reviews = {
+        "research__papers__local_0001": {
+            "review_id": "cluster_audit__research__papers__local_0001",
+            "cluster_id": "research__papers__local_0001",
+            "finding_type": "ambiguous_scope",
+            "severity": "medium",
+            "status": "open",
+            "note": "Needs another pass once new evidence appears.",
+            "recommendation": "Wait for changed collection input.",
+            "input_fingerprint": _cluster_audit_cluster_fingerprint(original_cluster, "test-route"),
+        }
+    }
+
+    targets, _fingerprints = _cluster_audit_target_clusters([changed_cluster], canonical_reviews, "test-route")
+
+    assert len(targets) == 1
+    assert targets[0]["reasons"] == ["changed_since_last_audit", "open_review"]
+
+
 @pytest.mark.skip(reason="legacy raw-material bridge audit retired")
 def test_cluster_audit_drops_new_review_for_rejected_new_bridge_and_still_builds(tmp_path, monkeypatch):
     root, _config = _setup_repo(tmp_path)

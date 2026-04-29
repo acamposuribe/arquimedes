@@ -3872,6 +3872,8 @@ def test_global_bridge_prompt_requests_page_worthy_bridge_essay():
     assert "2 to 4 paragraphs" in system
     assert "full connected local-cluster reflections and collection signals" in system
     assert "inside the Research domain" in system
+    assert "Keep the total number of bridges limited" in system
+    assert "Prefer refocusing an existing bridge with links_to_existing" in system
     assert "page-worthy bridge synthesis" in user
 
 
@@ -3882,6 +3884,8 @@ def test_global_bridge_prompt_for_practice_is_spanish():
     system, user = _global_bridge_prompt(Path("packet.json"), Path("memory.json"), "practice")
 
     assert "orientada a la práctica" in system
+    assert "Mantén el número total de puentes limitado" in system
+    assert "Prefiere reenfocar un puente existente con links_to_existing" in system
     assert "Todos los textos libres y listas deben estar en español." in user
     assert concept_reflection_figure_limit("practice") > concept_reflection_figure_limit("research")
     assert collection_reflection_figure_limit("practice") > collection_reflection_figure_limit("research")

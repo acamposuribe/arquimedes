@@ -786,6 +786,32 @@ def _build_bridge_prompt(
         "Do not output partial JSON, drafts, commentary, or progress updates. Follow required output schema closely. This is non-negotiable.\n"
         "Set _finished to true only in that final completed JSON object.\n"
         "Return JSON only.\n"
+        "\n"
+        "MANDATORY OUTPUT SHAPE — fill in this exact template. Do not rename, omit, or add keys:\n"
+        '{\n'
+        '  "links_to_existing": [\n'
+        '    {"cluster_id": "<existing id>", "source_concepts": [{"material_id": "<id>", "concept_name": "<concept>"}]}\n'
+        '  ],\n'
+        '  "new_clusters": [\n'
+        '    {\n'
+        '      "canonical_name": "<umbrella concept phrase, REQUIRED, never empty>",\n'
+        '      "descriptor": "<short plain-language description, REQUIRED>",\n'
+        '      "aliases": ["<optional alias>", "<optional alias>"],\n'
+        '      "source_concepts": [\n'
+        '        {"material_id": "<id>", "concept_name": "<concept exactly as in packet>"}\n'
+        '      ]\n'
+        '    }\n'
+        '  ],\n'
+        '  "_finished": true\n'
+        '}\n'
+        "\n"
+        "Forbidden keys inside new_clusters items: \"label\", \"name\", \"title\", \"rationale\", \"summary\", \"description\", \"materials\", \"concepts\", \"members\", \"cluster_id\". "
+        "Use \"canonical_name\" instead of \"label\"/\"name\"/\"title\". "
+        "Use \"descriptor\" instead of \"rationale\"/\"summary\"/\"description\". "
+        "Use \"source_concepts\" (array of {material_id, concept_name} objects) instead of \"concepts\"/\"members\"/\"materials\". "
+        "Never put bare strings in source_concepts; always use objects with material_id and concept_name.\n"
+        "\n"
+        "Before emitting, self-check every new_clusters item: it must contain exactly the four keys canonical_name, descriptor, aliases, source_concepts, and source_concepts items must be objects with material_id and concept_name. If any entry uses a forbidden key, rename it before output.\n"
     )
 
 

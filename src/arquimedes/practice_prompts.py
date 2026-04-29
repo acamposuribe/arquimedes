@@ -254,6 +254,32 @@ def local_cluster_user_prompt(bridge_packets_path: Path, bridge_memory_path: Pat
         "No devuelvas borradores, JSON parcial, comentarios ni texto fuera del JSON.\n"
         "Pon _finished en true solo en el objeto final completo.\n"
         "Devuelve solo JSON.\n"
+        "\n"
+        "FORMA DE SALIDA OBLIGATORIA — rellena exactamente esta plantilla. No renombres, no omitas ni añadas claves:\n"
+        '{\n'
+        '  "links_to_existing": [\n'
+        '    {"cluster_id": "<id existente>", "source_concepts": [{"material_id": "<id>", "concept_name": "<concepto>"}]}\n'
+        '  ],\n'
+        '  "new_clusters": [\n'
+        '    {\n'
+        '      "canonical_name": "<nombre paraguas del cluster, OBLIGATORIO, nunca vacío>",\n'
+        '      "descriptor": "<descripción breve en lenguaje directo, OBLIGATORIO>",\n'
+        '      "aliases": ["<alias opcional>", "<alias opcional>"],\n'
+        '      "source_concepts": [\n'
+        '        {"material_id": "<id>", "concept_name": "<concepto tal cual aparece en el paquete>"}\n'
+        '      ]\n'
+        '    }\n'
+        '  ],\n'
+        '  "_finished": true\n'
+        '}\n'
+        "\n"
+        "Claves prohibidas dentro de los elementos de new_clusters: \"label\", \"name\", \"title\", \"rationale\", \"summary\", \"description\", \"materials\", \"concepts\", \"members\", \"cluster_id\". "
+        "Usa \"canonical_name\" en lugar de \"label\"/\"name\"/\"title\". "
+        "Usa \"descriptor\" en lugar de \"rationale\"/\"summary\"/\"description\". "
+        "Usa \"source_concepts\" (array de objetos {material_id, concept_name}) en lugar de \"concepts\"/\"members\"/\"materials\". "
+        "Nunca pongas strings sueltos en source_concepts; siempre objetos con material_id y concept_name.\n"
+        "\n"
+        "Antes de emitir, verifica cada elemento de new_clusters: debe contener exactamente las cuatro claves canonical_name, descriptor, aliases, source_concepts, y los elementos de source_concepts deben ser objetos con material_id y concept_name. Si alguna entrada usa una clave prohibida, renómbrala antes de devolver el JSON.\n"
     )
 
 

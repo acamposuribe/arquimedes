@@ -3982,6 +3982,43 @@ def test_global_bridge_prompt_for_practice_is_spanish():
     assert collection_reflection_figure_limit("practice") > collection_reflection_figure_limit("research")
 
 
+def test_global_bridge_response_keeps_valid_items_when_some_items_fail():
+    from arquimedes.lint_global_bridge import _normalize_global_bridge_response
+
+    normalized = _normalize_global_bridge_response(
+        {
+            "links_to_existing": [
+                {
+                    "bridge_id": "global_bridge__research__archive",
+                    "member_local_clusters": [{"cluster_id": "research__papers__local_0001"}],
+                },
+                {
+                    "bridge_id": "global_bridge__research__missing",
+                    "member_local_clusters": [{"cluster_id": "research__papers__local_0001"}],
+                },
+            ],
+            "new_clusters": [
+                {
+                    "canonical_name": "Valid New Bridge",
+                    "member_local_clusters": [{"cluster_id": "research__projects__local_0001"}],
+                },
+                {
+                    "canonical_name": "Invalid New Bridge",
+                    "member_local_clusters": [{"cluster_id": "research__unknown__local_9999"}],
+                },
+            ],
+            "_finished": True,
+        },
+        [{"bridge_id": "global_bridge__research__archive"}],
+        {"research__papers__local_0001", "research__projects__local_0001"},
+    )
+
+    assert [row["bridge_id"] for row in normalized["links_to_existing"]] == ["global_bridge__research__archive"]
+    assert [row["canonical_name"] for row in normalized["new_clusters"]] == ["Valid New Bridge"]
+    assert "links_to_existing[2] references unknown bridge_id" in normalized["_errors"][0]
+    assert "new_clusters[2] member_local_clusters[1] references unknown pending cluster_id" in normalized["_errors"][1]
+
+
 def test_run_reflective_lint_global_bridge_stage_skips_with_fewer_than_two_collections(tmp_path, monkeypatch):
     import arquimedes.lint as lint_mod
 
@@ -4550,6 +4587,75 @@ def test_global_bridge_runner_writes_diagnostic_when_output_makes_no_progress(tm
     assert (root / "derived" / "domains" / "research" / "global_bridge_stamp.json").exists()
 
 
+def test_global_bridge_runner_records_bridge_membership_before_reflection_failures(tmp_path, monkeypatch):
+    import arquimedes.lint as lint_mod
+    from arquimedes.lint_global_bridge import _run_global_bridge_impl
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    local_clusters = [
+        {
+            "cluster_id": "research__papers__local_0001",
+            "domain": "research",
+            "collection": "papers",
+            "collection_key": "research/papers",
+            "canonical_name": "Archive",
+            "slug": "archive",
+            "descriptor": "Archive as a spatial ordering device.",
+            "material_ids": ["mat_001"],
+            "confidence": 0.92,
+        },
+        {
+            "cluster_id": "research__projects__local_0001",
+            "domain": "research",
+            "collection": "projects",
+            "collection_key": "research/projects",
+            "canonical_name": "Archive",
+            "slug": "archive",
+            "descriptor": "Archive as a project memory scaffold.",
+            "material_ids": ["mat_010"],
+            "confidence": 0.61,
+        },
+    ]
+    collection_refs = [
+        {"collection_key": "research/papers", "domain": "research", "collection": "papers"},
+        {"collection_key": "research/projects", "domain": "research", "collection": "projects"},
+    ]
+
+    def llm_factory(_stage: str):
+        def fn(_system: str, messages: list[dict]) -> str:
+            if "global bridge reflection packet" in messages[0]["content"].lower():
+                return json.dumps({"bridge_takeaways": [], "_finished": False})
+            return json.dumps(
+                {
+                    "links_to_existing": [],
+                    "new_clusters": [
+                        {
+                            "canonical_name": "Archive Bridge",
+                            "member_local_clusters": [
+                                {"cluster_id": "research__papers__local_0001"},
+                                {"cluster_id": "research__projects__local_0001"},
+                            ],
+                        }
+                    ],
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    result = _run_global_bridge_impl(lint_mod, root, local_clusters, collection_refs, llm_factory, None, "")
+    artifact_path = root / "derived" / "domains" / "research" / "global_bridge_clusters.jsonl"
+    failure_path = root / "derived" / "tmp" / "global_bridge" / "research" / "global_bridge.reflection_failures.json"
+    bridge_rows = [json.loads(line) for line in artifact_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    failures = json.loads(failure_path.read_text(encoding="utf-8"))
+
+    assert result["domains"]["research"]["global_bridges"] == 1
+    assert bridge_rows[0]["canonical_name"] == "Archive Bridge"
+    assert bridge_rows[0]["why_this_bridge_matters"] == ""
+    assert failures["failures"][0]["bridge_id"] == "global_bridge__research__archive-bridge"
+
+
 def test_global_bridge_reflection_pass_updates_changed_bridge_fields(tmp_path, monkeypatch):
     from arquimedes.lint_global_bridge import _bridge_reflection_packet, _run_global_bridge_reflections
 
@@ -4805,6 +4911,83 @@ def test_global_bridge_reflection_ignores_unknown_collection_signal_keys(tmp_pat
 
     assert count == 1
     assert [row["collection_key"] for row in rows[0]["supporting_collection_reflections"]] == ["research/Intersectionality"]
+
+
+def test_global_bridge_reflection_pass_keeps_successful_rows_when_one_reflection_fails(tmp_path, monkeypatch):
+    from arquimedes.lint_global_bridge import _run_global_bridge_reflections
+
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    bridges = [
+        {
+            "bridge_id": "global_bridge__research__archive",
+            "domain": "research",
+            "canonical_name": "Archive",
+            "slug": "archive",
+            "member_local_clusters": [
+                {
+                    "cluster_id": "research__papers__local_0001",
+                    "collection_key": "research/papers",
+                    "canonical_name": "Archive",
+                    "descriptor": "Archive systems.",
+                }
+            ],
+            "supporting_collection_reflections": [],
+            "why_this_bridge_matters": "",
+        },
+        {
+            "bridge_id": "global_bridge__research__failure",
+            "domain": "research",
+            "canonical_name": "Failure",
+            "slug": "failure",
+            "member_local_clusters": [
+                {
+                    "cluster_id": "research__projects__local_0001",
+                    "collection_key": "research/projects",
+                    "canonical_name": "Failure",
+                    "descriptor": "Bad output case.",
+                }
+            ],
+            "supporting_collection_reflections": [],
+            "why_this_bridge_matters": "",
+        },
+    ]
+
+    def llm_factory(_stage: str):
+        def fn(_system: str, messages: list[dict]) -> str:
+            if "failure.packet.json" in messages[0]["content"]:
+                return json.dumps({"bridge_takeaways": [], "_finished": False})
+            return json.dumps(
+                {
+                    "bridge_takeaways": ["Archive becomes a shared research concern."],
+                    "bridge_tensions": [],
+                    "bridge_open_questions": [],
+                    "helpful_new_sources": [],
+                    "why_this_bridge_matters": "It gives archive work a shared bridge page.",
+                    "supporting_collection_reflections": [],
+                    "_finished": True,
+                }
+            )
+
+        return fn
+
+    rows, count = _run_global_bridge_reflections(
+        root,
+        bridges,
+        {"global_bridge__research__archive", "global_bridge__research__failure"},
+        llm_factory,
+        domain="research",
+    )
+
+    by_id = {row["bridge_id"]: row for row in rows}
+    failure_path = root / "derived" / "tmp" / "global_bridge" / "research" / "global_bridge.reflection_failures.json"
+    diagnostic = json.loads(failure_path.read_text(encoding="utf-8"))
+
+    assert count == 2
+    assert by_id["global_bridge__research__archive"]["why_this_bridge_matters"] == "It gives archive work a shared bridge page."
+    assert by_id["global_bridge__research__failure"]["why_this_bridge_matters"] == ""
+    assert diagnostic["failures"][0]["bridge_id"] == "global_bridge__research__failure"
+    assert "missing _finished=true" in diagnostic["failures"][0]["error"]
 
 
 def test_scheduled_full_lint_can_skip_when_fresh(tmp_path, monkeypatch):

@@ -622,39 +622,49 @@ def _normalize_global_bridge_response(parsed: Any, existing_bridges: list[dict],
         raise EnrichmentError("Global bridge output field 'new_clusters' must be a list")
     existing_ids = {_safe_cluster_id(row) for row in existing_bridges if _safe_cluster_id(row)}
     normalized_links = []
+    errors = []
     for idx, row in enumerate(links_to_existing, start=1):
-        if not isinstance(row, dict):
-            raise EnrichmentError(f"links_to_existing[{idx}] must be an object")
-        bridge_id = str(row.get("bridge_id", "")).strip()
-        if not bridge_id:
-            raise EnrichmentError(f"links_to_existing[{idx}] is missing bridge_id")
-        if bridge_id not in existing_ids:
-            raise EnrichmentError(f"links_to_existing[{idx}] references unknown bridge_id '{bridge_id}'")
-        normalized_links.append(
-            {
-                "bridge_id": bridge_id,
-                "member_local_clusters": _normalize_bridge_member_refs(row.get("member_local_clusters"), pending_ids, label=f"links_to_existing[{idx}]"),
-                "canonical_name": str(row.get("canonical_name", "")).strip(),
-                "descriptor": str(row.get("descriptor", "")).strip(),
-                "aliases": _optional_string_list(row.get("aliases"), label=f"links_to_existing[{idx}].aliases"),
-            }
-        )
+        try:
+            if not isinstance(row, dict):
+                raise EnrichmentError(f"links_to_existing[{idx}] must be an object")
+            bridge_id = str(row.get("bridge_id", "")).strip()
+            if not bridge_id:
+                raise EnrichmentError(f"links_to_existing[{idx}] is missing bridge_id")
+            if bridge_id not in existing_ids:
+                raise EnrichmentError(f"links_to_existing[{idx}] references unknown bridge_id '{bridge_id}'")
+            normalized_links.append(
+                {
+                    "bridge_id": bridge_id,
+                    "member_local_clusters": _normalize_bridge_member_refs(row.get("member_local_clusters"), pending_ids, label=f"links_to_existing[{idx}]"),
+                    "canonical_name": str(row.get("canonical_name", "")).strip(),
+                    "descriptor": str(row.get("descriptor", "")).strip(),
+                    "aliases": _optional_string_list(row.get("aliases"), label=f"links_to_existing[{idx}].aliases"),
+                }
+            )
+        except EnrichmentError as exc:
+            errors.append(str(exc))
     normalized_new = []
     for idx, row in enumerate(new_clusters, start=1):
-        if not isinstance(row, dict):
-            raise EnrichmentError(f"new_clusters[{idx}] must be an object")
-        canonical_name = str(row.get("canonical_name", "")).strip()
-        if not canonical_name:
-            raise EnrichmentError(f"new_clusters[{idx}] is missing canonical_name")
-        normalized_new.append(
-            {
-                "canonical_name": canonical_name,
-                "descriptor": str(row.get("descriptor", "")).strip(),
-                "aliases": _optional_string_list(row.get("aliases"), label=f"new_clusters[{idx}].aliases"),
-                "member_local_clusters": _normalize_bridge_member_refs(row.get("member_local_clusters"), pending_ids, label=f"new_clusters[{idx}]"),
-            }
-        )
-    return {"links_to_existing": normalized_links, "new_clusters": normalized_new}
+        try:
+            if not isinstance(row, dict):
+                raise EnrichmentError(f"new_clusters[{idx}] must be an object")
+            canonical_name = str(row.get("canonical_name", "")).strip()
+            if not canonical_name:
+                raise EnrichmentError(f"new_clusters[{idx}] is missing canonical_name")
+            normalized_new.append(
+                {
+                    "canonical_name": canonical_name,
+                    "descriptor": str(row.get("descriptor", "")).strip(),
+                    "aliases": _optional_string_list(row.get("aliases"), label=f"new_clusters[{idx}].aliases"),
+                    "member_local_clusters": _normalize_bridge_member_refs(row.get("member_local_clusters"), pending_ids, label=f"new_clusters[{idx}]"),
+                }
+            )
+        except EnrichmentError as exc:
+            errors.append(str(exc))
+    normalized = {"links_to_existing": normalized_links, "new_clusters": normalized_new}
+    if errors:
+        normalized["_errors"] = errors
+    return normalized
 
 
 def _normalize_bridge_collection_reflections(value: Any, valid_keys: set[str]) -> list[dict]:
@@ -930,6 +940,10 @@ def _bridge_reflection_packet_path(root: Path, domain: str, bridge_id: str) -> P
     return _global_bridge_stage_dir(root, domain) / "reflections" / f"{safe_name}.packet.json"
 
 
+def _bridge_reflection_failures_path(root: Path, domain: str) -> Path:
+    return _global_bridge_stage_dir(root, domain) / "global_bridge.reflection_failures.json"
+
+
 def _bridge_reflection_fingerprint(row: dict) -> str:
     deps = _deps()
     return deps.canonical_hash(
@@ -1058,7 +1072,8 @@ def _run_global_bridge_reflections(root: Path, bridges: list[dict], changed_brid
 
     workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
     by_id = {str(row.get("bridge_id", "")).strip(): dict(row) for row in bridges}
-    failures: list[BaseException] = []
+    failures: list[dict] = []
+    failures_path = _bridge_reflection_failures_path(root, domain)
 
     def _one(row: dict, fingerprint: str) -> dict:
         llm_fn = llm_factory("lint")
@@ -1090,22 +1105,34 @@ def _run_global_bridge_reflections(root: Path, bridges: list[dict], changed_brid
 
     if len(eligible) > 1 and workers > 1:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            futures = [pool.submit(_one, row, fingerprint) for row, fingerprint in eligible]
+            futures = {
+                pool.submit(_one, row, fingerprint): str(row.get("bridge_id", "")).strip()
+                for row, fingerprint in eligible
+            }
             for fut in as_completed(futures):
                 try:
                     row = fut.result()
                     by_id[str(row.get("bridge_id", "")).strip()] = row
                 except BaseException as exc:
-                    failures.append(exc)
+                    failures.append({"bridge_id": futures[fut], "error": str(exc)})
     else:
         for row, fingerprint in eligible:
             try:
                 updated = _one(row, fingerprint)
                 by_id[str(updated.get("bridge_id", "")).strip()] = updated
             except BaseException as exc:
-                failures.append(exc)
+                failures.append({"bridge_id": str(row.get("bridge_id", "")).strip(), "error": str(exc)})
     if failures:
-        raise failures[0]
+        _deps()._write_json(
+            failures_path,
+            {
+                "domain": _bridge_domain(domain),
+                "written_at": datetime.now(timezone.utc).isoformat(),
+                "failures": failures,
+            },
+        )
+    elif failures_path.exists():
+        failures_path.unlink()
     output = [by_id[str(row.get("bridge_id", "")).strip()] for row in bridges if str(row.get("bridge_id", "")).strip() in by_id]
     run_at = datetime.now(timezone.utc).isoformat()
     _deps()._attach_run_provenance(output, route_signature, run_at)
@@ -1720,6 +1747,9 @@ def _run_global_bridge_impl(
                 if str(member.get("cluster_id", "")).strip() in pending_ids
                 and str(bridge.get("bridge_id", "")).strip()
             }
+            pre_reflection_run_at = datetime.now(timezone.utc).isoformat()
+            deps._attach_run_provenance(bridges, route_signature, pre_reflection_run_at)
+            deps._write_jsonl(artifact_path, bridges)
             bridge_reflection_count = 0
             if changed_bridge_ids:
                 bridges, bridge_reflection_count = _run_global_bridge_reflections(

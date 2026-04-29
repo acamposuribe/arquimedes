@@ -631,7 +631,7 @@ def test_cluster_audit_writes_schema_and_skips_unchanged_clusters(tmp_path, monk
     assert "Return exactly one final JSON object matching this schema" in prompt_user
     assert "Your top-level keys must be bridge_updates" in prompt_user
     assert "Do not return legacy or summary keys" in prompt_user
-    assert "Return final JSON only." in prompt_user
+    assert "Do not respond until the work is complete" in prompt_user
     assert "PROCESS_FINISHED" not in prompt_user
     for record in first:
         assert {"review_id", "cluster_id", "finding_type", "severity", "status", "note", "recommendation", "input_fingerprint", "wiki_path", "context_requested", "context_request_count"} <= set(record)
@@ -883,6 +883,37 @@ def test_local_cluster_audit_preserves_failed_llm_artifacts(tmp_path, monkeypatc
     failure = json.loads(failure_path.read_text(encoding="utf-8"))
     assert failure["error"] == "Cluster audit output missing _finished=true"
     assert failure["artifacts"]["initial_raw_response"] == str(raw_path)
+
+
+def test_lint_prompts_repeat_schema_contract_in_user_message(tmp_path):
+    from arquimedes.lint import (
+        _CLUSTER_AUDIT_DELTA_SCHEMA,
+        _COLLECTION_REFLECTION_DELTA_SCHEMA,
+        _CONCEPT_REFLECTION_DELTA_SCHEMA,
+        _GRAPH_REFLECTION_DELTA_SCHEMA,
+    )
+    from arquimedes.lint_cluster_audit import _cluster_audit_prompt
+    from arquimedes.lint_collection_reflection import _collection_reflection_prompt
+    from arquimedes.lint_concept_reflection import _concept_reflection_prompt
+    from arquimedes.lint_global_bridge import _GLOBAL_BRIDGE_DELTA_SCHEMA, _global_bridge_prompt
+    from arquimedes.lint_graph_reflection import _graph_reflection_prompt
+
+    contracts = [
+        (_cluster_audit_prompt(tmp_path, tmp_path / "input.json", tmp_path / "bridge.jsonl", tmp_path / "reviews.jsonl")[1], _CLUSTER_AUDIT_DELTA_SCHEMA, "Return exactly one final JSON object matching this schema"),
+        (_concept_reflection_prompt("research", tmp_path / "concept.md", tmp_path / "concept.evidence.json")[1], _CONCEPT_REFLECTION_DELTA_SCHEMA, "Return exactly one final JSON object matching this schema"),
+        (_collection_reflection_prompt("research", "papers", tmp_path / "collection.md", tmp_path / "collection.evidence.json")[1], _COLLECTION_REFLECTION_DELTA_SCHEMA, "Return exactly one final JSON object matching this schema"),
+        (_graph_reflection_prompt(tmp_path / "graph.packet.json", tmp_path / "graph_findings.jsonl")[1], _GRAPH_REFLECTION_DELTA_SCHEMA, "Return exactly one final JSON object matching this schema"),
+        (_global_bridge_prompt(tmp_path / "global_bridge_packet.json", tmp_path / "global_bridge_memory.jsonl", "research")[1], _GLOBAL_BRIDGE_DELTA_SCHEMA, "Return exactly one final JSON object matching this schema"),
+        (_concept_reflection_prompt("practice", tmp_path / "concept.md", tmp_path / "concept.evidence.json")[1], _CONCEPT_REFLECTION_DELTA_SCHEMA, "Devuelve exactamente un único objeto JSON final que siga este esquema"),
+        (_collection_reflection_prompt("practice", "details", tmp_path / "collection.md", tmp_path / "collection.evidence.json")[1], _COLLECTION_REFLECTION_DELTA_SCHEMA, "Devuelve exactamente un único objeto JSON final que siga este esquema"),
+        (_global_bridge_prompt(tmp_path / "global_bridge_packet.json", tmp_path / "global_bridge_memory.jsonl", "practice")[1], _GLOBAL_BRIDGE_DELTA_SCHEMA, "Devuelve exactamente un único objeto JSON final que siga este esquema"),
+    ]
+
+    for user_prompt, schema, schema_phrase in contracts:
+        assert schema_phrase in user_prompt
+        assert schema in user_prompt
+        assert "_finished" in user_prompt
+        assert "partial JSON" in user_prompt or "JSON parcial" in user_prompt
 
 
 def test_local_cluster_audit_skips_busy_collection_scope(tmp_path, monkeypatch):
@@ -1959,7 +1990,8 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
     assert "SQL evidence file:" in prompts[0]
     assert "Work file:" not in prompts[0]
     assert "PROCESS_FINISHED" not in prompts[0]
-    assert "Return final JSON only." in prompts[0]
+    assert "Return exactly one final JSON object matching this schema" in prompts[0]
+    assert "Do not respond until the work is complete" in prompts[0]
     assert '"_finished"' in systems[0]
     assert {"cluster_id", "slug", "canonical_name", "main_takeaways", "main_tensions", "open_questions", "helpful_new_sources", "why_this_concept_matters", "supporting_material_ids", "supporting_evidence", "input_fingerprint", "wiki_path"} <= set(first[0])
     assert first[0]["helpful_new_sources"] == ["Archive design case studies with annotated floor plans."]
@@ -2133,7 +2165,8 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
     assert first[0]["why_this_collection_matters"] == "It shapes the collection as a whole."
     assert {"collection_key", "domain", "collection", "main_takeaways", "main_tensions", "important_material_ids", "important_cluster_ids", "open_questions", "helpful_new_sources", "why_this_collection_matters", "input_fingerprint", "wiki_path"} <= set(first[0])
     assert "PROCESS_FINISHED" not in prompts[0]
-    assert "Return final JSON only." in prompts[0]
+    assert "Return exactly one final JSON object matching this schema" in prompts[0]
+    assert "Do not respond until the work is complete" in prompts[0]
     assert '"_finished"' in systems[0]
 
     second = _run_collection_reflections(root, groups, list(clusters), llm_factory, tool)
@@ -2601,7 +2634,8 @@ def test_graph_reflection_writes_page_and_skips_unchanged(tmp_path, monkeypatch)
     assert first["graph_maintenance"] == 1
     assert len(calls) == 1
     assert "PROCESS_FINISHED" not in prompts[0]
-    assert "Return final JSON only." in prompts[0]
+    assert "Return exactly one final JSON object matching this schema" in prompts[0]
+    assert "Do not respond until the work is complete" in prompts[0]
     assert '"_finished"' in systems[0]
     page_path = root / "wiki" / "shared" / "maintenance" / "graph-health.md"
     assert not page_path.exists()
@@ -2781,7 +2815,8 @@ def test_concept_reflection_includes_prior_reflection_and_rich_evidence(tmp_path
     assert "Concept wiki page:" in calls[0]
     assert "SQL evidence file:" in calls[0]
     assert "Work file:" not in calls[0]
-    assert "Return final JSON only." in calls[0]
+    assert "Return exactly one final JSON object matching this schema" in calls[0]
+    assert "Do not respond until the work is complete" in calls[0]
 
 
 def test_concept_reflection_null_fields_preserve_existing_row_values(tmp_path, monkeypatch):

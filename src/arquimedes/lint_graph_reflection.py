@@ -218,7 +218,9 @@ def _graph_reflection_prompt(
         "Return only the fields requested by the schema: findings and _finished.\n"
         "If the current findings list still fits the evidence exactly, you may return null for findings and the pipeline will preserve the stored list unchanged.\n"
         "Do not restate deterministic lint results.\n"
-        "Return final JSON only.\n"
+        f"Return exactly one final JSON object matching this schema: {deps._GRAPH_REFLECTION_DELTA_SCHEMA}\n"
+        "Do not respond until the work is complete. Return one response only, directly as JSON, with _finished set to true. "
+        "Do not return markdown fences, commentary, drafts, progress updates, or partial JSON.\n"
     )
     return system, user
 

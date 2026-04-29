@@ -429,7 +429,9 @@ def _concept_reflection_prompt(
         "Do not return cluster metadata, supporting ids, or wiki paths.\n"
         "If prior reflection text still fits the evidence, preserve it; if it no longer fits, revise it.\n"
         "Do not leave the work file as a mere summary of the page. Use the evidence to surface the concept's role, stakes, and unresolved questions.\n"
-        "Return final JSON only.\n"
+        f"Return exactly one final JSON object matching this schema: {deps._CONCEPT_REFLECTION_DELTA_SCHEMA}\n"
+        "Do not respond until the work is complete. Return one response only, directly as JSON, with _finished set to true. "
+        "Do not return markdown fences, commentary, drafts, progress updates, or partial JSON.\n"
     )
     return system, user
 

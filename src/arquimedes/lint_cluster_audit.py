@@ -766,7 +766,8 @@ def _cluster_audit_prompt(root: Path, input_path: Path, bridge_input_path: Path,
         "Your top-level keys must be bridge_updates, new_bridges, review_updates, new_reviews, context_requests, and _finished. "
         "Set _finished to true in the final object.\n"
         "Do not return legacy or summary keys such as reviews, cluster_reviews, audit_results, audit_results[].decision, proposed_changes, or rationale.\n"
-        "Return final JSON only.\n"
+        "Do not respond until the work is complete. Return one response only, directly as JSON. "
+        "Do not return markdown fences, commentary, drafts, progress updates, or partial JSON.\n"
     )
     return system, user
 

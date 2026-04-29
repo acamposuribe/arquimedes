@@ -1224,7 +1224,9 @@ def _run_reflection_prompt_with_context(
         "You requested more context from the read-only SQL-index tool.\n"
         "Tool results:\n"
         f"{_format_context_tool_results(tool_results)}\n\n"
-        "Revise your answer using the added context. Return final JSON only."
+        f"Revise your answer using the added context. Return exactly one final JSON object matching this schema: {schema_description}\n"
+        "Do not respond until the work is complete. Return one response only, directly as JSON, with _finished set to true. "
+        "Do not return markdown fences, commentary, drafts, progress updates, or partial JSON."
     )
     raw = llm_fn(system, [
         {"role": "user", "content": user},

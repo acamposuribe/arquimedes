@@ -292,7 +292,9 @@ def concept_reflection_prompt(schema: str, page_path: Path, evidence_path: Path)
         "Si un campo debe quedar exactamente igual que la reflexión almacenada, puedes devolver null para ese campo y el pipeline conservará el valor actual.\n"
         "No devuelvas metadatos del cluster, ids de apoyo ni rutas wiki.\n"
         "Si la reflexión previa sigue encajando, consérvala; si no, revísala.\n"
-        "Devuelve solo JSON final.\n"
+        f"Devuelve exactamente un único objeto JSON final que siga este esquema: {schema}\n"
+        "No respondas hasta que el trabajo esté completo. Devuelve una sola respuesta, directamente como JSON, con _finished en true. "
+        "No devuelvas bloques markdown, comentarios, borradores, actualizaciones de progreso ni JSON parcial.\n"
     )
     return system, user
 
@@ -331,7 +333,9 @@ def collection_reflection_prompt(schema: str, page_path: Path, evidence_path: Pa
         "Si un campo debe permanecer exactamente igual a la reflexión actual, puedes devolver null para ese campo.\n"
         "No devuelvas metadatos de colección, fingerprints ni rutas wiki.\n"
         "No dejes la reflexión en una mera síntesis descriptiva. Usa la evidencia para explicar el papel práctico, las apuestas y las preguntas abiertas de la colección.\n"
-        "Devuelve solo JSON final.\n"
+        f"Devuelve exactamente un único objeto JSON final que siga este esquema: {schema}\n"
+        "No respondas hasta que el trabajo esté completo. Devuelve una sola respuesta, directamente como JSON, con _finished en true. "
+        "No devuelvas bloques markdown, comentarios, borradores, actualizaciones de progreso ni JSON parcial.\n"
     )
     return system, user
 
@@ -370,6 +374,8 @@ def global_bridge_prompt(schema: str, packet_path: Path, memory_path: Path, doma
         "Usa new_clusters cuando los clusters pendientes deban formar un nuevo puente global.\n"
         "Solo puedes referenciar cluster_id locales presentes en el paquete pendiente.\n"
         "Todos los textos libres y listas deben estar en español.\n"
-        "Devuelve solo JSON final.\n"
+        f"Devuelve exactamente un único objeto JSON final que siga este esquema: {schema}\n"
+        "No respondas hasta que el trabajo esté completo. Devuelve una sola respuesta, directamente como JSON, con _finished en true. "
+        "No devuelvas bloques markdown, comentarios, borradores, actualizaciones de progreso ni JSON parcial.\n"
     )
     return system, user

@@ -422,7 +422,9 @@ def _global_bridge_prompt(packet_path: Path, memory_path: Path, domain: str) -> 
         "Use links_to_existing to attach pending local clusters to existing bridges by bridge_id.\n"
         "Use new_clusters when pending local clusters should form a new global bridge instead.\n"
         "Only reference collection-local cluster ids that appear in the pending packet.\n"
-        "Return final JSON only.\n"
+        f"Return exactly one final JSON object matching this schema: {_GLOBAL_BRIDGE_DELTA_SCHEMA}\n"
+        "Do not respond until the work is complete. Return one response only, directly as JSON, with _finished set to true. "
+        "Do not return markdown fences, commentary, drafts, progress updates, or partial JSON.\n"
     )
     return system, user
 

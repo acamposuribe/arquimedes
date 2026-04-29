@@ -1154,22 +1154,25 @@ def cluster_concepts(
                         _bridge_system_prompt(scope_domain),
                         [{"role": "user", "content": user_msg}],
                     )
-                    debug_dir = root / "derived" / "debug" / "cluster"
-                    debug_dir.mkdir(parents=True, exist_ok=True)
-                    debug_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-                    debug_name = f"{debug_stamp}_{_tmp_name_fragment(scope_tmp_key) or 'scope'}"
-                    (debug_dir / f"{debug_name}_raw.txt").write_text(raw_text or "", encoding="utf-8")
-                    (debug_dir / f"{debug_name}_system.txt").write_text(
-                        _bridge_system_prompt(scope_domain), encoding="utf-8"
-                    )
-                    (debug_dir / f"{debug_name}_user.txt").write_text(user_msg, encoding="utf-8")
-                    parsed = parse_json_or_repair(scope_llm_fn, raw_text, _BRIDGE_DELTA_SCHEMA)
-                    try:
-                        (debug_dir / f"{debug_name}_parsed.json").write_text(
-                            json.dumps(parsed, indent=2, ensure_ascii=False), encoding="utf-8"
+                    cluster_debug_enabled = os.environ.get("ARQUIMEDES_CLUSTER_DEBUG", "").strip().lower() in {"1", "true", "yes", "on"}
+                    if cluster_debug_enabled:
+                        debug_dir = root / "derived" / "debug" / "cluster"
+                        debug_dir.mkdir(parents=True, exist_ok=True)
+                        debug_stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                        debug_name = f"{debug_stamp}_{_tmp_name_fragment(scope_tmp_key) or 'scope'}"
+                        (debug_dir / f"{debug_name}_raw.txt").write_text(raw_text or "", encoding="utf-8")
+                        (debug_dir / f"{debug_name}_system.txt").write_text(
+                            _bridge_system_prompt(scope_domain), encoding="utf-8"
                         )
-                    except (TypeError, ValueError):
-                        pass
+                        (debug_dir / f"{debug_name}_user.txt").write_text(user_msg, encoding="utf-8")
+                    parsed = parse_json_or_repair(scope_llm_fn, raw_text, _BRIDGE_DELTA_SCHEMA)
+                    if cluster_debug_enabled:
+                        try:
+                            (debug_dir / f"{debug_name}_parsed.json").write_text(
+                                json.dumps(parsed, indent=2, ensure_ascii=False), encoding="utf-8"
+                            )
+                        except (TypeError, ValueError):
+                            pass
                     if not isinstance(parsed, dict):
                         raise EnrichmentError(f"Cluster output is not a JSON object for {scope_key}")
                     if parsed.get("_finished") is not True:

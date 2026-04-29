@@ -3891,7 +3891,9 @@ def test_global_bridge_prompt_requests_membership_only_linking():
     assert "Do not write bridge reflections" in system
     assert "inside the Research domain" in system
     assert "Keep the total number of bridges limited" in system
-    assert "Prefer refocusing an existing bridge with links_to_existing" in system
+    assert "not as a constraint" in system
+    assert "Selective does not mean conservative reuse" in system
+    assert "Do not attach clusters merely because a broad bridge title could be made to cover them" in system
     assert "only to decide membership" in user
 
 
@@ -3971,7 +3973,9 @@ def test_global_bridge_prompt_for_practice_is_spanish():
 
     assert "orientada a la práctica" in system
     assert "Mantén el número total de puentes limitado" in system
-    assert "Prefiere reenfocar un puente existente con links_to_existing" in system
+    assert "como contexto, no como restricción" in system
+    assert "Ser selectiva no significa reutilizar de forma conservadora" in system
+    assert "No los enlaces solo porque un título amplio pueda hacerse encajar" in system
     assert "solo decide membresía" in system
     assert "Todos los textos libres y listas deben estar en español." in user
     assert concept_reflection_figure_limit("practice") > concept_reflection_figure_limit("research")

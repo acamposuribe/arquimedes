@@ -1210,6 +1210,7 @@ def _run_global_bridge_impl(
     domain_results: dict[str, dict] = {}
     ran_any = False
     reasons: list[str] = []
+    failures: list[BaseException] = []
 
     for domain in domains:
         bundle = _global_bridge_inputs(root, local_clusters, collection_refs, domain=domain)
@@ -1308,12 +1309,21 @@ def _run_global_bridge_impl(
                 "global_bridge_skipped": False,
                 "global_bridge_skip_reason": "",
             }
+        except BaseException as exc:
+            failures.append(exc)
+            domain_results[domain] = {
+                "global_bridges": len(bundle["existing_bridges"]),
+                "global_bridge_skipped": False,
+                "global_bridge_skip_reason": f"failed: {exc}",
+            }
         finally:
             if succeeded:
                 deps._cleanup_paths(packet_path, memory_path)
 
     if run_at_any is not None:
         deps._write_lint_stage_stamp(root, global_bridge_at=run_at_any)
+    if failures:
+        raise failures[0]
 
     total_bridges = len(load_global_bridge_clusters(root))
     if ran_any:

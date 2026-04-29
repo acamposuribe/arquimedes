@@ -2089,6 +2089,58 @@ def test_concept_reflection_only_targets_multi_material_clusters_and_skips_uncha
     assert len(calls) == 1
 
 
+def test_concept_reflection_persists_successful_records_when_batch_item_fails(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    clusters = [
+        {
+            "cluster_id": "concept_001",
+            "canonical_name": "Archive and Space",
+            "slug": "archive-and-space",
+            "material_ids": ["mat_001", "mat_002"],
+            "source_concepts": [{"material_id": "mat_001", "concept_name": "archive"}, {"material_id": "mat_002", "concept_name": "space"}],
+        },
+        {
+            "cluster_id": "concept_003",
+            "canonical_name": "Memory and Method",
+            "slug": "memory-and-method",
+            "material_ids": ["mat_001", "mat_002"],
+            "source_concepts": [{"material_id": "mat_001", "concept_name": "memory"}, {"material_id": "mat_002", "concept_name": "method"}],
+        },
+    ]
+    for cluster in clusters:
+        path = root / _concept_wiki_path(cluster["slug"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Concept page.", encoding="utf-8")
+    monkeypatch.setattr("arquimedes.lint._build_concept_reflection_evidence_payload", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("arquimedes.lint_concept_reflection.load_config", lambda: {"enrichment": {"parallel": 2}})
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            if "concept_001" in messages[0]["content"]:
+                return json.dumps({
+                    "main_takeaways": ["A"],
+                    "main_tensions": [],
+                    "open_questions": [],
+                    "helpful_new_sources": [],
+                    "why_this_concept_matters": "Done.",
+                    "_finished": True,
+                })
+            return json.dumps({"main_takeaways": []})
+
+        return fn
+
+    with pytest.raises(EnrichmentError, match="missing _finished"):
+        _run_concept_reflections(root, clusters, {}, llm_factory)
+
+    stored = [
+        json.loads(line)
+        for line in (root / "derived" / "lint" / "concept_reflections.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["cluster_id"] for row in stored] == ["concept_001"]
+
+
 def test_collection_reflection_only_targets_multi_material_collections_and_skips_unchanged(tmp_path, monkeypatch):
     root, config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)
@@ -2260,6 +2312,48 @@ def test_collection_reflection_only_targets_multi_material_collections_and_skips
     assert len(calls) == 1
     assert not (root / "derived" / "tmp" / "collection_reflections" / "research__papers.evidence.json").exists()
     assert not (root / "derived" / "tmp" / "collection_reflections" / "research__papers.work.json").exists()
+
+
+def test_collection_reflection_persists_successful_records_when_batch_item_fails(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    groups = {
+        ("research", "papers"): [{"material_id": "mat_001"}, {"material_id": "mat_002"}],
+        ("research", "projects"): [{"material_id": "mat_003"}, {"material_id": "mat_004"}],
+    }
+    for domain, collection in groups:
+        path = root / "wiki" / domain / collection / "_index.md"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("Collection page.", encoding="utf-8")
+    monkeypatch.setattr("arquimedes.lint._build_collection_reflection_evidence_payload", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr("arquimedes.lint_collection_reflection.load_config", lambda: {"enrichment": {"parallel": 2}})
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            if "research__papers" in messages[0]["content"]:
+                return json.dumps({
+                    "main_takeaways": ["A"],
+                    "main_tensions": [],
+                    "important_material_ids": [],
+                    "important_cluster_ids": [],
+                    "open_questions": [],
+                    "helpful_new_sources": [],
+                    "why_this_collection_matters": "Done.",
+                    "_finished": True,
+                })
+            return json.dumps({"main_takeaways": []})
+
+        return fn
+
+    with pytest.raises(EnrichmentError, match="missing _finished"):
+        _run_collection_reflections(root, groups, [], llm_factory)
+
+    stored = [
+        json.loads(line)
+        for line in (root / "derived" / "lint" / "collection_reflections.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert [row["collection_key"] for row in stored] == ["research/papers"]
 
 
 def test_collection_reflection_null_fields_preserve_existing_row_values(tmp_path, monkeypatch):

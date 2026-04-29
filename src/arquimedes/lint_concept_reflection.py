@@ -447,6 +447,8 @@ def _run_concept_reflections_impl(
 ) -> list[dict]:
     existing = deps._existing_by_key(root / deps.LINT_DIR / "concept_reflections.jsonl", "cluster_id")
     output: list[dict] = []
+    failures: list[BaseException] = []
+    eligible_keys: set[str] = set()
     eligible = [
         c
         for c in clusters
@@ -461,6 +463,7 @@ def _run_concept_reflections_impl(
             }
         ) >= 2
     ]
+    eligible_keys = {str(c.get("cluster_id", "")).strip() for c in eligible if str(c.get("cluster_id", "")).strip()}
     workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
 
     def _one(cluster: dict) -> dict | None:
@@ -506,18 +509,31 @@ def _run_concept_reflections_impl(
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(_one, c) for c in eligible]
             for fut in as_completed(futures):
-                record = fut.result()
-                if record:
-                    output.append(record)
+                try:
+                    record = fut.result()
+                    if record:
+                        output.append(record)
+                except BaseException as exc:
+                    failures.append(exc)
     else:
         for cluster in eligible:
-            record = _one(cluster)
-            if record:
-                output.append(record)
+            try:
+                record = _one(cluster)
+                if record:
+                    output.append(record)
+            except BaseException as exc:
+                failures.append(exc)
 
+    output_keys = {str(row.get("cluster_id", "")).strip() for row in output if str(row.get("cluster_id", "")).strip()}
+    output.extend(
+        row for key, row in existing.items()
+        if key in eligible_keys and key not in output_keys
+    )
     output.sort(key=lambda r: r.get("cluster_id", ""))
     run_at = datetime.now(timezone.utc).isoformat()
     deps._attach_run_provenance(output, route_signature, run_at)
     deps._write_jsonl(root / deps.LINT_DIR / "concept_reflections.jsonl", output)
+    if failures:
+        raise failures[0]
     deps._write_lint_stage_stamp(root, concept_reflection_at=run_at)
     return output

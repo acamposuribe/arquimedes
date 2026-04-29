@@ -434,6 +434,8 @@ def _run_collection_reflections_impl(
     existing = deps._existing_by_key(root / deps.LINT_DIR / "collection_reflections.jsonl", "collection_key")
     output: list[dict] = []
     eligible = [(domain, collection, metas) for (domain, collection), metas in groups.items() if len(metas) >= 2]
+    failures: list[BaseException] = []
+    eligible_keys = {deps._collection_reflection_key(domain, collection) for domain, collection, _metas in eligible}
     workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
 
     def _one(domain: str, collection: str, metas: list[dict]) -> dict | None:
@@ -483,18 +485,31 @@ def _run_collection_reflections_impl(
         with ThreadPoolExecutor(max_workers=workers) as pool:
             futures = [pool.submit(_one, domain, collection, metas) for domain, collection, metas in eligible]
             for fut in as_completed(futures):
-                record = fut.result()
-                if record:
-                    output.append(record)
+                try:
+                    record = fut.result()
+                    if record:
+                        output.append(record)
+                except BaseException as exc:
+                    failures.append(exc)
     else:
         for domain, collection, metas in eligible:
-            record = _one(domain, collection, metas)
-            if record:
-                output.append(record)
+            try:
+                record = _one(domain, collection, metas)
+                if record:
+                    output.append(record)
+            except BaseException as exc:
+                failures.append(exc)
 
+    output_keys = {str(row.get("collection_key", "")).strip() for row in output if str(row.get("collection_key", "")).strip()}
+    output.extend(
+        row for key, row in existing.items()
+        if key in eligible_keys and key not in output_keys
+    )
     output.sort(key=lambda r: (r.get("domain", ""), r.get("collection", "")))
     run_at = datetime.now(timezone.utc).isoformat()
     deps._attach_run_provenance(output, route_signature, run_at)
     deps._write_jsonl(root / deps.LINT_DIR / "collection_reflections.jsonl", output)
+    if failures:
+        raise failures[0]
     deps._write_lint_stage_stamp(root, collection_reflection_at=run_at)
     return output

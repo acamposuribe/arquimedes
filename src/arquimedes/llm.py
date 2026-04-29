@@ -739,6 +739,7 @@ def _build_agent_cmd(
     - ``--system-prompt``: pass system prompt natively
     - ``--tools Read``: minimal tool surface (document enrichment reads
       meta.json and document text from disk; Write/Bash are not needed)
+    - ``--dangerously-skip-permissions``: allow agent file reads/tool use without permission prompts
     - ``--disable-slash-commands``: skip skill resolution
     - ``--strict-mcp-config``: load no MCP servers
     - ``--effort``: control thinking budget (low/medium/high)
@@ -760,12 +761,12 @@ def _build_agent_cmd(
                 continue
             if part == "--bare":
                 continue
-            if part == "--dangerously-skip-permissions":
-                continue
             if part == "--settings":
                 skip_next = True
                 continue
             cmd.append(part)
+        if "--dangerously-skip-permissions" not in cmd:
+            cmd.append("--dangerously-skip-permissions")
         if "--no-session-persistence" not in cmd:
             cmd.append("--no-session-persistence")
         if disable_slash_commands and "--disable-slash-commands" not in cmd:

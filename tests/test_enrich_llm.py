@@ -164,11 +164,12 @@ class TestBuildAgentCmd:
     def test_claude_gets_system_prompt(self):
         cmd = _build_agent_cmd(["claude", "--print"], "Be helpful.")
         assert "--bare" not in cmd  # --bare breaks credential discovery
+        assert "--dangerously-skip-permissions" in cmd
         assert "--no-session-persistence" in cmd
         assert "--disable-slash-commands" in cmd
         assert "--tools" in cmd
         idx_tools = cmd.index("--tools")
-        assert cmd[idx_tools + 1] == "Read,Write,Bash"
+        assert cmd[idx_tools + 1] == "Read"
         assert "--model" in cmd
         idx_model = cmd.index("--model")
         assert cmd[idx_model + 1] == "sonnet"  # default model
@@ -226,7 +227,7 @@ class TestBuildAgentCmd:
         cmd = _build_agent_cmd(["claude", "--print"], "sys", effort=None)
         assert "--effort" not in cmd
 
-    def test_claude_strips_bare_flags_from_base_command(self):
+    def test_claude_strips_bare_flags_and_keeps_skip_permissions(self):
         cmd = _build_agent_cmd(
             [
                 "claude",
@@ -240,7 +241,7 @@ class TestBuildAgentCmd:
         )
         assert "--bare" not in cmd
         assert "--settings" not in cmd
-        assert "--dangerously-skip-permissions" not in cmd
+        assert cmd.count("--dangerously-skip-permissions") == 1
         assert "--no-session-persistence" in cmd
         assert "--disable-slash-commands" in cmd
         assert cmd[cmd.index("--effort") + 1] == "medium"

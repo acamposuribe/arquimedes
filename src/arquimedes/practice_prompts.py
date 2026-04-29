@@ -198,10 +198,33 @@ def local_cluster_system_prompt(delta_schema: str) -> str:
     return f"""\
 Eres una bibliotecaria de arquitectura orientada a la práctica. Estás agrupando conceptos procedentes de materiales en clusters paraguas amplios y reutilizables.
 
-Esquema de salida:
+Esquema compacto de salida (NO NEGOCIABLE):
 {delta_schema}
 
-Reglas:
+Referencia obligatoria de campos (los nombres de clave incorrectos hacen que el cluster se descarte):
+
+Nivel raíz del JSON:
+- "links_to_existing": array (puede estar vacío). Una entrada por cada cluster existente que quieras extender.
+- "new_clusters": array (puede estar vacío). Una entrada por cada nuevo cluster paraguas.
+- "_finished": booleano, ponlo en true solo en la respuesta final completa.
+
+Cada elemento de "links_to_existing" DEBE tener exactamente:
+- "cluster_id": string, el id del cluster existente, copiado tal cual del archivo de memoria.
+- "source_concepts": array no vacío de {{"material_id": string, "concept_name": string}}.
+
+Cada elemento de "new_clusters" DEBE tener exactamente:
+- "canonical_name": OBLIGATORIO, string no vacío. Es el nombre paraguas del cluster. Nunca lo omitas. NO uses "label", "name", "title" ni "cluster_id" en su lugar.
+- "descriptor": OBLIGATORIO, string. Descripción breve (máximo dos líneas) en lenguaje directo. NO uses "rationale", "summary" ni "description".
+- "aliases": array de hasta 4 strings (puede estar vacío). Sinónimos cercanos o formulaciones alternativas.
+- "source_concepts": OBLIGATORIO, array no vacío de {{"material_id": string, "concept_name": string}}. NO uses "concepts", "members" ni "materials"; NO uses "concept" en lugar de "concept_name".
+
+NO incluyas "cluster_id" dentro de las entradas de "new_clusters" (los ids se asignan después).
+NO añadas claves que no estén listadas arriba. Las claves desconocidas hacen que la entrada se descarte.
+
+Ejemplo de referencia (valores ilustrativos):
+{{"links_to_existing":[{{"cluster_id":"abc123","source_concepts":[{{"material_id":"m1","concept_name":"detalle de encuentro muro-cubierta"}}]}}],"new_clusters":[{{"canonical_name":"Encuentros de cubierta plana con peto","descriptor":"Familia de soluciones constructivas para resolver remates entre cubierta plana y petos perimetrales en obra nueva y rehabilitación.","aliases":["remate de cubierta plana","encuentro con peto"],"source_concepts":[{{"material_id":"m2","concept_name":"lámina impermeabilizante en peto"}},{{"material_id":"m3","concept_name":"chapa de remate"}}]}}],"_finished":true}}
+
+Reglas de contenido:
 - Devuelve nombres canónicos, alias y descriptores en español.
 - Agrupa conceptos cuando participen en la misma familia operativa: un sistema, una estrategia, una restricción recurrente, una tipología útil, una lógica normativa, una secuencia de trabajo, un conflicto técnico o un criterio de proyecto.
 - Evita jerga teórica, abstracciones vacías y etiquetas demasiado amplias.
@@ -210,8 +233,10 @@ Reglas:
 - Usa resúmenes, conceptos locales, candidatos puente y evidencias para juzgar la afinidad.
 - Los clusters deben conectar al menos dos materiales, pero deben seguir siendo semánticamente claros y útiles.
 - Prefiere nombres que ayuden a encontrar y reutilizar conocimiento práctico: reglas, sistemas, problemas recurrentes, soluciones comparables y patrones de decisión.
-- Completa todo el trabajo antes de responder. Devuelve solo JSON estructurado una vez, al final.
-- Intenta emitir el menor número de clusters posible. No es necesario agrupar todo, solo lo que forme familias operativas claras.\
+- Intenta emitir el menor número de clusters posible. No es necesario agrupar todo, solo lo que forme familias operativas claras.
+
+Reglas de salida:
+- Completa todo el trabajo antes de responder. Devuelve solo un único objeto JSON al final, usando exactamente las claves indicadas arriba. No devuelvas markdown, comentarios ni JSON parcial.\
 """
 
 

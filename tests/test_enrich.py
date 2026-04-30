@@ -16,7 +16,7 @@ from arquimedes.enrich import enrich
 # ---------------------------------------------------------------------------
 
 
-def _setup_project(tmp_path: Path, material_id: str = "test123") -> Path:
+def _setup_project(tmp_path: Path, material_id: str = "test123", file_type: str = "pdf") -> Path:
     """
     Set up a minimal project layout:
       tmp_path/
@@ -31,8 +31,8 @@ def _setup_project(tmp_path: Path, material_id: str = "test123") -> Path:
     manifest_entry = {
         "material_id": material_id,
         "file_hash": "deadbeef",
-        "relative_path": f"Research/test/{material_id}.pdf",
-        "file_type": "pdf",
+        "relative_path": f"Research/test/{material_id}.{'png' if file_type == 'image' else 'pdf'}",
+        "file_type": file_type,
         "domain": "research",
         "collection": "test",
         "ingested_at": "2024-01-01T00:00:00+00:00",
@@ -483,6 +483,54 @@ class TestEnrichOrchestrator:
         mock_metadata.assert_not_called()
         mock_chunk.assert_called_once()
         mock_figure.assert_not_called()
+
+    def test_standalone_image_skips_figure_stage(self, tmp_path):
+        project_root = _setup_project(tmp_path, file_type="image")
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_DOC, return_value=_make_stage_result()),
+            patch(_PATCH_METADATA, return_value=_make_stage_result()),
+            patch(_PATCH_CHUNK, return_value=_make_stage_result()),
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                stages=["figure"],
+                force=True,
+            )
+
+        assert all_succeeded is True
+        mock_figure.assert_not_called()
+        assert results["test123"]["figure"] == {
+            "status": "skipped",
+            "detail": "standalone image material",
+        }
+
+    def test_scanned_document_still_allows_figure_stage(self, tmp_path):
+        project_root = _setup_project(tmp_path, file_type="scanned_document")
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_FIGURE, return_value=_make_stage_result()) as mock_figure,
+        ):
+            results, all_succeeded = enrich(
+                material_id="test123",
+                config=config,
+                stages=["figure"],
+                force=True,
+            )
+
+        assert all_succeeded is True
+        mock_figure.assert_called_once()
+        assert results["test123"]["figure"]["status"] == "enriched"
 
     def test_stage_metadata_only_runs_only_metadata(self, tmp_path):
         """stages=['metadata'] should only call enrich_metadata_stage."""

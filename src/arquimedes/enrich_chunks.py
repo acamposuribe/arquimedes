@@ -46,6 +46,23 @@ def _load_json(path: Path, default=None):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _toc_headings(toc: object) -> list[str]:
+    """Return title strings from permissive TOC shapes."""
+    if not isinstance(toc, list):
+        return []
+    headings: list[str] = []
+    for entry in toc:
+        if isinstance(entry, str):
+            title = entry.strip()
+        elif isinstance(entry, dict):
+            title = str(entry.get("title", "")).strip()
+        else:
+            title = ""
+        if title:
+            headings.append(title)
+    return headings
+
+
 def _chunk_work_path(output_dir: Path) -> Path:
     return output_dir / "chunk_enrichment.work.json"
 
@@ -373,7 +390,7 @@ def enrich_chunks_stage(
     # Collect headings from toc or from pages
     headings: list[str] = []
     if toc and isinstance(toc, list):
-        headings = [entry.get("title", "") for entry in toc if entry.get("title")]
+        headings = _toc_headings(toc)
     else:
         pages = _load_jsonl(output_dir / "pages.jsonl")
         for page in pages:

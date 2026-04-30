@@ -33,6 +33,11 @@ def _progress(message: str) -> None:
 _ALL_STAGES = ["document", "metadata", "chunk", "figure"]
 
 
+def _allows_figure_enrichment(entry) -> bool:
+    """Figure enrichment is for document-like materials, not standalone images."""
+    return getattr(entry, "file_type", "") != "image"
+
+
 def _is_document_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for document stage without calling LLM."""
     enrichment_config = config.get("enrichment", {})
@@ -268,7 +273,6 @@ def enrich(
     """
 
     import datetime
-    log_path = get_logs_root() / "enrich.log"
 
     enrich_start_time = datetime.datetime.now()
 
@@ -287,6 +291,10 @@ def enrich(
         config = load_config()
 
     project_root = get_project_root()
+    try:
+        log_path = get_logs_root(config) / "enrich.log"
+    except FileNotFoundError:
+        log_path = project_root / "logs" / "enrich.log"
     extracted_dir = project_root / "extracted"
     manifest = load_manifest(project_root)
 
@@ -337,7 +345,7 @@ def enrich(
             any_stale = (
                 ("document" in requested_stages and _is_document_stale(output_dir, config))
                 or ("chunk" in requested_stages and _is_chunk_stale(output_dir, config))
-                or ("figure" in requested_stages and _is_figure_stale(output_dir, config))
+                or ("figure" in requested_stages and _allows_figure_enrichment(entry) and _is_figure_stale(output_dir, config))
                 or ("metadata" in requested_stages and _is_metadata_stale(output_dir, config))
                 or (metadata_needed and _is_metadata_stale(output_dir, config))
             )
@@ -358,6 +366,7 @@ def enrich(
             title = mid
 
         material_results: dict = {"title": title}
+        figure_allowed = _allows_figure_enrichment(manifest[mid])
 
         doc_stale_now = force or (
             "document" in requested_stages and _is_document_stale(output_dir, config)
@@ -397,6 +406,8 @@ def enrich(
                     stale = _is_metadata_stale(output_dir, config)
                 elif stage_name == "chunk":
                     stale = _is_chunk_stale(output_dir, config)
+                elif stage_name == "figure" and not figure_allowed:
+                    stale = False
                 else:
                     stale = _is_figure_stale(output_dir, config)
                 material_results[stage_name] = {
@@ -407,6 +418,8 @@ def enrich(
             # Pre-check staleness per stage
             stale_stages: set[str] = set()
             for s in remaining:
+                if s == "figure" and not figure_allowed:
+                    continue
                 if force:
                     stale_stages.add(s)
                 elif s == "document" and _is_document_stale(output_dir, config):
@@ -453,7 +466,8 @@ def enrich(
 
             for s in remaining:
                 if s not in stale_stages:
-                    material_results[s] = {"status": "skipped", "detail": "up to date"}
+                    detail = "standalone image material" if s == "figure" and not figure_allowed else "up to date"
+                    material_results[s] = {"status": "skipped", "detail": detail}
 
             # Sequential stage order is intentional: figure uses the current
             # document summary, and chunk must see post-metadata document fields.

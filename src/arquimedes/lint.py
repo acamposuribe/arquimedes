@@ -57,6 +57,7 @@ from arquimedes.compile_pages import (
 )
 from arquimedes.config import get_logs_root, get_project_root, load_config
 from arquimedes.domain_profiles import get_domain_profile
+from arquimedes.domain_profiles import should_run_collection_reflection
 from arquimedes.enrich import _is_chunk_stale, _is_document_stale, _is_figure_stale
 from arquimedes.llm import EnrichmentError, LlmFn, get_model_id, make_cli_llm_fn, parse_json_or_repair
 from arquimedes.enrich_stamps import canonical_hash
@@ -175,6 +176,7 @@ LINT_REFLECTIVE_STAGES = (
     "cluster-audit",
     "concept-reflection",
     "collection-reflection",
+    "project-reflection",
     "global-bridge",
     "graph-maintenance",
 )
@@ -182,6 +184,7 @@ DEFAULT_LINT_FULL_STAGES = (
     "cluster-audit",
     "concept-reflection",
     "collection-reflection",
+    "project-reflection",
     "global-bridge",
 )
 _CLUSTER_AUDIT_DELTA_SCHEMA = '{"bridge_updates":[{"cluster_id":"existing bridge id","new_name":"string","new_aliases":["strings"],"new_source_concepts":[{"material_id":"string","concept_name":"string"}],"new_materials":["material ids"],"removed_materials":["material ids"]}],"new_bridges":[{"bridge_ref":"temporary id","canonical_name":"string","aliases":["strings"],"material_ids":["material ids"],"source_concepts":[{"material_id":"string","concept_name":"string"}]}],"review_updates":[{"cluster_id":"existing bridge id","finding_type":"string","severity":"low|medium|high","status":"open|validated","note":"string","recommendation":"string"}],"new_reviews":[{"cluster_ref":"existing bridge id or exact new_bridges.bridge_ref","bridge_ref":"optional alias for cluster_ref on new bridges","finding_type":"string","severity":"low|medium|high","status":"open|validated","note":"string","recommendation":"string"}],"context_requests":[{"tool":"search_material_evidence|open_record","...":"..."}],"_finished":true}'
@@ -2225,6 +2228,25 @@ def _run_collection_reflections(
     )
 
 
+def _run_project_reflections(
+    root: Path,
+    groups: dict[tuple[str, str], list[dict]],
+    llm_factory=None,
+    tool: ReflectionIndexTool | None = None,
+    route_signature: str = "",
+) -> dict:
+    from arquimedes.lint_project_reflection import _run_project_reflections_impl
+
+    return _run_project_reflections_impl(
+        sys.modules[__name__],
+        root,
+        groups,
+        llm_factory,
+        tool,
+        route_signature,
+    )
+
+
 def _run_graph_reflection(
     root: Path,
     deterministic_report: dict,
@@ -2303,6 +2325,7 @@ def run_reflective_lint(
             "bridge_cluster_discovery": 0,
             "concept_reflections": 0,
             "collection_reflections": 0,
+            "project_reflections": 0,
             "global_bridges": 0,
             "graph_maintenance": 0,
             "stages": selected_stages,
@@ -2337,6 +2360,7 @@ def run_reflective_lint(
         cluster_review_count = 0
         concept_reflection_count = 0
         collection_reflection_count = 0
+        project_reflection_count = 0
         global_bridge_count = 0
         skipped = True
         skip_reason = ""
@@ -2404,6 +2428,19 @@ def run_reflective_lint(
                 _reflective_stage_skipped("collection-reflection", collection_reason)
                 if not skip_reason:
                     skip_reason = collection_reason
+
+        if "project-reflection" in selected_stages:
+            _reflective_stage_started("project-reflection")
+            project_result = _run_project_reflections(root, groups, llm_factory, tool, lint_route_signature)
+            project_reflection_count = int(project_result.get("project_reflections", 0) or 0)
+            if project_reflection_count:
+                _refresh_sql_and_wiki()
+                skipped = False
+            else:
+                _reflective_stage_skipped("project-reflection", "project reflections unchanged")
+                if not skip_reason:
+                    skip_reason = "project reflections unchanged"
+            _reflective_stage_finished("project-reflection")
 
         if "global-bridge" in selected_stages:
             local_clusters = load_local_clusters(root)
@@ -2485,6 +2522,7 @@ def run_reflective_lint(
         "bridge_cluster_discovery": bridge_changes,
         "concept_reflections": concept_reflection_count,
         "collection_reflections": collection_reflection_count,
+        "project_reflections": project_reflection_count,
         "global_bridges": global_bridge_count,
         "graph_maintenance": graph_maintenance,
         "stages": selected_stages,

@@ -1000,6 +1000,7 @@ def _render_index_pages(
                     continue
                 state = project_state.load_project_state(collection, root=get_project_root())
                 notes = project_state.load_project_notes(collection, root=get_project_root())
+                sections = project_state.load_project_sections(collection, root=get_project_root())
                 recent = sorted(
                     [
                         {
@@ -1022,6 +1023,7 @@ def _render_index_pages(
                     [{**entry, "material_id": meta["material_id"]} for entry, meta in zip(coll_entries, metas)],
                     recent,
                     notes,
+                    sections,
                 )
                 _write_page(wiki_root / domain / collection / "_index.md", content)
                 written += 1

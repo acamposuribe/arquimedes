@@ -114,6 +114,11 @@ class TestFormatToc:
         assert lines[1].startswith("  Chapter 1")  # level 1 indent
         assert lines[2].startswith("    1.1 Scope")  # level 2 indent
 
+    def test_accepts_string_entries(self):
+        result = format_toc(["Intro", {"title": "Datos", "page": 2}, 3])
+        assert "Intro (p. )" in result
+        assert "Datos (p. 2)" in result
+
 
 # ---------------------------------------------------------------------------
 # inject_annotations

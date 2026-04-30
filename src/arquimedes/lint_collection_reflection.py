@@ -433,7 +433,11 @@ def _run_collection_reflections_impl(
 ) -> list[dict]:
     existing = deps._existing_by_key(root / deps.LINT_DIR / "collection_reflections.jsonl", "collection_key")
     output: list[dict] = []
-    eligible = [(domain, collection, metas) for (domain, collection), metas in groups.items() if len(metas) >= 2]
+    eligible = [
+        (domain, collection, metas)
+        for (domain, collection), metas in groups.items()
+        if len(metas) >= 2 and deps.should_run_collection_reflection(domain)
+    ]
     failures: list[BaseException] = []
     eligible_keys = {deps._collection_reflection_key(domain, collection) for domain, collection, _metas in eligible}
     workers = max(1, min(len(eligible), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))

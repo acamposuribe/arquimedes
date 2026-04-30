@@ -37,11 +37,20 @@ def format_toc(toc: list[dict] | None) -> str:
         return "Not available"
     lines = []
     for entry in toc:
-        indent = "  " * entry.get("level", 0)
-        title = entry.get("title", "")
-        page = entry.get("page", "")
+        if isinstance(entry, str):
+            title = entry.strip()
+            indent = ""
+            page = ""
+        elif isinstance(entry, dict):
+            indent = "  " * entry.get("level", 0)
+            title = entry.get("title", "")
+            page = entry.get("page", "")
+        else:
+            continue
+        if not title:
+            continue
         lines.append(f"{indent}{title} (p. {page})")
-    return "\n".join(lines)
+    return "\n".join(lines) if lines else "Not available"
 
 
 # ---------------------------------------------------------------------------

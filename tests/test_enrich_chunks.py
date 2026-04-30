@@ -10,7 +10,7 @@ from unittest.mock import MagicMock, call
 
 import pytest
 
-from arquimedes.enrich_chunks import _parse_chunk_jsonl, enrich_chunks_stage
+from arquimedes.enrich_chunks import _parse_chunk_jsonl, _toc_headings, enrich_chunks_stage
 
 
 # ---------------------------------------------------------------------------
@@ -113,6 +113,9 @@ def _make_config(batch_target: int = 50, chunk_parallel_requests: int = 1) -> di
 
 
 class TestEnrichChunksStage:
+    def test_toc_headings_accepts_string_entries(self):
+        assert _toc_headings(["Intro", {"title": "Datos", "page": 2}, 3, {"page": 4}]) == ["Intro", "Datos"]
+
     def test_parse_chunk_jsonl_recovers_wrapped_copilot_output(self):
         raw = '''--- batch 1 raw response ---
 ● {"id":"chk_00001","cls":"front_matter","kw":["bell hooks","women’s
@@ -447,4 +450,3 @@ class TestEnrichChunksStage:
         result = enrich_chunks_stage(output_dir, config, llm_fn, force=True)
         assert result["status"] == "skipped"
         llm_fn.assert_not_called()
-

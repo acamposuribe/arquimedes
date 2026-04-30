@@ -1935,6 +1935,198 @@ def mcp(config_path: str | None, install: bool, uninstall: bool, show_status: bo
     server.run(transport=transport, mount_path=mount_path)
 
 
+def _echo_json(payload: dict) -> None:
+    click.echo(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _compile_after_project_write(no_recompile: bool) -> dict | None:
+    if no_recompile:
+        return None
+    from arquimedes.compile import compile_wiki
+    from arquimedes.config import load_config
+
+    return compile_wiki(load_config(), skip_cluster=True, run_quick_lint=False)
+
+
+@cli.group("project")
+def project_group():
+    """Manage Proyectos project memory."""
+    pass
+
+
+@project_group.command("status")
+@click.argument("project_id")
+def project_status_cmd(project_id: str):
+    """Read one project state and notes."""
+    from arquimedes.project_state import (
+        ProjectStateError,
+        load_project_notes,
+        load_project_state,
+        validate_project_id,
+    )
+
+    try:
+        project_id = validate_project_id(project_id)
+        _echo_json({
+            "project_id": project_id,
+            "state": load_project_state(project_id),
+            "notes": load_project_notes(project_id),
+        })
+    except ProjectStateError as exc:
+        raise click.ClickException(str(exc))
+
+
+@project_group.command("note")
+@click.argument("project_id")
+@click.option("--kind", required=True, help="decision|requirement|risk|deadline|coordination|learning|mistake|repair")
+@click.option("--text", required=True, help="Note text.")
+@click.option("--source-ref", "source_refs", multiple=True, help="Source reference, repeatable.")
+@click.option("--material-id", default=None, help="Optional material id.")
+@click.option("--confidence", type=float, default=None, help="Optional confidence.")
+@click.option("--actor", default="hermes", show_default=True, help="hermes|human|cli")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately.")
+def project_note_cmd(
+    project_id: str,
+    kind: str,
+    text: str,
+    source_refs: tuple[str, ...],
+    material_id: str | None,
+    confidence: float | None,
+    actor: str,
+    no_recompile: bool,
+):
+    """Append an immutable project note."""
+    from arquimedes.project_state import ProjectStateError, append_project_note, validate_project_id
+
+    try:
+        project_id = validate_project_id(project_id)
+        note = append_project_note(
+            project_id,
+            kind=kind,
+            text=text,
+            actor=actor,
+            source_refs=list(source_refs),
+            material_id=material_id,
+            confidence=confidence,
+        )
+        _echo_json({"project_id": project_id, "note": note, "compile": _compile_after_project_write(no_recompile)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
+@project_group.command("update")
+@click.argument("project_id")
+@click.option("--field", required=True, help="Project state field to replace.")
+@click.option("--text", required=True, help="Replacement text/value.")
+@click.option("--actor", default="hermes", show_default=True, help="hermes|human|cli")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately.")
+def project_update_cmd(project_id: str, field: str, text: str, actor: str, no_recompile: bool):
+    """Replace a single project state field."""
+    from arquimedes.project_state import (
+        LIST_FIELDS,
+        ProjectStateError,
+        merge_project_state_delta,
+        validate_project_id,
+        validate_state_field,
+    )
+
+    try:
+        project_id = validate_project_id(project_id)
+        field = validate_state_field(field)
+        value = [text] if field in LIST_FIELDS else text
+        state = merge_project_state_delta(project_id, {"updated_by": actor, field: value})
+        _echo_json({"project_id": project_id, "state": state, "compile": _compile_after_project_write(no_recompile)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
+@project_group.command("append")
+@click.argument("project_id")
+@click.option("--field", required=True, help="List-valued project state field to append to.")
+@click.option("--text", required=True, help="Text to append.")
+@click.option("--actor", default="hermes", show_default=True, help="hermes|human|cli")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately.")
+def project_append_cmd(project_id: str, field: str, text: str, actor: str, no_recompile: bool):
+    """Append text to a list-valued project state field."""
+    from arquimedes.project_state import (
+        LIST_FIELDS,
+        ProjectStateError,
+        load_project_state,
+        merge_project_state_delta,
+        validate_project_id,
+        validate_state_field,
+    )
+
+    try:
+        project_id = validate_project_id(project_id)
+        field = validate_state_field(field)
+        if field not in LIST_FIELDS:
+            raise ProjectStateError(f"{field} is not list-valued")
+        current = list(load_project_state(project_id).get(field) or [])
+        current.append(text)
+        state = merge_project_state_delta(project_id, {"updated_by": actor, field: current})
+        _echo_json({"project_id": project_id, "state": state, "compile": _compile_after_project_write(no_recompile)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
+@project_group.command("recompile")
+@click.argument("project_id")
+def project_recompile_cmd(project_id: str):
+    """Recompile project pages after batched writes."""
+    from arquimedes.project_state import ProjectStateError, validate_project_id
+
+    try:
+        project_id = validate_project_id(project_id)
+        _echo_json({"project_id": project_id, "compile": _compile_after_project_write(False)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
+@project_group.group("section")
+def project_section_group():
+    """Manage project page section artifacts."""
+    pass
+
+
+@project_section_group.command("set")
+@click.argument("project_id")
+@click.argument("section_id")
+@click.option("--text", required=True, help="Section body.")
+@click.option("--source-ref", "source_refs", multiple=True, help="Source reference, repeatable.")
+@click.option("--material-id", "material_ids", multiple=True, help="Evidence material id, repeatable.")
+@click.option("--confidence", type=float, default=1.0, show_default=True)
+@click.option("--actor", default="hermes", show_default=True, help="hermes|human|cli")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately.")
+def project_section_set_cmd(
+    project_id: str,
+    section_id: str,
+    text: str,
+    source_refs: tuple[str, ...],
+    material_ids: tuple[str, ...],
+    confidence: float,
+    actor: str,
+    no_recompile: bool,
+):
+    """Write or replace one project page section body."""
+    from arquimedes.project_state import ProjectStateError, set_project_section, validate_project_id
+
+    try:
+        project_id = validate_project_id(project_id)
+        section = set_project_section(
+            project_id,
+            section_id,
+            body=text,
+            actor=actor,
+            source_refs=list(source_refs),
+            evidence_material_ids=list(material_ids),
+            confidence=confidence,
+        )
+        _echo_json({"project_id": project_id, "section": section, "compile": _compile_after_project_write(no_recompile)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
 @cli.command()
 def status():
     """Show system stats and recent additions."""

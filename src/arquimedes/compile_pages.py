@@ -860,35 +860,47 @@ def render_project_page(
     materials: list[dict],
     recent_additions: list[dict],
     notes: list[dict],
+    sections: dict[str, dict] | None = None,
 ) -> str:
     """Render a Proyectos project dossier page."""
+    section_records = sections or {}
     lines: list[str] = [f"# {title}\n"]
 
-    lines.append("## Estado del proyecto\n")
-    lines.append(f"- **Proyecto:** {project_id}")
-    lines.append(f"- **Fase:** {state.get('stage', 'lead')}")
-    confidence = state.get("stage_confidence", 0)
-    lines.append(f"- **Confianza:** {confidence}")
-    if state.get("updated_at"):
-        lines.append(f"- **Actualizado:** {state.get('updated_at')}")
-    lines.append("")
+    estado = section_records.get("estado") or {}
+    lines.append(f"## {estado.get('title') or 'Estado del proyecto'}\n")
+    if estado.get("body"):
+        lines.append(str(estado["body"]).strip())
+        lines.append("")
+    else:
+        lines.append(f"- **Proyecto:** {project_id}")
+        lines.append(f"- **Fase:** {state.get('stage', 'lead')}")
+        confidence = state.get("stage_confidence", 0)
+        lines.append(f"- **Confianza:** {confidence}")
+        if state.get("updated_at"):
+            lines.append(f"- **Actualizado:** {state.get('updated_at')}")
+        lines.append("")
 
-    sections = [
-        ("Trabajo en curso", "current_work_in_progress"),
-        ("Objetivos principales", "main_objectives"),
-        ("Condiciones y restricciones", "known_conditions"),
-        ("Decisiones", "decisions"),
-        ("Requisitos", "requirements"),
-        ("Problemas, riesgos y bloqueos", "risks_or_blockers"),
-        ("Información pendiente", "missing_information"),
-        ("Próximo foco", "next_focus"),
-        ("Aprendizajes positivos", "positive_learnings"),
-        ("Errores y acciones de reparación", "mistakes_or_regrets"),
-        ("Acciones de reparación", "repair_actions"),
+    section_specs = [
+        ("trabajo_en_curso", "Trabajo en curso", "current_work_in_progress"),
+        ("objetivos_principales", "Objetivos principales", "main_objectives"),
+        ("condiciones_restricciones", "Condiciones y restricciones", "known_conditions"),
+        ("decisiones", "Decisiones", "decisions"),
+        ("requisitos", "Requisitos", "requirements"),
+        ("riesgos", "Problemas, riesgos y bloqueos", "risks_or_blockers"),
+        ("informacion_pendiente", "Información pendiente", "missing_information"),
+        ("proximo_foco", "Próximo foco", "next_focus"),
+        ("aprendizajes", "Aprendizajes positivos", "positive_learnings"),
+        ("errores_reparaciones", "Errores y acciones de reparación", "mistakes_or_regrets"),
+        ("acciones_reparacion", "Acciones de reparación", "repair_actions"),
     ]
-    for heading, field in sections:
-        lines.append(f"## {heading}\n")
-        _render_bullets(lines, state.get(field) or [])
+    for section_id, heading, field in section_specs:
+        section = section_records.get(section_id) or {}
+        lines.append(f"## {section.get('title') or heading}\n")
+        if section.get("body"):
+            lines.append(str(section["body"]).strip())
+            lines.append("")
+        else:
+            _render_bullets(lines, state.get(field) or [])
 
     important_ids = set(state.get("important_material_ids") or [])
     important = [m for m in materials if m.get("material_id") in important_ids]

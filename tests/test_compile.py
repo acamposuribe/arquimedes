@@ -1381,6 +1381,67 @@ def test_compile_writes_proyectos_project_page_without_clusters(tmp_path, monkey
     assert not (tmp_path / "wiki" / "proyectos" / "2407-casa-rio" / "concepts" / "_index.md").exists()
 
 
+def test_compile_renders_project_section_artifacts(tmp_path, monkeypatch):
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+    from arquimedes.index import rebuild_index
+    from arquimedes.project_state import set_project_section
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    mid = "mat_project_section"
+    meta = _make_meta(mid, "Acta de seguimiento")
+    meta["domain"] = "proyectos"
+    meta["collection"] = "2407-casa-rio"
+    mat_dir = tmp_path / "extracted" / mid
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    (mat_dir / "chunks.jsonl").write_text("", encoding="utf-8")
+    (mat_dir / "annotations.jsonl").write_text("", encoding="utf-8")
+    (manifests / "materials.jsonl").write_text(
+        json.dumps({
+            "material_id": mid,
+            "file_hash": mid,
+            "relative_path": "Proyectos/2407-casa-rio/acta.pdf",
+            "file_type": "pdf",
+            "domain": "proyectos",
+            "collection": "2407-casa-rio",
+            "ingested_at": "2026-04-30T10:00:00+00:00",
+        }) + "\n",
+        encoding="utf-8",
+    )
+    set_project_section(
+        "2407-casa-rio",
+        "proximo_foco",
+        body="Cerrar mediciones antes del viernes.",
+        actor="hermes",
+        root=tmp_path,
+    )
+
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True},
+    )
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    page = (tmp_path / "wiki" / "proyectos" / "2407-casa-rio" / "_index.md").read_text(encoding="utf-8")
+    assert "## Próximo foco" in page
+    assert "Cerrar mediciones antes del viernes." in page
+
+
 def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
     """Local concepts index groups entries deterministically by collection."""
     import shutil

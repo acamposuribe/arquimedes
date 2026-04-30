@@ -829,6 +829,91 @@ def test_local_cluster_audit_writes_collection_scoped_findings(tmp_path, monkeyp
     assert [row["cluster_id"] for row in stored] == ["research__papers__local_0001"]
 
 
+def test_local_cluster_audit_backfills_empty_descriptors_before_audit(tmp_path, monkeypatch):
+    root, _config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    cluster = {
+        "cluster_id": "research__papers__local_0001",
+        "domain": "research",
+        "collection": "papers",
+        "canonical_name": "Archive and Space",
+        "slug": "archive-and-space",
+        "aliases": ["Archive and Space"],
+        "descriptor": "",
+        "material_ids": ["mat_001", "mat_002"],
+        "source_concepts": [
+            {
+                "material_id": "mat_001",
+                "concept_name": "archive and space",
+                "relevance": "high",
+                "source_pages": [1],
+                "evidence_spans": ["archive rooms"],
+                "confidence": 0.9,
+            },
+            {
+                "material_id": "mat_002",
+                "concept_name": "spatial memory",
+                "relevance": "medium",
+                "source_pages": [2],
+                "evidence_spans": ["rooms hold memory"],
+                "confidence": 0.8,
+            },
+        ],
+        "wiki_path": "wiki/research/papers/concepts/archive-and-space.md",
+    }
+    _write_jsonl(root / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl", [cluster])
+
+    monkeypatch.setattr(
+        "arquimedes.lint._local_rows_in_scope_not_in_clusters",
+        lambda *_args, **_kwargs: ([], []),
+    )
+    monkeypatch.setattr("arquimedes.lint._parallel_collection_audit_workers", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr("arquimedes.lint_cluster_audit.load_config", lambda: {"enrichment": {"parallel": 2}})
+
+    prompts: list[str] = []
+
+    def llm_factory(stage: str):
+        def fn(system: str, messages: list[dict]) -> str:
+            prompts.append(messages[0]["content"])
+            if "Return only the descriptor text" in messages[0]["content"]:
+                return "Archives become spatial systems for organizing memory across rooms and research materials."
+            return json.dumps({
+                "bridge_updates": [],
+                "new_bridges": [],
+                "review_updates": [],
+                "new_reviews": [
+                    {
+                        "cluster_ref": "research__papers__local_0001",
+                        "finding_type": "validated",
+                        "severity": "low",
+                        "status": "validated",
+                        "note": "This cluster is coherent.",
+                        "recommendation": "Keep it.",
+                    }
+                ],
+                "_finished": True,
+            })
+
+        return fn
+
+    material_info = {
+        "mat_001": {"title": "One", "summary": "A study of archive rooms as spatial memory."},
+        "mat_002": {"title": "Two", "summary": "A study of rooms that organize research memory."},
+    }
+    reviews, discovery = _run_cluster_audit(root, [cluster], material_info, "test-route", llm_factory)
+
+    stored_clusters = [
+        json.loads(line)
+        for line in (root / "derived" / "collections" / "research__papers" / "local_concept_clusters.jsonl").read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    assert discovery == 1
+    assert reviews[0]["cluster_id"] == "research__papers__local_0001"
+    assert stored_clusters[0]["descriptor"] == "Archives become spatial systems for organizing memory across rooms and research materials."
+    assert "A study of archive rooms as spatial memory." in prompts[0]
+    assert "Return only the descriptor text" in prompts[0]
+
+
 def test_local_cluster_audit_preserves_failed_llm_artifacts(tmp_path, monkeypatch):
     root, _config = _setup_repo(tmp_path)
     monkeypatch.chdir(root)

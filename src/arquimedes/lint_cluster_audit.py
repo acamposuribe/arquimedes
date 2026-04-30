@@ -25,6 +25,8 @@ def _cluster_audit_due(root: Path, _bridge_clusters: list[dict]) -> tuple[bool, 
         for (domain, collection), scope_clusters in sorted(local_groups.items()):
             if not scope_clusters:
                 continue
+            if _local_clusters_missing_descriptors(scope_clusters):
+                return True, f"local cluster descriptors missing for {domain}/{collection}"
             cluster_stamp = deps._read_stamp(deps.local_cluster_stamp_path(root, domain, collection))
             clustered_at = deps._parse_iso_datetime(cluster_stamp.get("clustered_at"))
             audit_stamp = deps._read_stamp(deps._local_audit_stamp_path(root, domain, collection))
@@ -85,6 +87,154 @@ def _cluster_audit_input_paths(root: Path) -> tuple[Path, Path]:
         tmp_root / "local_concept_clusters.audit.input.jsonl",
         tmp_root / "cluster_reviews.audit.input.jsonl",
     )
+
+
+def _local_clusters_missing_descriptors(clusters: list[dict]) -> list[dict]:
+    return [
+        cluster
+        for cluster in clusters
+        if "descriptor" in cluster and not str(cluster.get("descriptor", "")).strip()
+    ]
+
+
+def _cluster_descriptor_backfill_prompt(cluster: dict, material_info: dict[str, dict]) -> tuple[str, str]:
+    deps = _deps()
+    materials = []
+    for material_id in deps._safe_list(cluster.get("material_ids", [])):
+        info = material_info.get(material_id, {}) if isinstance(material_info, dict) else {}
+        materials.append({
+            "material_id": material_id,
+            "title": str(info.get("title", material_id)).strip(),
+            "summary": str(info.get("summary", "")).strip(),
+        })
+    source_concepts = [
+        {
+            "material_id": str(source.get("material_id", "")).strip(),
+            "concept_name": str(source.get("concept_name", "")).strip(),
+            "descriptor": str(source.get("descriptor", "")).strip(),
+            "relevance": str(source.get("relevance", "")).strip(),
+            "evidence_spans": deps._safe_list(source.get("evidence_spans", []))[:3],
+        }
+        for source in cluster.get("source_concepts", [])
+        if isinstance(source, dict)
+    ]
+    payload = {
+        "canonical_name": str(cluster.get("canonical_name", "")).strip(),
+        "aliases": deps._safe_list(cluster.get("aliases", []))[:8],
+        "materials": materials,
+        "source_concepts": source_concepts,
+    }
+    system = (
+        "You are an architecture research librarian. "
+        "Write one concise, plain-language descriptor for a local concept cluster."
+    )
+    user = (
+        "Use the cluster name, aliases, source concepts, evidence snippets, and material summaries below.\n"
+        "Return only the descriptor text, with no introduction, label, markdown, bullets, or JSON.\n"
+        "Write one or two sentences. Do not rename the cluster, change membership, or mention the number of materials.\n\n"
+        f"{json.dumps(payload, ensure_ascii=False, indent=2)}"
+    )
+    return system, user
+
+
+def _clean_backfilled_descriptor(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9_-]*\s*", "", text)
+        text = re.sub(r"\s*```$", "", text).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict):
+        text = str(parsed.get("descriptor", "")).strip()
+    elif isinstance(parsed, str):
+        text = parsed.strip()
+    text = re.sub(r"^\s*(descriptor|description|summary)\s*:\s*", "", text, flags=re.IGNORECASE).strip()
+    text = text.strip().strip('"').strip("'").strip()
+    text = " ".join(line.strip() for line in text.splitlines() if line.strip())
+    return text
+
+
+def _backfill_local_cluster_descriptors(
+    deps: Any,
+    root: Path,
+    domain: str,
+    collection: str,
+    scope_clusters: list[dict],
+    material_info: dict[str, dict],
+    route_signature: str,
+    llm_factory,
+) -> tuple[list[dict], int]:
+    missing = _local_clusters_missing_descriptors(scope_clusters)
+    if not missing:
+        return scope_clusters, 0
+    if llm_factory is None:
+        raise EnrichmentError("Local cluster descriptor backfill requires an LLM factory")
+
+    workers = max(1, min(len(missing), int(load_config().get("enrichment", {}).get("parallel", 4) or 4)))
+
+    def _one(cluster: dict) -> tuple[str, str]:
+        cluster_id = str(cluster.get("cluster_id", "")).strip()
+        system, user = _cluster_descriptor_backfill_prompt(cluster, material_info)
+        llm_fn = llm_factory("lint")
+        raw = llm_fn(system, [{"role": "user", "content": user}])
+        descriptor = _clean_backfilled_descriptor(raw)
+        if not descriptor:
+            raise EnrichmentError(f"Descriptor backfill returned empty text for {cluster_id}")
+        return cluster_id, descriptor
+
+    filled: dict[str, str] = {}
+    failures: list[BaseException] = []
+    if len(missing) > 1 and workers > 1:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            futures = [pool.submit(_one, cluster) for cluster in missing]
+            for fut in as_completed(futures):
+                try:
+                    cluster_id, descriptor = fut.result()
+                    filled[cluster_id] = descriptor
+                except BaseException as exc:
+                    failures.append(exc)
+    else:
+        for cluster in missing:
+            try:
+                cluster_id, descriptor = _one(cluster)
+                filled[cluster_id] = descriptor
+            except BaseException as exc:
+                failures.append(exc)
+    if failures:
+        raise failures[0]
+    if not filled:
+        return scope_clusters, 0
+
+    updated = []
+    for cluster in scope_clusters:
+        cluster_id = str(cluster.get("cluster_id", "")).strip()
+        if cluster_id in filled:
+            row = dict(cluster)
+            row["descriptor"] = filled[cluster_id]
+            updated.append(row)
+        else:
+            updated.append(cluster)
+
+    run_at = datetime.now(timezone.utc).isoformat()
+    deps._attach_run_provenance(updated, route_signature, run_at)
+    deps._write_jsonl(deps.local_cluster_dir(root, domain, collection) / "local_concept_clusters.jsonl", updated)
+    deps.local_cluster_stamp_path(root, domain, collection).write_text(
+        json.dumps(
+            {
+                "clustered_at": run_at,
+                "fingerprint": deps.local_cluster_fingerprint(domain, collection, load_config()),
+                "clusters": len(updated),
+                "bridge_concepts": sum(len(cluster.get("source_concepts", [])) for cluster in updated),
+            },
+            separators=(",", ":"),
+        ),
+        encoding="utf-8",
+    )
+    return updated, len(filled)
 
 
 def _cluster_audit_lock_pid(gate_path: Path) -> int | None:
@@ -877,6 +1027,16 @@ def _run_local_cluster_audit_impl(
             return (domain, collection), scope_existing_rows, 0
         try:
             scope_root = deps.local_cluster_dir(root, domain, collection)
+            scope_clusters, descriptor_changes = _backfill_local_cluster_descriptors(
+                deps,
+                root,
+                domain,
+                collection,
+                scope_clusters,
+                material_info,
+                route_signature,
+                llm_factory,
+            )
             local_rows, material_rows = deps._local_rows_in_scope_not_in_clusters(root, domain, collection, scope_clusters, material_info)
             existing_cluster_by_id = {
                 str(cluster.get("cluster_id", "")).strip(): cluster
@@ -922,7 +1082,7 @@ def _run_local_cluster_audit_impl(
                         "cluster_reviews": len(normalized_reviews),
                     },
                 )
-                return (domain, collection), normalized_reviews, 0
+                return (domain, collection), normalized_reviews, descriptor_changes
 
             bridge_packets_path = None
             if local_rows and material_rows:
@@ -1177,7 +1337,7 @@ def _run_local_cluster_audit_impl(
             )
             deps._cleanup_paths(input_path, bridge_input_path, reviews_input_path, bridge_packets_path or Path())
             deps._cleanup_cluster_audit_debug_artifacts(scope_root)
-            return (domain, collection), reviews_work, int(cluster_changed)
+            return (domain, collection), reviews_work, descriptor_changes + int(cluster_changed)
         finally:
             try:
                 gate_path.unlink()

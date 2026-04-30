@@ -682,7 +682,7 @@ Content rules:
 - Favor broader but still meaningful canonical names that connect related materials across the collection.
 - Group concepts when they participate in the same broader framework, problematic, spatial condition, institutional logic, typology, method, or field of inquiry.
 - Avoid academic jargon, theoretical buzzwords, or pretentious language. Use clear, direct, and specific language that conveys real analytical meaning.
-- For each new cluster, write a short descriptor of at most two brief lines that explains the umbrella idea in plain language.
+- For each new cluster, write a non-empty short descriptor of at most two brief lines that explains the umbrella idea in plain language.
 - Concepts that are genuinely distinct should remain separate clusters; do not merge unrelated ideas under a vague keyword.
 - Use the material summaries, local concepts, bridge candidates, and evidence snippets to judge whether two packets belong to the same broader territory.
 - Bridge candidates are strong signals of potential connections.
@@ -765,7 +765,7 @@ def _build_bridge_prompt(
         '  "new_clusters": [\n'
         '    {\n'
         '      "canonical_name": "<umbrella concept phrase, REQUIRED, never empty>",\n'
-        '      "descriptor": "<short plain-language description, REQUIRED>",\n'
+        '      "descriptor": "<short plain-language description, REQUIRED and non-empty>",\n'
         '      "aliases": ["<optional alias>", "<optional alias>"],\n'
         '      "source_concepts": [\n'
         '        {"material_id": "<id>", "concept_name": "<concept exactly as in packet>"}\n'

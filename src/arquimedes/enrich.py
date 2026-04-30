@@ -35,8 +35,8 @@ _ALL_STAGES = ["document", "metadata", "chunk", "figure"]
 
 
 def _allows_figure_enrichment(entry) -> bool:
-    """Figure enrichment is for document-like materials, not standalone images."""
-    return getattr(entry, "file_type", "") != "image"
+    """Figure enrichment is for document-like materials, not standalone images/scans."""
+    return getattr(entry, "file_type", "") not in {"image", "scanned_document"}
 
 
 def _is_document_stale(output_dir: Path, config: dict) -> bool:

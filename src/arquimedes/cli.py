@@ -848,14 +848,20 @@ def ingest(path: tuple[str, ...]):
 
 @cli.command("extract-raw")
 @click.argument("material_id", required=False)
-@click.option("--force", is_flag=True, help="Re-extract even if output already exists.")
-def extract_raw(material_id: str | None, force: bool):
+@click.option("--force", is_flag=True, help="Re-extract even if output already exists; wipes and recreates target extracted folders.")
+@click.option(
+    "--domain",
+    "domain",
+    type=click.Choice(["research", "practice", "proyectos"]),
+    help="Only extract materials in this domain.",
+)
+def extract_raw(material_id: str | None, force: bool, domain: str | None):
     """Deterministic extraction: text, pages, figures, tables, TOC, annotations."""
     from arquimedes.extract import extract_raw as do_extract
 
     click.echo("Running deterministic extraction...")
     try:
-        extracted = do_extract(material_id=material_id, force=force)
+        extracted = do_extract(material_id=material_id, force=force, domain=domain)
     except (ValueError, FileNotFoundError) as e:
         raise click.ClickException(str(e))
 
@@ -922,7 +928,13 @@ def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_ru
 
 @cli.command()
 @click.argument("material_id", required=False)
-@click.option("--force", is_flag=True, help="Re-extract and re-enrich even if not stale.")
+@click.option("--force", is_flag=True, help="Re-extract and re-enrich even if not stale; wipes and recreates target extracted folders.")
+@click.option(
+    "--domain",
+    "domain",
+    type=click.Choice(["research", "practice", "proyectos"]),
+    help="Only extract/enrich materials in this domain.",
+)
 @click.option(
     "--stage",
     "stages",
@@ -930,7 +942,7 @@ def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_ru
     type=click.Choice(["document", "metadata", "chunk", "figure"]),
     help="Run only specific enrichment stage(s). Repeatable. Default: all stages.",
 )
-def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
+def extract(material_id: str | None, force: bool, domain: str | None, stages: tuple[str, ...]):
     """Convenience: runs extract-raw + enrich."""
     from arquimedes.extract import extract_raw as do_extract_raw
     from arquimedes.enrich import enrich as do_enrich
@@ -938,7 +950,7 @@ def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
 
     click.echo("Running deterministic extraction...")
     try:
-        extracted = do_extract_raw(material_id=material_id, force=force)
+        extracted = do_extract_raw(material_id=material_id, force=force, domain=domain)
     except (ValueError, FileNotFoundError) as e:
         raise click.ClickException(str(e))
 
@@ -955,6 +967,7 @@ def extract(material_id: str | None, force: bool, stages: tuple[str, ...]):
             material_id=material_id,
             force=force,
             stages=list(stages) if stages else None,
+            domain=domain,
         )
     except EnrichmentError as e:
         raise click.ClickException(str(e))

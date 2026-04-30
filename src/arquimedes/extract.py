@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 import json
+import shutil
 from dataclasses import asdict
 from pathlib import Path
 
 from arquimedes.chunking import chunk_pages
 from arquimedes.config import get_library_root, get_project_root, load_config
+from arquimedes.domain_profiles import normalize_domain
 from arquimedes.extract_figures import extract_all_figures
 from arquimedes.extract_image import extract_raw_image
 from arquimedes.extract_pdf import _sanitize_strings, extract_raw_pdf
@@ -20,12 +22,14 @@ def extract_raw(
     material_id: str | None = None,
     config: dict | None = None,
     force: bool = False,
+    domain: str | None = None,
 ) -> list[str]:
     """Run deterministic extraction for one or all materials.
 
     Args:
         material_id: Specific material to extract, or None for all pending.
         config: Optional config dict.
+        domain: Optional domain filter (research, practice, or proyectos).
 
     Returns:
         List of material_ids that were extracted.
@@ -37,6 +41,13 @@ def extract_raw(
     library_root = get_library_root(config)
     extracted_dir = project_root / "extracted"
     manifest = load_manifest(project_root)
+    domain_filter = normalize_domain(domain, default="") if domain else None
+    if domain_filter and domain_filter not in {"research", "practice", "proyectos"}:
+        raise ValueError("Unknown domain: {!r}. Valid domains: research, practice, proyectos".format(domain))
+
+    def _matches_domain_filter(entry) -> bool:
+        entry_domain = normalize_domain(str(getattr(entry, "domain", "")), default="research")
+        return domain_filter is None or entry_domain == domain_filter
 
     extraction_config = config.get("extraction", {})
     chunk_size = extraction_config.get("chunk_size", 500)
@@ -51,11 +62,13 @@ def extract_raw(
     if material_id:
         if material_id not in manifest:
             raise ValueError(f"Material {material_id} not found in manifest")
-        to_process = {material_id: manifest[material_id]}
+        to_process = {material_id: manifest[material_id]} if _matches_domain_filter(manifest[material_id]) else {}
     else:
         # Process all materials that haven't been extracted yet
         to_process = {}
         for mid, entry in manifest.items():
+            if not _matches_domain_filter(entry):
+                continue
             output_dir = extracted_dir / mid
             if force or not (output_dir / "meta.json").exists():
                 to_process[mid] = entry
@@ -74,12 +87,8 @@ def extract_raw(
         print(f"  Extracting {entry.relative_path} ({entry.file_type})...")
 
         if force and output_dir.exists():
-            for child in output_dir.iterdir():
-                if child.is_dir():
-                    import shutil
-                    shutil.rmtree(child)
-                else:
-                    child.unlink()
+            shutil.rmtree(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
 
         if entry.file_type == "pdf":
             _extract_pdf_material(

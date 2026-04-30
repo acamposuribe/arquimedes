@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from arquimedes.enrich import enrich
+from arquimedes.enrich import _allows_figure_enrichment, enrich
 
 
 # ---------------------------------------------------------------------------
@@ -117,6 +117,16 @@ _PATCH_LOAD_CONFIG = "arquimedes.enrich.load_config"
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+def test_figure_enrichment_skips_standalone_images_and_scans():
+    class Entry:
+        def __init__(self, file_type: str):
+            self.file_type = file_type
+
+    assert _allows_figure_enrichment(Entry("pdf")) is True
+    assert _allows_figure_enrichment(Entry("image")) is False
+    assert _allows_figure_enrichment(Entry("scanned_document")) is False
 
 
 class TestEnrichOrchestrator:
@@ -559,7 +569,7 @@ class TestEnrichOrchestrator:
             "detail": "standalone image material",
         }
 
-    def test_scanned_document_still_allows_figure_stage(self, tmp_path):
+    def test_scanned_document_skips_figure_stage(self, tmp_path):
         project_root = _setup_project(tmp_path, file_type="scanned_document")
         config = _make_config()
         mock_llm_fn = MagicMock()
@@ -577,8 +587,11 @@ class TestEnrichOrchestrator:
             )
 
         assert all_succeeded is True
-        mock_figure.assert_called_once()
-        assert results["test123"]["figure"]["status"] == "enriched"
+        mock_figure.assert_not_called()
+        assert results["test123"]["figure"] == {
+            "status": "skipped",
+            "detail": "standalone image material",
+        }
 
     def test_stage_metadata_only_runs_only_metadata(self, tmp_path):
         """stages=['metadata'] should only call enrich_metadata_stage."""

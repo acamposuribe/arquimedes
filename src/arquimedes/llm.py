@@ -848,7 +848,7 @@ def _build_stage_request(
         cmd = list(base_parts)
         if not _has_option(cmd, "-p", "--print") and not _has_option(cmd, "--mode"):
             cmd.append("--print")
-        if _route_flag(route, "no_session", True) and not _has_option(cmd, "--no-session", "--session", "--session-dir"):
+        if _route_flag(route, "no_session", False) and not _has_option(cmd, "--no-session", "--session", "--session-dir"):
             cmd.append("--no-session")
         if _route_flag(route, "no_context_files", True) and not _has_option(cmd, "--no-context-files", "-nc"):
             cmd.append("--no-context-files")

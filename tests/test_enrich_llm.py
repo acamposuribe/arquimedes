@@ -326,7 +326,7 @@ class TestBuildStageRequest:
         )
         assert stdin_text == "user prompt"
         assert "--print" in cmd
-        assert "--no-session" in cmd
+        assert "--no-session" not in cmd
         assert "--no-context-files" in cmd
         assert "--tools" in cmd
         assert cmd[cmd.index("--tools") + 1] == "read"
@@ -338,6 +338,16 @@ class TestBuildStageRequest:
         assert cmd[cmd.index("--model") + 1] == "copilot/gpt-4.1"
         assert cmd[cmd.index("--thinking") + 1] == "off"
         assert cmd[cmd.index("--system-prompt") + 1] == "system"
+
+    def test_pi_route_can_disable_session_explicitly(self):
+        cmd, _stdin_text = _build_stage_request(
+            ["pi"],
+            "pi",
+            "system",
+            "user prompt",
+            route={"no_session": True},
+        )
+        assert "--no-session" in cmd
 
     def test_pi_route_can_disable_extensions_explicitly(self):
         cmd, _stdin_text = _build_stage_request(

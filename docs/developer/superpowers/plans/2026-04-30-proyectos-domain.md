@@ -217,7 +217,10 @@ Tests (the load-bearing set):
 
 Files:
 
+- `src/arquimedes/compile.py`
 - `src/arquimedes/compile_pages.py`
+- `src/arquimedes/serve.py`
+- `src/arquimedes/read.py`
 - project/page templates if separate templates are useful
 - compile tests
 
@@ -238,7 +241,9 @@ Changes:
   - learnings
   - mistakes and repair actions
   - recent notes
+- Group the project's "Materiales del proyecto" list by `project_extraction.project_material_type` (Informes de reunión, Planos, Normativa, Fotografías de obra, etc.); fall back to "Sin clasificar" when the type is missing. Pass `project_material_type` from each meta into `render_project_page` from `compile.py`.
 - Avoid rendering local concept sections for Proyectos by default.
+- Web UI surfacing: extend `_DOMAINS` in `src/arquimedes/serve.py` and `src/arquimedes/read.py` to include `proyectos` so the domain tab, wiki rail, search scoping, and Spanish UI language all activate for the Proyectos vault.
 
 Tests:
 
@@ -246,8 +251,10 @@ Tests:
 - Important materials link to material pages.
 - Hermes-authored section text appears on the compiled page (after 4b lands).
 - Spanish headings render for Proyectos.
+- Materials are grouped by project material type with Spanish headings and a "Sin clasificar" fallback.
 - `proyectos/_general` produces no page and emits a warning listing affected files.
 - Research and Practice collection pages remain unchanged.
+- `Proyectos` appears as a third domain tab in the web UI; `/wiki/proyectos`, `/?domain=proyectos`, and `/search?domain=proyectos` all resolve.
 
 ## Phase 6: Hermes CLI Write Surface
 

@@ -17,13 +17,18 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from arquimedes import freshness as freshness_mod
 from arquimedes import read as read_mod
 from arquimedes import search as search_mod
-from arquimedes.domain_profiles import display_domain_name, generated_label, is_practice_domain
+from arquimedes.domain_profiles import (
+    display_domain_name,
+    generated_label,
+    is_practice_domain,
+    is_proyectos_domain,
+)
 from arquimedes.index import get_index_path
 
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_HERE / "templates"))
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp"}
-_DOMAINS = ("research", "practice")
+_DOMAINS = ("research", "practice", "proyectos")
 
 
 def _label(part: str) -> str:
@@ -79,7 +84,10 @@ def _ui_label(key: str, domain: str | None, default: str) -> str:
 
 
 def _ui_lang(domain: str | None) -> str:
-    return "es" if is_practice_domain(domain or "", default="research") else "en"
+    value = domain or ""
+    if is_practice_domain(value, default="research") or is_proyectos_domain(value, default="research"):
+        return "es"
+    return "en"
 
 
 def _heading_candidates(key: str, default: str) -> list[str]:

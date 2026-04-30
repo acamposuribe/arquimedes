@@ -1020,7 +1020,18 @@ def _render_index_pages(
                     f"{display_domain_name(domain)} / {project_title}",
                     collection,
                     state,
-                    [{**entry, "material_id": meta["material_id"]} for entry, meta in zip(coll_entries, metas)],
+                    [
+                        {
+                            **entry,
+                            "material_id": meta["material_id"],
+                            "project_material_type": (
+                                (meta.get("project_extraction") or {}).get("project_material_type")
+                                if isinstance(meta.get("project_extraction"), dict)
+                                else None
+                            ),
+                        }
+                        for entry, meta in zip(coll_entries, metas)
+                    ],
                     recent,
                     notes,
                     sections,

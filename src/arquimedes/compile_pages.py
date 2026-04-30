@@ -14,6 +14,29 @@ from urllib.parse import quote
 from arquimedes.domain_profiles import generated_label, is_practice_domain
 
 
+_PROJECT_MATERIAL_TYPE_LABELS: dict[str, str] = {
+    "meeting_report": "Informes de reunión",
+    "meeting_notes": "Notas de reunión",
+    "client_request": "Solicitudes del cliente",
+    "authority_request": "Requerimientos de la administración",
+    "regulation": "Normativa",
+    "drawing_set": "Planos",
+    "technical_report": "Informes técnicos",
+    "working_document": "Documentos de trabajo",
+    "budget_table": "Mediciones y presupuestos",
+    "site_photo": "Fotografías de obra",
+    "map_or_cartography": "Cartografía",
+    "contract_or_admin": "Contratos y administración",
+    "email_or_message_export": "Correos y mensajes",
+    "schedule": "Cronogramas",
+    "unknown": "Sin clasificar",
+}
+
+_PROJECT_MATERIAL_TYPE_ORDER: dict[str, int] = {
+    key: index for index, key in enumerate(_PROJECT_MATERIAL_TYPE_LABELS)
+}
+
+
 # ---------------------------------------------------------------------------
 # Enriched field unwrapper
 # ---------------------------------------------------------------------------
@@ -932,11 +955,18 @@ def render_project_page(
 
     if materials:
         lines.append("## Materiales del proyecto\n")
-        for item in sorted(materials, key=lambda row: row.get("name", "").lower()):
-            link = f"[{item.get('name', '')}]({item.get('path', '')})" if item.get("path") else item.get("name", "")
-            summary = item.get("summary", "")
-            lines.append(f"- {link}" + (f" — {summary}" if summary else ""))
-        lines.append("")
+        groups: dict[str, list[dict]] = {}
+        for item in materials:
+            type_key = str(item.get("project_material_type") or "unknown").strip() or "unknown"
+            groups.setdefault(type_key, []).append(item)
+        for type_key in sorted(groups, key=lambda k: (_PROJECT_MATERIAL_TYPE_ORDER.get(k, 99), k)):
+            label = _PROJECT_MATERIAL_TYPE_LABELS.get(type_key, type_key.replace("_", " ").capitalize())
+            lines.append(f"### {label}\n")
+            for item in sorted(groups[type_key], key=lambda row: row.get("name", "").lower()):
+                link = f"[{item.get('name', '')}]({item.get('path', '')})" if item.get("path") else item.get("name", "")
+                summary = item.get("summary", "")
+                lines.append(f"- {link}" + (f" — {summary}" if summary else ""))
+            lines.append("")
 
     return "\n".join(lines)
 

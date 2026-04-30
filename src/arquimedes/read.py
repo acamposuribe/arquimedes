@@ -12,7 +12,7 @@ from arquimedes.compile_pages import _material_wiki_path
 from arquimedes.config import get_library_root, get_project_root
 from arquimedes.index import get_index_path
 
-_DOMAINS = ("research", "practice")
+_DOMAINS = ("research", "practice", "proyectos")
 
 
 def _normalized_domain(domain: str | None) -> str | None:

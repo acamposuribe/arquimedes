@@ -76,6 +76,40 @@ def _failed_with_response(output_dir: Path, raw_text: str, detail: str) -> dict:
     return {"status": "failed", "detail": detail}
 
 
+def _primary_image_paths(output_dir: Path, meta: dict) -> list[Path]:
+    """Return primary standalone-image paths for multimodal document enrichment.
+
+    Plain image materials need visual input. Scanned documents should use OCR
+    text when chunking succeeded; attach the image only when there are no chunks.
+    """
+    file_type = meta.get("file_type")
+    if file_type not in {"image", "scanned_document"}:
+        return []
+    if file_type == "scanned_document":
+        chunks_path = output_dir / "chunks.jsonl"
+        if chunks_path.exists() and any(line.strip() for line in chunks_path.read_text(encoding="utf-8").splitlines()):
+            return []
+    figures_dir = output_dir / "figures"
+    sidecar_path = figures_dir / "fig_0001.json"
+    if sidecar_path.exists():
+        try:
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            image_rel = sidecar.get("image_path") or ""
+            if image_rel:
+                image_path = Path(image_rel)
+                if not image_path.is_absolute():
+                    image_path = output_dir / image_path
+                if image_path.exists():
+                    return [image_path]
+        except Exception:
+            pass
+    for pattern in ("fig_0001.*", "*.jpg", "*.jpeg", "*.png", "*.webp", "*.tif", "*.tiff", "*.bmp"):
+        matches = sorted(p for p in figures_dir.glob(pattern) if p.is_file() and p.suffix.lower() != ".json")
+        if matches:
+            return [matches[0]]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # Field-level helpers
 # ---------------------------------------------------------------------------
@@ -286,6 +320,7 @@ def enrich_document_stage(
             meta_path,
             document_text_path,
             domain=domain,
+            image_paths=_primary_image_paths(output_dir, meta),
         )
         raw_text = llm_fn(system, messages)
         repair_schema = _PROJECT_DOCUMENT_PATCH_SCHEMA if is_project_domain else _DOCUMENT_PATCH_SCHEMA

@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from arquimedes.enrich_document import enrich_document_stage
+from arquimedes.enrich_document import _primary_image_paths, enrich_document_stage
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +140,30 @@ def _make_config() -> dict:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+
+def test_primary_image_paths_for_scanned_documents_only_when_chunks_empty(tmp_path):
+    output_dir = tmp_path / "extracted" / "scan1"
+    figures_dir = output_dir / "figures"
+    figures_dir.mkdir(parents=True)
+    image_path = figures_dir / "fig_0001.jpg"
+    image_path.write_bytes(b"jpg")
+    (figures_dir / "fig_0001.json").write_text(
+        json.dumps({"image_path": "figures/fig_0001.jpg"}),
+        encoding="utf-8",
+    )
+
+    (output_dir / "chunks.jsonl").write_text(
+        json.dumps({"chunk_id": "c1", "text": "OCR text"}) + "\n",
+        encoding="utf-8",
+    )
+    assert _primary_image_paths(output_dir, {"file_type": "scanned_document"}) == []
+
+    (output_dir / "chunks.jsonl").write_text("", encoding="utf-8")
+    assert _primary_image_paths(output_dir, {"file_type": "scanned_document"}) == [image_path]
+    assert _primary_image_paths(output_dir, {"file_type": "image"}) == [image_path]
+
+
 
 
 class TestEnrichDocumentStage:

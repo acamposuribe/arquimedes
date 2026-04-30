@@ -306,7 +306,7 @@ _DOCUMENT_FILE_USER_TEMPLATE = """\
 Read these inputs:
 - METADATA JSON: {meta_path}
 - DOCUMENT TEXT: {document_text_path}
-
+{image_instruction}
 Produce one complete JSON output object following the system instructions.
 Important:
 - Do not rewrite the full metadata object.
@@ -353,15 +353,24 @@ def build_document_file_prompt(
     document_text_path: Path,
     *,
     domain: str = "",
+    image_paths: list[Path] | None = None,
 ) -> tuple[str, list[dict]]:
     """Build (system_prompt, messages) for file-based document enrichment.
 
     The LLM reads the metadata JSON and flattened document text directly from
     disk and returns a structured JSON patch.
     """
+    image_paths = image_paths or []
+    image_instruction = ""
+    if image_paths:
+        image_instruction = (
+            "- PRIMARY IMAGE MATERIAL(S): attached below and referenced by file path. "
+            "Analyze the image itself as the source material; do not treat it as a figure inside another document.\n"
+        )
     user_content = _DOCUMENT_FILE_USER_TEMPLATE.format(
         meta_path=meta_path,
         document_text_path=document_text_path,
+        image_instruction=image_instruction,
     )
     if is_proyectos_domain(domain):
         system = project_prompts.document_file_system_prompt()
@@ -369,7 +378,28 @@ def build_document_file_prompt(
         system = practice_prompts.document_file_system_prompt()
     else:
         system = _DOCUMENT_FILE_SYSTEM_PROMPT
-    return system, [{"role": "user", "content": user_content}]
+    if not image_paths:
+        return system, [{"role": "user", "content": user_content}]
+
+    content: list[dict] = [{"type": "text", "text": user_content}]
+    for image_path in image_paths:
+        if not image_path.exists():
+            content.append({"type": "text", "text": f"\n(Image unavailable: {image_path})\n"})
+            continue
+        try:
+            media_type, b64_data = _encode_image(str(image_path))
+            content.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": media_type,
+                    "data": b64_data,
+                },
+                "_source_path": str(image_path),
+            })
+        except (OSError, ValueError):
+            content.append({"type": "text", "text": f"\n(Image could not be read: {image_path})\n"})
+    return system, [{"role": "user", "content": content}]
 
 
 # ---------------------------------------------------------------------------

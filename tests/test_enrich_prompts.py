@@ -86,6 +86,23 @@ def test_proyectos_document_prompt_requests_project_extraction(tmp_path):
     assert "main_content_learnings" not in system
 
 
+def test_document_file_prompt_can_attach_primary_images(tmp_path):
+    meta_path = tmp_path / "meta.json"
+    text_path = tmp_path / "document.work.md"
+    image_path = tmp_path / "primary.jpg"
+    meta_path.write_text("{}", encoding="utf-8")
+    text_path.write_text("", encoding="utf-8")
+    image_path.write_bytes(b"not a real jpeg but enough for prompt construction")
+
+    system, messages = build_document_file_prompt(meta_path, text_path, image_paths=[image_path])
+
+    assert "architecture librarian" in system
+    content = messages[0]["content"]
+    assert isinstance(content, list)
+    assert "PRIMARY IMAGE MATERIAL" in content[0]["text"]
+    assert any(block.get("type") == "image" and block.get("_source_path") == str(image_path) for block in content)
+
+
 def test_proyectos_chunk_and_figure_prompts_include_project_extraction():
     doc_context = build_document_context(_meta(domain="proyectos", collection="2407-casa-rio"), None, None)
     chunk_system, chunk_messages = build_chunk_batch_prompt(_chunks(), doc_context, [], domain="proyectos")

@@ -17,6 +17,7 @@ from pathlib import Path
 from arquimedes import cluster as cluster_mod
 from arquimedes import compile_pages
 from arquimedes import enrich_stamps
+from arquimedes import project_state
 from arquimedes.config import (
     get_extracted_root,
     get_indexes_root,
@@ -24,7 +25,7 @@ from arquimedes.config import (
     get_wiki_root,
     load_config,
 )
-from arquimedes.domain_profiles import display_domain_name, is_practice_domain
+from arquimedes.domain_profiles import display_domain_name, get_publication_mode, is_practice_domain
 from arquimedes.lint_global_bridge import global_bridge_artifact_paths, load_global_bridge_clusters
 
 logger = logging.getLogger(__name__)
@@ -992,6 +993,39 @@ def _render_index_pages(
                 coll_entries.append(coll_entry)
                 domain_entries.append(domain_entry)
                 all_material_entries.append(root_entry)
+
+            if get_publication_mode(domain) == "project_dossier":
+                if collection == "_general":
+                    logger.warning("Skipping Proyectos/_general project page for %s loose material(s)", len(metas))
+                    continue
+                state = project_state.load_project_state(collection, root=get_project_root())
+                notes = project_state.load_project_notes(collection, root=get_project_root())
+                recent = sorted(
+                    [
+                        {
+                            "name": m.get("title") or m["material_id"],
+                            "path": compile_pages._relative_link(
+                                coll_index, compile_pages._material_wiki_path(m)
+                            ),
+                            "ingested_at": ingested_at.get(m["material_id"], ""),
+                        }
+                        for m in metas
+                    ],
+                    key=lambda x: x.get("ingested_at", ""),
+                    reverse=True,
+                )
+                project_title = state.get("project_title") or collection.replace("_", " ").replace("-", " ").title()
+                content = compile_pages.render_project_page(
+                    f"{display_domain_name(domain)} / {project_title}",
+                    collection,
+                    state,
+                    [{**entry, "material_id": meta["material_id"]} for entry, meta in zip(coll_entries, metas)],
+                    recent,
+                    notes,
+                )
+                _write_page(wiki_root / domain / collection / "_index.md", content)
+                written += 1
+                continue
 
             # Key concepts: canonical concept homes with >=1 material in this collection
             concept_counts: dict[str, int] = {}

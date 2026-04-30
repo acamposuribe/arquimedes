@@ -1307,6 +1307,80 @@ def test_compile_writes_collection_pages(tmp_path, monkeypatch):
     assert "2026-04-05" in coll_page
 
 
+def test_compile_writes_proyectos_project_page_without_clusters(tmp_path, monkeypatch):
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+    from arquimedes.index import rebuild_index
+    from arquimedes.project_state import append_project_note, save_project_state, load_project_state
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    mid = "mat_proyecto"
+    meta = _make_meta(mid, "Acta de arranque")
+    meta["domain"] = "proyectos"
+    meta["collection"] = "2407-casa-rio"
+    mat_dir = tmp_path / "extracted" / mid
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    (mat_dir / "chunks.jsonl").write_text("", encoding="utf-8")
+    (mat_dir / "annotations.jsonl").write_text("", encoding="utf-8")
+    (manifests / "materials.jsonl").write_text(
+        json.dumps({
+            "material_id": mid,
+            "file_hash": mid,
+            "relative_path": "Proyectos/2407-casa-rio/acta.pdf",
+            "file_type": "pdf",
+            "domain": "proyectos",
+            "collection": "2407-casa-rio",
+            "ingested_at": "2026-04-30T10:00:00+00:00",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    state = load_project_state("2407-casa-rio", root=tmp_path)
+    state["stage"] = "schematic_design"
+    state["current_work_in_progress"] = ["Preparar alternativas de implantación"]
+    state["next_focus"] = ["Validar alcance con cliente"]
+    state["important_material_ids"] = [mid]
+    save_project_state("2407-casa-rio", state, root=tmp_path)
+    append_project_note(
+        "2407-casa-rio",
+        kind="risk",
+        text="Falta confirmar la acometida eléctrica.",
+        actor="hermes",
+        root=tmp_path,
+        timestamp="2026-04-30T11:00:00+00:00",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True},
+    )
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    page = (tmp_path / "wiki" / "proyectos" / "2407-casa-rio" / "_index.md").read_text(encoding="utf-8")
+    assert "## Estado del proyecto" in page
+    assert "schematic_design" in page
+    assert "Preparar alternativas de implantación" in page
+    assert "Validar alcance con cliente" in page
+    assert "Falta confirmar la acometida eléctrica." in page
+    assert "Acta de arranque" in page
+    assert not (tmp_path / "wiki" / "proyectos" / "2407-casa-rio" / "concepts" / "_index.md").exists()
+
+
 def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
     """Local concepts index groups entries deterministically by collection."""
     import shutil

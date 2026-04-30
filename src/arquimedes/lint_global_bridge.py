@@ -8,7 +8,7 @@ from typing import Any
 
 from arquimedes import practice_prompts
 from arquimedes.config import load_config
-from arquimedes.domain_profiles import is_practice_domain
+from arquimedes.domain_profiles import is_practice_domain, should_run_global_bridge
 from arquimedes.llm import EnrichmentError
 from arquimedes.llm import parse_json_or_repair
 
@@ -1606,7 +1606,7 @@ def _global_bridge_due(root: Path, local_clusters: list[dict], collection_refs: 
         if str(cluster.get("domain", "")).strip()
     }
     domains.update(path.parent.name for path in global_bridge_artifact_paths(root) if path.parent.name != "derived")
-    domains = sorted(domain for domain in domains if domain)
+    domains = sorted(domain for domain in domains if domain and should_run_global_bridge(domain))
     if not domains:
         return False, "no domains"
     deps = _deps()
@@ -1655,7 +1655,7 @@ def _run_global_bridge_impl(
         if str(cluster.get("domain", "")).strip()
     }
     domains.update(path.parent.name for path in global_bridge_artifact_paths(root) if path.parent.name != "derived")
-    domains = sorted(domain for domain in domains if domain)
+    domains = sorted(domain for domain in domains if domain and should_run_global_bridge(domain))
     if not domains:
         return {
             "global_bridges": 0,

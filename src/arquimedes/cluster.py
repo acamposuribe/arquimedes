@@ -18,7 +18,7 @@ from arquimedes.config import (
     get_project_root,
     load_config,
 )
-from arquimedes.domain_profiles import is_practice_domain
+from arquimedes.domain_profiles import is_practice_domain, should_run_clustering
 from arquimedes.llm import (
     EnrichmentError,
     LlmFn,
@@ -1066,13 +1066,24 @@ def cluster_concepts(
         finally:
             con.close()
 
+        manifest_index = _load_manifest_index(root)
+        scopes = [
+            scope
+            for scope in _cluster_scopes(manifest_index, domain=domain_filter, collection=collection_filter)
+            if should_run_clustering(scope[0])
+        ]
+        if not scopes:
+            return {
+                "collections": 0,
+                "total_concepts": 0,
+                "clusters": 0,
+                "multi_material": 0,
+                "skipped": True,
+                "reason": "no domains with local clustering enabled",
+            }
+
         if not concept_rows:
             raise EnrichmentError("No concepts in index. Run `arq enrich` on materials first.")
-
-        manifest_index = _load_manifest_index(root)
-        scopes = _cluster_scopes(manifest_index, domain=domain_filter, collection=collection_filter)
-        if not scopes:
-            return {"collections": 0, "total_concepts": 0, "clusters": 0, "multi_material": 0, "skipped": True}
 
         if llm_fn is None:
             base_llm_fn = None

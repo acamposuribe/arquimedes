@@ -218,7 +218,7 @@ def _relative_link(from_path: str, to_path: str) -> str:
 
 def _page_domain_from_path(page_path: str) -> str:
     parts = PurePosixPath(page_path).parts
-    if len(parts) >= 2 and parts[0] == "wiki" and parts[1] in {"practice", "research"}:
+    if len(parts) >= 2 and parts[0] == "wiki" and parts[1] in {"practice", "research", "proyectos"}:
         return parts[1]
     return ""
 
@@ -840,6 +840,91 @@ def render_collection_page(
                 count = tf.get("count", 0)
                 lines.append(f"- {value} ({count})")
             lines.append("")
+
+    return "\n".join(lines)
+
+
+def _render_bullets(lines: list[str], values: list, *, empty: str = "Sin datos registrados.") -> None:
+    if values:
+        for value in values:
+            lines.append(f"- {value}")
+    else:
+        lines.append(f"- {empty}")
+    lines.append("")
+
+
+def render_project_page(
+    title: str,
+    project_id: str,
+    state: dict,
+    materials: list[dict],
+    recent_additions: list[dict],
+    notes: list[dict],
+) -> str:
+    """Render a Proyectos project dossier page."""
+    lines: list[str] = [f"# {title}\n"]
+
+    lines.append("## Estado del proyecto\n")
+    lines.append(f"- **Proyecto:** {project_id}")
+    lines.append(f"- **Fase:** {state.get('stage', 'lead')}")
+    confidence = state.get("stage_confidence", 0)
+    lines.append(f"- **Confianza:** {confidence}")
+    if state.get("updated_at"):
+        lines.append(f"- **Actualizado:** {state.get('updated_at')}")
+    lines.append("")
+
+    sections = [
+        ("Trabajo en curso", "current_work_in_progress"),
+        ("Objetivos principales", "main_objectives"),
+        ("Condiciones y restricciones", "known_conditions"),
+        ("Decisiones", "decisions"),
+        ("Requisitos", "requirements"),
+        ("Problemas, riesgos y bloqueos", "risks_or_blockers"),
+        ("Información pendiente", "missing_information"),
+        ("Próximo foco", "next_focus"),
+        ("Aprendizajes positivos", "positive_learnings"),
+        ("Errores y acciones de reparación", "mistakes_or_regrets"),
+        ("Acciones de reparación", "repair_actions"),
+    ]
+    for heading, field in sections:
+        lines.append(f"## {heading}\n")
+        _render_bullets(lines, state.get(field) or [])
+
+    important_ids = set(state.get("important_material_ids") or [])
+    important = [m for m in materials if m.get("material_id") in important_ids]
+    if important:
+        lines.append("## Materiales importantes\n")
+        for item in important:
+            link = f"[{item.get('name', '')}]({item.get('path', '')})" if item.get("path") else item.get("name", "")
+            lines.append(f"- {link}")
+        lines.append("")
+
+    if recent_additions:
+        lines.append("## Historial reciente\n")
+        for item in recent_additions[:8]:
+            link = f"[{item.get('name', '')}]({item.get('path', '')})" if item.get("path") else item.get("name", "")
+            date_str = str(item.get("ingested_at", ""))[:10]
+            lines.append(f"- {link}" + (f" ({date_str})" if date_str else ""))
+        lines.append("")
+
+    if notes:
+        lines.append("## Notas recientes\n")
+        for note in sorted(notes, key=lambda row: row.get("timestamp", ""), reverse=True)[:10]:
+            kind = note.get("kind", "note")
+            actor = note.get("actor", "")
+            text = note.get("text", "")
+            date_str = str(note.get("timestamp", ""))[:10]
+            suffix = f" ({actor}, {date_str})" if actor or date_str else ""
+            lines.append(f"- **{kind}:** {text}{suffix}")
+        lines.append("")
+
+    if materials:
+        lines.append("## Materiales del proyecto\n")
+        for item in sorted(materials, key=lambda row: row.get("name", "").lower()):
+            link = f"[{item.get('name', '')}]({item.get('path', '')})" if item.get("path") else item.get("name", "")
+            summary = item.get("summary", "")
+            lines.append(f"- {link}" + (f" — {summary}" if summary else ""))
+        lines.append("")
 
     return "\n".join(lines)
 

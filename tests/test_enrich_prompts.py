@@ -70,6 +70,31 @@ def _annotations() -> list[dict]:
     ]
 
 
+def test_proyectos_document_prompt_requests_project_extraction(tmp_path):
+    meta_path = tmp_path / "meta.json"
+    text_path = tmp_path / "document.work.md"
+    meta_path.write_text("{}", encoding="utf-8")
+    text_path.write_text("Acta de reunión", encoding="utf-8")
+
+    system, _messages = build_document_file_prompt(meta_path, text_path, domain="proyectos")
+
+    assert "project_extraction" in system
+    assert "project_material_type" in system
+    assert "meeting_report" in system
+    assert "concepts_local\": []" in system
+
+
+def test_proyectos_chunk_and_figure_prompts_include_project_extraction():
+    doc_context = build_document_context(_meta(domain="proyectos", collection="2407-casa-rio"), None, None)
+    chunk_system, chunk_messages = build_chunk_batch_prompt(_chunks(), doc_context, [], domain="proyectos")
+    figure_system, figure_messages = build_figure_batch_prompt([], doc_context, domain="proyectos")
+
+    assert "project_extraction" in chunk_system
+    assert "risks_or_blockers" in chunk_messages[0]["content"]
+    assert "project_extraction" in figure_system
+    assert "spatial_or_design_scope" in figure_messages[0]["content"][0]["text"]
+
+
 # ---------------------------------------------------------------------------
 # format_toc
 # ---------------------------------------------------------------------------

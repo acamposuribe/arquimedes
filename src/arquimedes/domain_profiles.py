@@ -15,6 +15,13 @@ class DomainProfile:
     domain: str
     output_language: str
     prompt_version_suffix: str = ""
+    publication_mode: str = "concept_graph"
+    run_local_clustering: bool = True
+    run_concept_reflection: bool = True
+    run_collection_reflection: bool = True
+    run_project_reflection: bool = False
+    run_global_bridge: bool = True
+    run_office_learning: bool = False
     concept_reflection_figure_limit: int = 2
     collection_reflection_figure_limit: int = 2
     generated_labels: dict[str, str] = field(default_factory=dict)
@@ -262,6 +269,31 @@ _PRACTICE_LABELS = {
     "main_concepts": "Conceptos principales",
 }
 
+_PROYECTOS_LABELS = {
+    **_PRACTICE_LABELS,
+    "collection": "Proyecto",
+    "collection_placeholder": "Proyecto",
+    "collections_summary": "proyectos",
+    "architecture_knowledge_base_desc": "Memoria de proyectos de arquitectura: recorre expedientes compilados, busca materiales y revisa el estado de cada proyecto.",
+    "no_indexed_collections_yet": "Todavía no hay proyectos indexados.",
+    "search_this_collection": "Buscar en este proyecto",
+    "overview": "Estado del proyecto",
+    "materials": "Materiales del proyecto",
+    "recent_additions": "Historial reciente",
+    "estado": "Estado del proyecto",
+    "trabajo_en_curso": "Trabajo en curso",
+    "objetivos_principales": "Objetivos principales",
+    "condiciones_restricciones": "Condiciones y restricciones",
+    "decisiones_requisitos": "Decisiones y requisitos",
+    "riesgos": "Problemas, riesgos y bloqueos",
+    "informacion_pendiente": "Información pendiente",
+    "proximo_foco": "Próximo foco",
+    "materiales_importantes": "Materiales importantes",
+    "aprendizajes": "Aprendizajes positivos",
+    "errores_reparaciones": "Errores y acciones de reparación",
+    "notas_recientes": "Notas recientes",
+}
+
 _PROFILES = {
     "research": DomainProfile(
         domain="research",
@@ -275,6 +307,21 @@ _PROFILES = {
         concept_reflection_figure_limit=4,
         collection_reflection_figure_limit=4,
         generated_labels=_PRACTICE_LABELS,
+    ),
+    "proyectos": DomainProfile(
+        domain="proyectos",
+        output_language="Spanish",
+        prompt_version_suffix="proyectos-es-v1",
+        publication_mode="project_dossier",
+        run_local_clustering=False,
+        run_concept_reflection=False,
+        run_collection_reflection=False,
+        run_project_reflection=True,
+        run_global_bridge=False,
+        run_office_learning=True,
+        concept_reflection_figure_limit=4,
+        collection_reflection_figure_limit=4,
+        generated_labels=_PROYECTOS_LABELS,
     ),
 }
 
@@ -293,6 +340,38 @@ def get_domain_profile(domain: str, *, default: str = "research") -> DomainProfi
 
 def is_practice_domain(domain: str, *, default: str = "research") -> bool:
     return normalize_domain(domain, default=default) == "practice"
+
+
+def is_proyectos_domain(domain: str, *, default: str = "research") -> bool:
+    return normalize_domain(domain, default=default) == "proyectos"
+
+
+def get_publication_mode(domain: str) -> str:
+    return get_domain_profile(domain, default="research").publication_mode
+
+
+def should_run_clustering(domain: str) -> bool:
+    return get_domain_profile(domain, default="research").run_local_clustering
+
+
+def should_run_concept_reflection(domain: str) -> bool:
+    return get_domain_profile(domain, default="research").run_concept_reflection
+
+
+def should_run_collection_reflection(domain: str) -> bool:
+    return get_domain_profile(domain, default="research").run_collection_reflection
+
+
+def should_run_project_reflection(domain: str) -> bool:
+    return get_domain_profile(domain, default="research").run_project_reflection
+
+
+def should_run_global_bridge(domain: str) -> bool:
+    return get_domain_profile(domain, default="research").run_global_bridge
+
+
+def should_run_office_learning(domain: str) -> bool:
+    return get_domain_profile(domain, default="research").run_office_learning
 
 
 def domain_prompt_version(prompt_version: str, domain: str) -> str:
@@ -314,4 +393,6 @@ def generated_label(key: str, domain: str, *, default: str | None = None) -> str
 
 def display_domain_name(domain: str) -> str:
     """Return the user-facing domain name."""
+    if is_proyectos_domain(domain):
+        return "Proyectos"
     return "Práctica" if is_practice_domain(domain) else "Research"

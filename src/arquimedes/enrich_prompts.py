@@ -18,8 +18,8 @@ import json
 import mimetypes
 from pathlib import Path
 
-from arquimedes.domain_profiles import is_practice_domain
-from arquimedes import practice_prompts
+from arquimedes.domain_profiles import is_practice_domain, is_proyectos_domain
+from arquimedes import practice_prompts, project_prompts
 
 
 # ---------------------------------------------------------------------------
@@ -354,11 +354,12 @@ def build_document_file_prompt(
         meta_path=meta_path,
         document_text_path=document_text_path,
     )
-    system = (
-        practice_prompts.document_file_system_prompt()
-        if is_practice_domain(domain)
-        else _DOCUMENT_FILE_SYSTEM_PROMPT
-    )
+    if is_proyectos_domain(domain):
+        system = project_prompts.document_file_system_prompt()
+    elif is_practice_domain(domain):
+        system = practice_prompts.document_file_system_prompt()
+    else:
+        system = _DOCUMENT_FILE_SYSTEM_PROMPT
     return system, [{"role": "user", "content": user_content}]
 
 
@@ -509,16 +510,15 @@ def build_chunk_batch_prompt(
     """
     chunks_text = _build_chunks_text(chunk_batch, annotations)
 
-    system = (
-        practice_prompts.chunk_batch_system_prompt()
-        if is_practice_domain(domain)
-        else _CHUNK_BATCH_SYSTEM_PROMPT
-    )
-    user_template = (
-        practice_prompts.chunk_batch_user_template()
-        if is_practice_domain(domain)
-        else _CHUNK_BATCH_USER_TEMPLATE
-    )
+    if is_proyectos_domain(domain):
+        system = project_prompts.chunk_batch_system_prompt()
+        user_template = project_prompts.chunk_batch_user_template()
+    elif is_practice_domain(domain):
+        system = practice_prompts.chunk_batch_system_prompt()
+        user_template = practice_prompts.chunk_batch_user_template()
+    else:
+        system = _CHUNK_BATCH_SYSTEM_PROMPT
+        user_template = _CHUNK_BATCH_USER_TEMPLATE
     user_content = user_template.format(
         doc_context_str=doc_context_str,
         chunks_text=chunks_text,
@@ -598,16 +598,15 @@ def build_figure_batch_prompt(
     included as a base64 content block. For figures without images, only text
     context is provided and the LLM is notified.
     """
-    system = (
-        practice_prompts.figure_batch_system_prompt()
-        if is_practice_domain(domain)
-        else _FIGURE_BATCH_SYSTEM_PROMPT
-    )
-    intro_template = (
-        practice_prompts.figure_batch_user_intro()
-        if is_practice_domain(domain)
-        else _FIGURE_BATCH_USER_INTRO
-    )
+    if is_proyectos_domain(domain):
+        system = project_prompts.figure_batch_system_prompt()
+        intro_template = project_prompts.figure_batch_user_intro()
+    elif is_practice_domain(domain):
+        system = practice_prompts.figure_batch_system_prompt()
+        intro_template = practice_prompts.figure_batch_user_intro()
+    else:
+        system = _FIGURE_BATCH_SYSTEM_PROMPT
+        intro_template = _FIGURE_BATCH_USER_INTRO
     intro = intro_template.format(doc_context_str=doc_context_str)
 
     # Build the content list for the user message (multimodal)

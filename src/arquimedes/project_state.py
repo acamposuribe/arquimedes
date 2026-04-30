@@ -1,0 +1,233 @@
+"""Persistence helpers for Proyectos project dossiers."""
+
+from __future__ import annotations
+
+import json
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
+
+from arquimedes.config import get_project_root
+
+PROJECT_STAGES = (
+    "lead",
+    "feasibility",
+    "schematic_design",
+    "basic_project",
+    "execution_project",
+    "tender",
+    "construction",
+    "handover",
+    "archived",
+)
+UPDATED_BY = {"reflection", "hermes", "human", "cli"}
+NOTE_KINDS = {"decision", "requirement", "risk", "deadline", "coordination", "learning", "mistake", "repair"}
+LIST_FIELDS = {
+    "last_material_ids",
+    "main_objectives",
+    "current_work_in_progress",
+    "next_focus",
+    "known_conditions",
+    "decisions",
+    "requirements",
+    "risks_or_blockers",
+    "missing_information",
+    "positive_learnings",
+    "mistakes_or_regrets",
+    "repair_actions",
+    "important_material_ids",
+}
+
+
+class ProjectStateError(ValueError):
+    """Raised when a project state, note, or delta is invalid."""
+
+
+def project_dir(root: Path, project_id: str) -> Path:
+    return root / "derived" / "projects" / project_id
+
+
+def project_state_path(root: Path, project_id: str) -> Path:
+    return project_dir(root, project_id) / "project_state.json"
+
+
+def project_notes_path(root: Path, project_id: str) -> Path:
+    return project_dir(root, project_id) / "notes.jsonl"
+
+
+def now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def empty_project_state(project_id: str) -> dict[str, Any]:
+    return {
+        "domain": "proyectos",
+        "project_id": project_id,
+        "project_title": project_id.replace("-", " ").title(),
+        "stage": "lead",
+        "stage_confidence": 0.0,
+        "last_material_ids": [],
+        "main_objectives": [],
+        "current_work_in_progress": [],
+        "next_focus": [],
+        "known_conditions": [],
+        "decisions": [],
+        "requirements": [],
+        "risks_or_blockers": [],
+        "missing_information": [],
+        "positive_learnings": [],
+        "mistakes_or_regrets": [],
+        "repair_actions": [],
+        "important_material_ids": [],
+        "updated_at": "",
+        "updated_by": "cli",
+    }
+
+
+def _as_list(value: Any, field: str) -> list:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ProjectStateError(f"{field} must be a list")
+    return value
+
+
+def validate_project_state(state: dict[str, Any]) -> dict[str, Any]:
+    state = dict(state)
+    if state.get("domain") != "proyectos":
+        raise ProjectStateError("project state domain must be proyectos")
+    project_id = str(state.get("project_id", "")).strip()
+    if not project_id or project_id == "_general":
+        raise ProjectStateError("project_id must be a real Proyectos collection id")
+    stage = str(state.get("stage", "")).strip()
+    if stage not in PROJECT_STAGES:
+        raise ProjectStateError(f"stage must be one of: {', '.join(PROJECT_STAGES)}")
+    try:
+        confidence = float(state.get("stage_confidence", 0.0))
+    except (TypeError, ValueError) as exc:
+        raise ProjectStateError("stage_confidence must be a number") from exc
+    if not 0.0 <= confidence <= 1.0:
+        raise ProjectStateError("stage_confidence must be between 0 and 1")
+    state["stage_confidence"] = confidence
+    updated_by = str(state.get("updated_by", "")).strip()
+    if updated_by not in UPDATED_BY:
+        raise ProjectStateError(f"updated_by must be one of: {', '.join(sorted(UPDATED_BY))}")
+    for field in LIST_FIELDS:
+        state[field] = _as_list(state.get(field), field)
+    _validate_horizon_disjointness(state)
+    return state
+
+
+def _normalized_items(values: list) -> set[str]:
+    return {" ".join(str(item).casefold().split()) for item in values if str(item).strip()}
+
+
+def _validate_horizon_disjointness(state: dict[str, Any]) -> None:
+    horizons = [
+        ("main_objectives", _normalized_items(state.get("main_objectives", []))),
+        ("current_work_in_progress", _normalized_items(state.get("current_work_in_progress", []))),
+        ("next_focus", _normalized_items(state.get("next_focus", []))),
+    ]
+    for idx, (left_name, left_values) in enumerate(horizons):
+        for right_name, right_values in horizons[idx + 1:]:
+            overlap = left_values & right_values
+            if overlap:
+                item = sorted(overlap)[0]
+                raise ProjectStateError(f"{item!r} appears in both {left_name} and {right_name}")
+
+
+def load_project_state(project_id: str, *, root: Path | None = None) -> dict[str, Any]:
+    root = root or get_project_root()
+    path = project_state_path(root, project_id)
+    if not path.exists():
+        return empty_project_state(project_id)
+    return validate_project_state(json.loads(path.read_text(encoding="utf-8")))
+
+
+def save_project_state(project_id: str, state: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
+    root = root or get_project_root()
+    state = validate_project_state(state)
+    path = project_state_path(root, project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return state
+
+
+def merge_project_state_delta(project_id: str, delta: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
+    root = root or get_project_root()
+    state = load_project_state(project_id, root=root)
+    updated_by = str(delta.get("updated_by", "")).strip()
+    if updated_by not in UPDATED_BY:
+        raise ProjectStateError(f"updated_by must be one of: {', '.join(sorted(UPDATED_BY))}")
+    if updated_by == "lint":
+        raise ProjectStateError("updated_by must name the actor, not lint")
+
+    next_state = dict(state)
+    next_stage = str(delta.get("stage", next_state["stage"])).strip()
+    if next_stage != next_state["stage"]:
+        old_idx = PROJECT_STAGES.index(next_state["stage"])
+        new_idx = PROJECT_STAGES.index(next_stage) if next_stage in PROJECT_STAGES else -1
+        if new_idx < old_idx:
+            has_justification = bool(delta.get("mistakes_or_regrets") or delta.get("repair_actions"))
+            if not has_justification:
+                raise ProjectStateError("backwards stage transitions require mistakes_or_regrets or repair_actions")
+
+    for key, value in delta.items():
+        if key in {"domain", "project_id", "updated_at"}:
+            continue
+        if key in LIST_FIELDS:
+            next_state[key] = _as_list(value, key)
+        elif key in next_state:
+            next_state[key] = value
+    next_state["updated_by"] = updated_by
+    next_state["updated_at"] = str(delta.get("updated_at") or now_iso())
+    return save_project_state(project_id, next_state, root=root)
+
+
+def append_project_note(
+    project_id: str,
+    *,
+    kind: str,
+    text: str,
+    actor: str,
+    source_refs: list | None = None,
+    material_id: str | None = None,
+    confidence: float | None = None,
+    root: Path | None = None,
+    timestamp: str | None = None,
+) -> dict[str, Any]:
+    if kind not in NOTE_KINDS:
+        raise ProjectStateError(f"note kind must be one of: {', '.join(sorted(NOTE_KINDS))}")
+    if actor not in UPDATED_BY:
+        raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    if not text.strip():
+        raise ProjectStateError("note text is required")
+    note: dict[str, Any] = {
+        "actor": actor,
+        "timestamp": timestamp or now_iso(),
+        "kind": kind,
+        "text": text.strip(),
+        "source_refs": source_refs or [],
+    }
+    if material_id:
+        note["material_id"] = material_id
+    if confidence is not None:
+        note["confidence"] = float(confidence)
+    root = root or get_project_root()
+    path = project_notes_path(root, project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(json.dumps(note, ensure_ascii=False, separators=(",", ":")) + "\n")
+    return note
+
+
+def load_project_notes(project_id: str, *, root: Path | None = None) -> list[dict[str, Any]]:
+    root = root or get_project_root()
+    path = project_notes_path(root, project_id)
+    if not path.exists():
+        return []
+    notes = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        if line.strip():
+            notes.append(json.loads(line))
+    return notes

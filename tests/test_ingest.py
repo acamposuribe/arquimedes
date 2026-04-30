@@ -82,3 +82,28 @@ def test_ingest_accepts_multiple_explicit_paths(tmp_path, monkeypatch):
         "Research/papers/one.pdf",
         "Practice/notes/two.pdf",
     }
+
+
+def test_ingest_recognizes_proyectos_domain_and_general_bucket(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    manifest_dir = project_root / "manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    project_file = library_root / "Proyectos" / "2407-casa-rio" / "acta.pdf"
+    loose_file = library_root / "Proyectos" / "loose.pdf"
+    project_file.parent.mkdir(parents=True, exist_ok=True)
+    loose_file.parent.mkdir(parents=True, exist_ok=True)
+    project_file.write_bytes(b"acta")
+    loose_file.write_bytes(b"loose")
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(config={})
+
+    by_path = {item.relative_path: item for item in result}
+    assert by_path["Proyectos/2407-casa-rio/acta.pdf"].domain == "proyectos"
+    assert by_path["Proyectos/2407-casa-rio/acta.pdf"].collection == "2407-casa-rio"
+    assert by_path["Proyectos/loose.pdf"].domain == "proyectos"
+    assert by_path["Proyectos/loose.pdf"].collection == "_general"

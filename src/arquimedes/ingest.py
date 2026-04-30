@@ -31,7 +31,7 @@ def _detect_file_type(path: Path) -> str:
     return "unknown"
 
 
-DOMAIN_FOLDERS = {"research", "practice"}
+DOMAIN_FOLDERS = {"research", "practice", "proyectos"}
 
 
 def _derive_domain(relative_path: Path) -> str:

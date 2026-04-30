@@ -1,9 +1,10 @@
 """Document enrichment stage — Phase 3.
 
-Enriches document-level metadata: summary, document_type, keywords, methodological conclusions,
-main content learnings, facets, and concepts. Ordinary enriched fields keep only the value;
-stage provenance lives in stamps. Concept candidates keep source provenance because clustering
-and search depend on it.
+Enriches document-level metadata. Research/practice materials get summary, document_type,
+keywords, reflections, facets, and concepts. Project dossier materials get summary,
+document_type, keywords, facets, and project_extraction, but no reflective learning fields
+or concept candidates. Ordinary enriched fields keep only the value; stage provenance lives
+in stamps. Concept candidates keep source provenance because clustering and search depend on it.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from arquimedes import enrich_prompts, enrich_stamps, llm
-from arquimedes.domain_profiles import domain_prompt_version
+from arquimedes.domain_profiles import domain_prompt_version, is_proyectos_domain
 from arquimedes.llm import get_model_id
 from arquimedes.models import (
     ArchitectureFacets,
@@ -116,6 +117,32 @@ _DOCUMENT_PATCH_SCHEMA = """{
     \"_finished\": true
 }"""
 
+_PROJECT_DOCUMENT_PATCH_SCHEMA = """{
+    \"summary\": \"required string\",
+    \"document_type\": \"required string\",
+    \"keywords\": [\"required strings\"],
+    \"bibliography\": {\"optional bibliographic fields\": \"...\"} or null,
+    \"facets\": {\"optional facet fields\": \"...\"},
+    \"concepts_local\": [],
+    \"concepts_bridge_candidates\": [],
+    \"toc\": [{\"title\": \"...\", \"level\": 0, \"page\": 1}] or [],
+    \"project_extraction\": {
+        \"project_material_type\": \"meeting_report|meeting_notes|client_request|authority_request|regulation|drawing_set|technical_report|working_document|budget_table|site_photo|map_or_cartography|contract_or_admin|email_or_message_export|schedule|unknown\",
+        \"project_relevance\": \"required string\",
+        \"main_points\": [\"strings\"],
+        \"decisions\": [\"strings\"],
+        \"requirements\": [\"strings\"],
+        \"risks_or_blockers\": [\"strings\"],
+        \"open_items\": [\"strings\"],
+        \"actors\": [\"strings\"],
+        \"dates_and_deadlines\": [\"strings\"],
+        \"spatial_or_design_scope\": [\"strings\"],
+        \"budget_signals\": [\"strings\"],
+        \"evidence_refs\": [\"strings\"]
+    },
+    \"_finished\": true
+}"""
+
 _REQUIRED_DOCUMENT_OUTPUT_FIELDS = (
     "summary",
     "document_type",
@@ -127,6 +154,18 @@ _REQUIRED_DOCUMENT_OUTPUT_FIELDS = (
     "concepts_local",
     "concepts_bridge_candidates",
     "toc",
+)
+
+_REQUIRED_PROJECT_DOCUMENT_OUTPUT_FIELDS = (
+    "summary",
+    "document_type",
+    "keywords",
+    "bibliography",
+    "facets",
+    "concepts_local",
+    "concepts_bridge_candidates",
+    "toc",
+    "project_extraction",
 )
 
 
@@ -211,7 +250,9 @@ def enrich_document_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"Load error: {exc}"}
 
-    prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
+    domain = str(meta.get("domain", ""))
+    is_project_domain = is_proyectos_domain(domain)
+    prompt_version = domain_prompt_version(prompt_version, domain)
 
     # 2. Compute fingerprint and stamp
     try:
@@ -244,17 +285,21 @@ def enrich_document_stage(
         system, messages = enrich_prompts.build_document_file_prompt(
             meta_path,
             document_text_path,
-            domain=str(meta.get("domain", "")),
+            domain=domain,
         )
         raw_text = llm_fn(system, messages)
-        parsed = llm.parse_json_or_repair(llm_fn, raw_text, _DOCUMENT_PATCH_SCHEMA)
+        repair_schema = _PROJECT_DOCUMENT_PATCH_SCHEMA if is_project_domain else _DOCUMENT_PATCH_SCHEMA
+        parsed = llm.parse_json_or_repair(llm_fn, raw_text, repair_schema)
         if not isinstance(parsed, dict):
             return _failed_with_response(output_dir, raw_text, "LLM did not return a JSON object")
         if parsed.get("_finished") is not True:
             return _failed_with_response(output_dir, raw_text, "LLM output missing _finished=true")
         parsed = dict(parsed)
         parsed.pop("_finished", None)
-        missing_output_fields = [field for field in _REQUIRED_DOCUMENT_OUTPUT_FIELDS if field not in parsed]
+        required_output_fields = (
+            _REQUIRED_PROJECT_DOCUMENT_OUTPUT_FIELDS if is_project_domain else _REQUIRED_DOCUMENT_OUTPUT_FIELDS
+        )
+        missing_output_fields = [field for field in required_output_fields if field not in parsed]
         if missing_output_fields:
             return _failed_with_response(
                 output_dir,
@@ -282,11 +327,11 @@ def enrich_document_stage(
         if val is not None and not isinstance(val, dict):
             data[key] = {"value": val}
 
-    for field in ("summary", "document_type", "keywords",
-                  "methodological_conclusions", "main_content_learnings"):
+    reflective_fields = () if is_project_domain else ("methodological_conclusions", "main_content_learnings")
+    for field in ("summary", "document_type", "keywords", *reflective_fields):
         _normalize_field(parsed, field)
 
-    for field in ("summary", "document_type", "keywords", "methodological_conclusions", "main_content_learnings"):
+    for field in ("summary", "document_type", "keywords", *reflective_fields):
         value = parsed.get(field)
         if isinstance(value, dict) and "value" not in value:
             return _failed_with_response(output_dir, raw_text, f"LLM output field '{field}' missing 'value'")
@@ -332,10 +377,21 @@ def enrich_document_stage(
         meta_out["keywords"] = ef.to_dict()
         enriched_count["keywords"] = len(ef.value) if isinstance(ef.value, list) else 1
 
-        for field_name in ("methodological_conclusions", "main_content_learnings"):
-            field_data = parsed.get(field_name)
-            meta_out[field_name] = _make_enriched_field(field_data, actual_model, prompt_version).to_dict()
-            enriched_count[field_name] = len(meta_out[field_name]["value"]) if isinstance(meta_out[field_name].get("value"), list) else 1
+        if is_project_domain:
+            # Project dossiers are archival/operational records, not research reflections.
+            # Remove stale reflective fields from prior enrichments and keep concepts empty.
+            meta_out.pop("methodological_conclusions", None)
+            meta_out.pop("main_content_learnings", None)
+            project_extraction = parsed.get("project_extraction")
+            if not isinstance(project_extraction, dict):
+                return _failed_with_response(output_dir, raw_text, "LLM output field 'project_extraction' must be an object")
+            meta_out["project_extraction"] = project_extraction
+            enriched_count["project_extraction"] = sum(1 for v in project_extraction.values() if v)
+        else:
+            for field_name in ("methodological_conclusions", "main_content_learnings"):
+                field_data = parsed.get(field_name)
+                meta_out[field_name] = _make_enriched_field(field_data, actual_model, prompt_version).to_dict()
+                enriched_count[field_name] = len(meta_out[field_name]["value"]) if isinstance(meta_out[field_name].get("value"), list) else 1
 
         facets_data = parsed.get("facets", {})
         if not isinstance(facets_data, dict):
@@ -381,8 +437,9 @@ def enrich_document_stage(
             return _failed_with_response(output_dir, raw_text, "LLM output field 'concepts_bridge_candidates' must be a list")
 
         concepts: list[ConceptCandidate] = []
-        concepts.extend(_make_concepts(concepts_local_data, actual_model, prompt_version, concept_type="local"))
-        concepts.extend(_make_concepts(concepts_bridge_data, actual_model, prompt_version, concept_type="bridge_candidate"))
+        if not is_project_domain:
+            concepts.extend(_make_concepts(concepts_local_data, actual_model, prompt_version, concept_type="local"))
+            concepts.extend(_make_concepts(concepts_bridge_data, actual_model, prompt_version, concept_type="bridge_candidate"))
         enriched_count["concepts"] = len(concepts)
 
         # TOC: promote if LLM extracted one and toc.json is currently empty
@@ -503,6 +560,8 @@ def enrich_document_stage(
     ):
         if enriched_count.get(field_name):
             parts.append(f"{enriched_count[field_name]} {label}")
+    if enriched_count.get("project_extraction"):
+        parts.append("project extraction")
     if enriched_count["facets"]:
         parts.append(f"{enriched_count['facets']} facets")
     if enriched_count["concepts"]:

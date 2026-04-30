@@ -42,6 +42,7 @@ Reglas:
 - Mantén en inglés los valores controlados por esquema cuando el esquema los controle.
 - Clasifica primero el papel del material dentro del proyecto.
 - Extrae evidencia operativa para estado, decisiones, requisitos, riesgos y próximos pasos.
+- No reflexiones sobre el material: nada de conclusiones metodológicas ni aprendizajes de contenido. Aquí solo interesa archivar y consultar.
 - No emitas conceptos para grafo: concepts_local y concepts_bridge_candidates deben ser listas vacías.
 - Incluye project_extraction como sub-bloque dedicado.
 - "_finished": true es obligatorio.
@@ -51,8 +52,6 @@ Esquema de salida:
   "summary": "...",
   "document_type": "...",
   "keywords": ["..."],
-  "methodological_conclusions": ["..."],
-  "main_content_learnings": ["..."],
   "bibliography": {{...}} or null,
   "facets": {{...}},
   "concepts_local": [],

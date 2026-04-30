@@ -878,7 +878,13 @@ def extract_raw(material_id: str | None, force: bool):
     help="Run only specific stage(s). Repeatable. Default: all stages.",
 )
 @click.option("--dry-run", is_flag=True, help="Report staleness without calling LLM.")
-def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_run: bool):
+@click.option(
+    "--domain",
+    "domain",
+    type=click.Choice(["research", "practice", "proyectos"]),
+    help="Only enrich materials in this domain.",
+)
+def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_run: bool, domain: str | None):
     """LLM enrichment: summaries, facets, descriptions (stage stamps track provenance)."""
     from arquimedes.enrich import enrich as do_enrich
     from arquimedes.llm import EnrichmentError
@@ -889,6 +895,7 @@ def enrich(material_id: str | None, force: bool, stages: tuple[str, ...], dry_ru
             force=force,
             stages=list(stages) if stages else None,
             dry_run=dry_run,
+            domain=domain,
         )
     except EnrichmentError as e:
         raise click.ClickException(str(e))

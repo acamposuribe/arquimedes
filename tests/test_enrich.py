@@ -178,6 +178,54 @@ class TestEnrichOrchestrator:
         mock_figure.assert_not_called()
         assert all_succeeded is True
 
+    def test_domain_filter_only_processes_matching_materials(self, tmp_path):
+        project_root = _setup_project(tmp_path, material_id="research123")
+        config = _make_config()
+        mock_llm_fn = MagicMock()
+
+        project_entry = {
+            "material_id": "project123",
+            "file_hash": "beadfeed",
+            "relative_path": "Proyectos/test/project123.pdf",
+            "file_type": "pdf",
+            "domain": "proyectos",
+            "collection": "test",
+            "ingested_at": "2024-01-01T00:00:00+00:00",
+            "ingested_by": "",
+        }
+        with open(project_root / "manifests" / "materials.jsonl", "a", encoding="utf-8") as f:
+            f.write(json.dumps(project_entry) + "\n")
+        project_output = project_root / "extracted" / "project123"
+        project_output.mkdir(parents=True)
+        (project_output / "meta.json").write_text(
+            json.dumps({
+                "material_id": "project123",
+                "title": "Proyecto",
+                "domain": "proyectos",
+                "collection": "test",
+                "page_count": 1,
+            }),
+            encoding="utf-8",
+        )
+        (project_output / "chunks.jsonl").write_text("", encoding="utf-8")
+
+        with (
+            patch(_PATCH_PROJECT_ROOT, return_value=project_root),
+            patch(_PATCH_CLIENT, return_value=mock_llm_fn),
+            patch(_PATCH_DOC, return_value=_make_stage_result()) as mock_doc,
+        ):
+            results, all_succeeded = enrich(
+                config=config,
+                stages=["document"],
+                force=True,
+                domain="proyectos",
+            )
+
+        assert all_succeeded is True
+        assert set(results) == {"project123"}
+        mock_doc.assert_called_once()
+        assert mock_doc.call_args.args[0] == project_output
+
     def test_dry_run_does_not_create_client(self, tmp_path):
         """dry_run=True should not call make_cli_llm_fn."""
         project_root = _setup_project(tmp_path)

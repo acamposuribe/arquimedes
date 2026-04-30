@@ -7,13 +7,14 @@ materials.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
 from arquimedes import enrich_stamps
 from arquimedes.llm import get_model_id
 from arquimedes.config import get_logs_root, get_project_root, load_config
-from arquimedes.domain_profiles import domain_prompt_version
+from arquimedes.domain_profiles import domain_prompt_version, normalize_domain
 from arquimedes.enrich_document import enrich_document_stage
 from arquimedes.enrich_chunks import enrich_chunks_stage
 from arquimedes.enrich_figures import enrich_figures_stage
@@ -255,6 +256,7 @@ def enrich(
     force: bool = False,
     stages: list[str] | None = None,
     dry_run: bool = False,
+    domain: str | None = None,
 ) -> tuple[dict, bool]:
     """Run LLM enrichment for one or all materials.
 
@@ -266,6 +268,7 @@ def enrich(
         force: Re-enrich even if not stale.
         stages: List of stage names to run (default: all three).
         dry_run: Report staleness without calling LLM.
+        domain: Optional domain filter (research, practice, or proyectos).
 
     Returns:
         (results_dict, all_succeeded) where results_dict maps material_id to
@@ -290,9 +293,16 @@ def enrich(
     if config is None:
         config = load_config()
 
+    domain_filter = normalize_domain(domain, default="") if domain else None
+    if domain_filter and domain_filter not in {"research", "practice", "proyectos"}:
+        raise ValueError("Unknown domain: {!r}. Valid domains: research, practice, proyectos".format(domain))
+
     project_root = get_project_root()
     try:
-        log_path = get_logs_root(config) / "enrich.log"
+        if config.get("local_cache_root") or os.environ.get("ARQUIMEDES_LOCAL_CACHE"):
+            log_path = get_logs_root(config) / "enrich.log"
+        else:
+            log_path = project_root / "logs" / "enrich.log"
     except FileNotFoundError:
         log_path = project_root / "logs" / "enrich.log"
     extracted_dir = project_root / "extracted"
@@ -315,6 +325,13 @@ def enrich(
 
     llm_state: dict = {}
 
+    def _entry_domain(entry) -> str:
+        entry_domain = getattr(entry, "domain", "")
+        return normalize_domain(str(entry_domain), default="research")
+
+    def _matches_domain_filter(entry) -> bool:
+        return domain_filter is None or _entry_domain(entry) == domain_filter
+
     def _get_llm_fn(stage: str):
         if llm_fn is not None:
             return llm_fn
@@ -330,11 +347,13 @@ def enrich(
             raise ValueError(
                 f"Material {material_id!r} has not been extracted yet. Run `arq extract-raw` first."
             )
-        to_process = {material_id: manifest[material_id]}
+        to_process = {material_id: manifest[material_id]} if _matches_domain_filter(manifest[material_id]) else {}
     else:
         # Process all materials that have been extracted AND have at least one stale stage
         to_process = {}
         for mid, entry in manifest.items():
+            if not _matches_domain_filter(entry):
+                continue
             output_dir = extracted_dir / mid
             if not _has_extraction(output_dir):
                 continue

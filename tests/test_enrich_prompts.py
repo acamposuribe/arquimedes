@@ -82,6 +82,8 @@ def test_proyectos_document_prompt_requests_project_extraction(tmp_path):
     assert "project_material_type" in system
     assert "meeting_report" in system
     assert "concepts_local\": []" in system
+    assert "methodological_conclusions" not in system
+    assert "main_content_learnings" not in system
 
 
 def test_proyectos_chunk_and_figure_prompts_include_project_extraction():

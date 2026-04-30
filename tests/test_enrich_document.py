@@ -164,6 +164,52 @@ class TestEnrichDocumentStage:
         assert "main_content_learnings" in meta
         assert "stabilize residential comfort" in " ".join(meta["main_content_learnings"]["value"])
 
+    def test_proyectos_stage_stores_project_extraction_without_reflections(self, tmp_path):
+        output_dir = _make_extracted_dir(tmp_path)
+        meta_path = output_dir / "meta.json"
+        meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        meta["domain"] = "proyectos"
+        meta["methodological_conclusions"] = {"value": ["old reflective field"]}
+        meta["main_content_learnings"] = {"value": ["old learning field"]}
+        meta_path.write_text(json.dumps(meta), encoding="utf-8")
+
+        payload = {
+            "summary": "Acta con decisiones pendientes para el expediente.",
+            "document_type": "meeting_report",
+            "keywords": ["acta", "decisiones", "licencia"],
+            "bibliography": None,
+            "facets": {},
+            "concepts_local": [],
+            "concepts_bridge_candidates": [],
+            "toc": [],
+            "project_extraction": {
+                "project_material_type": "meeting_report",
+                "project_relevance": "Registra acuerdos y próximos pasos.",
+                "main_points": ["Se revisa el estado de licencia."],
+                "decisions": ["Enviar documentación actualizada."],
+                "requirements": [],
+                "risks_or_blockers": [],
+                "open_items": ["Confirmar respuesta municipal."],
+                "actors": ["Ayuntamiento"],
+                "dates_and_deadlines": [],
+                "spatial_or_design_scope": [],
+                "budget_signals": [],
+                "evidence_refs": ["p. 1"],
+            },
+        }
+        llm_fn = _make_llm_fn(payload)
+        config = _make_config()
+
+        result = enrich_document_stage(output_dir, config, llm_fn, force=True)
+
+        assert result["status"] == "enriched"
+        enriched = json.loads(meta_path.read_text(encoding="utf-8"))
+        assert "methodological_conclusions" not in enriched
+        assert "main_content_learnings" not in enriched
+        assert enriched["project_extraction"]["project_material_type"] == "meeting_report"
+        assert enriched["summary"]["value"].startswith("Acta")
+        assert (output_dir / "concepts.jsonl").read_text(encoding="utf-8") == ""
+
     def test_document_stage_ignores_llm_title(self, tmp_path):
         output_dir = _make_extracted_dir(tmp_path)
         payload = dict(MOCK_ENRICHMENT)

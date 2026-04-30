@@ -98,6 +98,55 @@
     </section>
     {% endif %}
     {{ content_html }}
+    {% if project_material_groups %}
+    <section class="collection-materials-section project-material-section">
+      <h2>{{ ui_label('materials', active_domain, 'Materiales') }}</h2>
+      {% for group in project_material_groups %}
+      <details class="project-material-group project-material-group--{{ group.variant }}" open>
+        <summary>
+          <span class="project-material-group-label">{{ group.label }}</span>
+          <span class="project-material-group-count">{{ group.count }}</span>
+        </summary>
+        {% if group.variant == 'gallery' %}
+        <div class="project-material-gallery">
+          {% for item in group.items %}
+          <a class="project-material-tile" href="{{ item.material_url }}" title="{{ item.title }}">
+            {% if item.thumbnail_url %}
+            <img alt="{{ item.title }}" loading="lazy" src="{{ item.thumbnail_url }}">
+            {% else %}
+            <span class="project-material-tile-fallback">{{ item.title }}</span>
+            {% endif %}
+          </a>
+          {% endfor %}
+        </div>
+        {% else %}
+        <ul class="project-material-list">
+          {% for item in group.items %}
+          <li class="project-material-row">
+            {% if item.thumbnail_url %}
+            <a class="project-material-row-thumb" href="{{ item.material_url }}" title="{{ item.title }}">
+              <img alt="{{ item.title }}" loading="lazy" src="{{ item.thumbnail_url }}">
+            </a>
+            {% endif %}
+            <div class="project-material-row-body">
+              <a class="project-material-row-title" href="{{ item.material_url }}">{{ item.title }}</a>
+              {% if item.summary %}<p class="project-material-row-summary">{{ truncate_words(item.summary, 28) }}</p>{% endif %}
+              {% if item.document_type or item.year %}
+              <p class="meta-line">
+                {% if item.document_type %}{{ item.document_type }}{% endif %}
+                {% if item.document_type and item.year %} · {% endif %}
+                {% if item.year %}{{ item.year }}{% endif %}
+              </p>
+              {% endif %}
+            </div>
+          </li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </details>
+      {% endfor %}
+    </section>
+    {% endif %}
     {% if collection_material_cards %}
     <section class="collection-materials-section">
       <h2>{{ ui_label('materials', active_domain, 'Materials') }}</h2>

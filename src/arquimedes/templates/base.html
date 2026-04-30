@@ -37,15 +37,20 @@
         {% set _coll_url = wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') %}
         {% set _concepts_url = wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/concepts/_index.md') %}
         {% set _coll_active = _path == _coll_url or _path.startswith(_coll_url ~ '/') %}
+        {% set _is_project_dossier = active_domain == 'proyectos' %}
         <div class="rail-group">
           <div class="rail-group-title">{{ item.collection }}</div>
+          {% if _is_project_dossier %}
+          <a href="{{ _coll_url }}" {% if _coll_active %}class="active"{% endif %}>{{ ui_label('overview', active_domain, 'Overview') }}</a>
+          {% else %}
           <a href="{{ _coll_url }}" {% if _coll_active and not _path.startswith(_concepts_url) %}class="active"{% endif %}>{{ ui_label('overview', active_domain, 'Overview') }}</a>
           <a href="{{ _concepts_url }}" {% if _path.startswith(_concepts_url) %}class="active"{% endif %}>{{ ui_label('concepts', active_domain, 'Concepts') }}</a>
+          {% endif %}
         </div>
         {% endfor %}
       </section>
       {% endif %}
-      {% if nav_global_concepts %}
+      {% if nav_global_concepts and active_domain != 'proyectos' %}
       <section class="rail-section">
         <h2>{{ active_domain_label }} {{ ui_label('bridge_concepts', active_domain, 'Bridge Concepts') }}</h2>
         {% for item in nav_global_concepts %}

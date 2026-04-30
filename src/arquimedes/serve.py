@@ -17,6 +17,10 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from arquimedes import freshness as freshness_mod
 from arquimedes import read as read_mod
 from arquimedes import search as search_mod
+from arquimedes.compile_pages import (
+    _PROJECT_MATERIAL_TYPE_LABELS,
+    _PROJECT_MATERIAL_TYPE_ORDER,
+)
 from arquimedes.domain_profiles import (
     display_domain_name,
     generated_label,
@@ -24,6 +28,8 @@ from arquimedes.domain_profiles import (
     is_proyectos_domain,
 )
 from arquimedes.index import get_index_path
+
+_PROJECT_GALLERY_TYPES = {"drawing_set", "site_photo", "map_or_cartography"}
 
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_HERE / "templates"))
@@ -379,6 +385,64 @@ def _collection_material_cards(domain: str, collection: str) -> list[dict]:
             "preview_images": _material_preview_images(material_id, limit=4),
         })
     return sorted(cards, key=lambda card: card["title"].lower())
+
+
+def _project_material_groups(domain: str, collection: str) -> list[dict]:
+    """Group materials in a Proyectos collection by project_material_type.
+
+    Returns list of groups in canonical type order, each with:
+      - type_key, label, variant ('gallery' | 'list'), count, items[].
+    Each item has material_id, title, material_url, document_type, year,
+    summary (truncated for list variant), thumbnail_url, preview_images.
+    """
+    grouped: dict[str, list[dict]] = {}
+    for entry in read_mod.materials_for_collection(domain, collection):
+        material_id = entry["material_id"]
+        try:
+            meta = read_mod.load_material_meta(material_id)
+        except FileNotFoundError:
+            continue
+        project_extraction = meta.get("project_extraction") or {}
+        if not isinstance(project_extraction, dict):
+            project_extraction = {}
+        type_field = project_extraction.get("project_material_type")
+        type_key = _plain(type_field) or "unknown"
+        if type_key not in _PROJECT_MATERIAL_TYPE_LABELS:
+            type_key = "unknown"
+
+        thumbs = read_mod.load_material_thumbnails(material_id)
+        first_thumb = thumbs[0] if thumbs else None
+        thumbnail_url = (
+            f"/thumbnails/{material_id}/{first_thumb['filename']}" if first_thumb else ""
+        )
+        preview_images = _material_preview_images(material_id, limit=4)
+        if not thumbnail_url and preview_images:
+            thumbnail_url = preview_images[0]["image_url"]
+
+        grouped.setdefault(type_key, []).append({
+            "material_id": material_id,
+            "title": str(meta.get("title") or material_id),
+            "material_url": f"/materials/{material_id}",
+            "summary": _plain(meta.get("summary")),
+            "document_type": _plain(meta.get("document_type")) or str(meta.get("raw_document_type") or ""),
+            "year": str(meta.get("year") or ""),
+            "thumbnail_url": thumbnail_url,
+            "preview_images": preview_images,
+        })
+
+    groups: list[dict] = []
+    for type_key, items in grouped.items():
+        items.sort(key=lambda x: x["title"].lower())
+        variant = "gallery" if type_key in _PROJECT_GALLERY_TYPES else "list"
+        groups.append({
+            "type_key": type_key,
+            "label": _PROJECT_MATERIAL_TYPE_LABELS.get(type_key, type_key),
+            "variant": variant,
+            "count": len(items),
+            "items": items,
+        })
+    groups.sort(key=lambda g: _PROJECT_MATERIAL_TYPE_ORDER.get(g["type_key"], 999))
+    return groups
 
 
 def _concept_sidebar_context(cluster_id: str) -> list[dict]:
@@ -886,6 +950,7 @@ def create_app(config: dict | None = None) -> FastAPI:
         collection_material_cards = None
         collection_after_html = ""
         concept_material_thumbs = None
+        project_material_groups = None
         page_record = read_mod.wiki_page_record(page_path)
         if page_path.name == "_index.md" and not material_id:
             try:
@@ -896,8 +961,11 @@ def create_app(config: dict | None = None) -> FastAPI:
                     before_materials, _, after_materials = _split_markdown_section(body, _heading_candidates("materials", "Materials"))
                     content_body = before_materials
                     collection_after_html = render_wiki_markdown(after_materials, page_path.relative_to(read_mod.get_project_root()).as_posix()) if after_materials else ""
-                    collection_material_thumbs = _collection_sidebar_context(coll_domain, coll_name) or None
-                    collection_material_cards = _collection_material_cards(coll_domain, coll_name) or None
+                    if is_proyectos_domain(coll_domain, default="research"):
+                        project_material_groups = _project_material_groups(coll_domain, coll_name) or None
+                    else:
+                        collection_material_thumbs = _collection_sidebar_context(coll_domain, coll_name) or None
+                        collection_material_cards = _collection_material_cards(coll_domain, coll_name) or None
                     scoped_results = None
                     if q.strip():
                         scoped_results = search_mod.search(
@@ -958,6 +1026,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                 "collection_after_html": collection_after_html,
                 "collection_material_thumbs": collection_material_thumbs,
                 "concept_material_thumbs": concept_material_thumbs,
+                "project_material_groups": project_material_groups,
                 "page_search": page_search,
             },
         )

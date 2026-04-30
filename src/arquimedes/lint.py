@@ -56,7 +56,7 @@ from arquimedes.compile_pages import (
     render_collection_page,
 )
 from arquimedes.config import get_logs_root, get_project_root, load_config
-from arquimedes.domain_profiles import get_domain_profile
+from arquimedes.domain_profiles import get_domain_profile, get_publication_mode
 from arquimedes.domain_profiles import should_run_collection_reflection
 from arquimedes.enrich import _is_chunk_stale, _is_document_stale, _is_figure_stale
 from arquimedes.llm import EnrichmentError, LlmFn, get_model_id, make_cli_llm_fn, parse_json_or_repair
@@ -1732,6 +1732,9 @@ def _detect_missing_compiled_pages(
     # Collection pages
     grouped = _group_materials_by_collection(metas)
     for (domain, collection), _metas in grouped.items():
+        is_project_dossier = get_publication_mode(domain) == "project_dossier"
+        if is_project_dossier and collection == "_general":
+            continue
         page_path = root / f"wiki/{domain}/{collection}/_index.md"
         if not page_path.exists():
             issues.append(_issue(
@@ -1744,6 +1747,8 @@ def _detect_missing_compiled_pages(
                 path=str(page_path.relative_to(root)),
                 fixable=True,
             ))
+        if is_project_dossier:
+            continue
         concept_index_path = root / f"wiki/{domain}/{collection}/concepts/_index.md"
         if not concept_index_path.exists():
             issues.append(_issue(
@@ -1840,8 +1845,12 @@ def _expected_pages(
     # Collection and domain indexes
     grouped = _group_materials_by_collection(metas)
     for (domain, collection), _metas in grouped.items():
+        is_project_dossier = get_publication_mode(domain) == "project_dossier"
+        if is_project_dossier and collection == "_general":
+            continue
         expected.add(root / f"wiki/{domain}/{collection}/_index.md")
-        expected.add(root / f"wiki/{domain}/{collection}/concepts/_index.md")
+        if not is_project_dossier:
+            expected.add(root / f"wiki/{domain}/{collection}/concepts/_index.md")
     for domain in sorted({meta.get("domain") or "practice" for meta in metas.values()}):
         expected.add(root / f"wiki/{domain}/_index.md")
     for domain in sorted({str(cluster.get("domain") or "").strip() for cluster in bridge_clusters if str(cluster.get("domain") or "").strip()}):

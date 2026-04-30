@@ -202,7 +202,18 @@ def enrich_document_stage(
     prompt_version: str = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version: str = enrichment_config.get("enrichment_schema_version", "1")
 
-    # 1. Compute fingerprint and stamp
+    # 1. Load meta early so we can apply the domain-specific prompt suffix
+    #    BEFORE the staleness check; otherwise materials enriched with the base
+    #    prompt are spuriously reported "up to date" against domain-suffixed
+    #    profiles like proyectos-es-v1.
+    try:
+        meta = _load_json(output_dir / "meta.json", default={})
+    except Exception as exc:
+        return {"status": "failed", "detail": f"Load error: {exc}"}
+
+    prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
+
+    # 2. Compute fingerprint and stamp
     try:
         fingerprint = enrich_stamps.document_fingerprint(output_dir)
     except Exception as exc:
@@ -210,20 +221,17 @@ def enrich_document_stage(
 
     stamp = enrich_stamps.make_stamp(prompt_version, model, schema_version, fingerprint)
 
-    # 2. Staleness check
+    # 3. Staleness check
     existing_stamp = enrich_stamps.read_document_stamp(output_dir)
     if not force and enrich_stamps.matches_stage_version(existing_stamp, prompt_version, schema_version):
         return {"status": "skipped", "detail": "up to date"}
 
-    # 3. Load artifacts
+    # 4. Load remaining artifacts
     try:
-        meta = _load_json(output_dir / "meta.json", default={})
         chunks = _load_jsonl(output_dir / "chunks.jsonl")
         annotations = _load_jsonl(output_dir / "annotations.jsonl")
     except Exception as exc:
         return {"status": "failed", "detail": f"Load error: {exc}"}
-
-    prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
 
     # 4. Build prompt and call LLM
     document_text_path = output_dir / "document.work.md"

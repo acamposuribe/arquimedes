@@ -953,21 +953,6 @@ def render_project_page(
             lines.append(f"- **{kind}:** {text}{suffix}")
         lines.append("")
 
-    if materials:
-        lines.append("## Materiales del proyecto\n")
-        groups: dict[str, list[dict]] = {}
-        for item in materials:
-            type_key = str(item.get("project_material_type") or "unknown").strip() or "unknown"
-            groups.setdefault(type_key, []).append(item)
-        for type_key in sorted(groups, key=lambda k: (_PROJECT_MATERIAL_TYPE_ORDER.get(k, 99), k)):
-            label = _PROJECT_MATERIAL_TYPE_LABELS.get(type_key, type_key.replace("_", " ").capitalize())
-            lines.append(f"### {label}\n")
-            for item in sorted(groups[type_key], key=lambda row: row.get("name", "").lower()):
-                link = f"[{item.get('name', '')}]({item.get('path', '')})" if item.get("path") else item.get("name", "")
-                summary = item.get("summary", "")
-                lines.append(f"- {link}" + (f" — {summary}" if summary else ""))
-            lines.append("")
-
     return "\n".join(lines)
 
 

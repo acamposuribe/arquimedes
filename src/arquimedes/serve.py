@@ -41,6 +41,22 @@ def _label(part: str) -> str:
     return part.replace("-", " ").replace("_", " ") or "wiki"
 
 
+def _slugify_segment(name: str) -> str:
+    """Slugify a path segment for URLs (lowercase, dashes, no punctuation)."""
+    s = str(name or "").strip().lower()
+    if not s:
+        return ""
+    s = re.sub(r"[\s_]+", "-", s)
+    s = re.sub(r"[^\w\-.]", "", s, flags=re.UNICODE)
+    s = re.sub(r"-+", "-", s)
+    return s.strip("-.") or s
+
+
+def _slugify_path(rel: str) -> str:
+    parts = [seg for seg in rel.split("/") if seg]
+    return "/".join(_slugify_segment(seg) or seg for seg in parts)
+
+
 def wiki_url(path: str) -> str:
     rel = path.strip().lstrip("/")
     if rel.startswith("wiki/"):
@@ -48,10 +64,11 @@ def wiki_url(path: str) -> str:
     if rel == "_index.md":
         return "/wiki"
     if rel.endswith("/_index.md"):
-        return f"/wiki/{rel[:-10]}".rstrip("/")
-    if rel.endswith(".md"):
-        return f"/wiki/{rel[:-3]}".rstrip("/")
-    return f"/wiki/{rel}".rstrip("/")
+        rel = rel[:-10]
+    elif rel.endswith(".md"):
+        rel = rel[:-3]
+    rel = _slugify_path(rel)
+    return f"/wiki/{rel}".rstrip("/") if rel else "/wiki"
 
 
 def material_url(material_id: str, query: str = "", depth: int | None = None, scope: str = "") -> str:
@@ -79,6 +96,51 @@ def truncate_words(text: str, limit: int = 42) -> str:
 def _normalized_domain(domain: str | None) -> str | None:
     value = str(domain or "").strip().lower()
     return value if value in _DOMAINS else None
+
+
+def _resolve_wiki_slug_path(rel_path: str) -> str:
+    """Map a possibly-slugified URL path to the actual on-disk wiki path.
+
+    Walks the wiki tree segment by segment, preferring exact matches and
+    falling back to slug matches when no exact entry exists. Returns the
+    original path unchanged if a segment can't be resolved (caller will
+    raise FileNotFoundError naturally)."""
+    if not rel_path:
+        return rel_path
+    root = read_mod.get_project_root() / "wiki"
+    parts = [p for p in rel_path.split("/") if p]
+    current = root
+    out: list[str] = []
+    for index, part in enumerate(parts):
+        is_last = index == len(parts) - 1
+        if not current.is_dir():
+            return rel_path
+        direct_dir = current / part
+        if direct_dir.is_dir():
+            out.append(part)
+            current = direct_dir
+            continue
+        if is_last:
+            md_direct = current / part if part.endswith(".md") else current / f"{part}.md"
+            if md_direct.exists():
+                out.append(md_direct.stem)
+                return "/".join(out)
+        target_slug = _slugify_segment(part)
+        match = None
+        for child in current.iterdir():
+            stem = child.stem if child.suffix == ".md" else child.name
+            if _slugify_segment(stem) == target_slug:
+                match = child
+                break
+        if match is None:
+            return rel_path
+        if match.is_dir():
+            out.append(match.name)
+            current = match
+        else:
+            out.append(match.stem)
+            return "/".join(out)
+    return "/".join(out) if out else rel_path
 
 
 def _domain_label(domain: str) -> str:
@@ -899,6 +961,7 @@ def create_app(config: dict | None = None) -> FastAPI:
 
     @app.get("/wiki/{path:path}", response_class=HTMLResponse)
     def wiki_page(request: Request, path: str, q: str = "", depth: int = 3, domain: str = ""):
+        path = _resolve_wiki_slug_path(path)
         try:
             page_path, body = read_mod.load_wiki_page(path)
         except FileNotFoundError:

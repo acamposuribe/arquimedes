@@ -477,6 +477,11 @@ def render_material_page(
     # --- Annotations ---
     if annotations:
         lines.append(f"## {_label(domain, 'reader_annotations', 'Reader Annotations')}\n")
+        label = _label(domain, "reader_annotations", "Reader Annotations")
+        count_label = "annotation" if len(annotations) == 1 else "annotations"
+        if domain == "practice":
+            count_label = "anotacion" if len(annotations) == 1 else "anotaciones"
+        lines.append(f'<details class="reader-annotations"><summary>{label} ({len(annotations)} {count_label})</summary>\n')
         for ann in annotations:
             quoted = _clean_quoted_text(ann.get("quoted_text") or "")
             comment = ann.get("comment") or ""
@@ -487,6 +492,7 @@ def render_material_page(
             if comment:
                 lines.append(f"> **{_label(domain, 'note', 'Note')}:** {comment}")
             lines.append("")
+        lines.append("</details>\n")
 
     # --- Source ---
     lines.append(f"## {_label(domain, 'source', 'Source')}\n")

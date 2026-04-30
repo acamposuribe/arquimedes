@@ -226,6 +226,8 @@ def test_material_page_sections():
     assert "## Figures" in page
     assert "Ground floor plan" in page
     assert "## Reader Annotations" in page
+    assert '<details class="reader-annotations">' in page
+    assert "<summary>Reader Annotations (1 annotation)</summary>" in page
     assert "key passage" in page
     assert "interesting" in page
     assert "## Related Materials" in page

@@ -331,13 +331,23 @@ class TestBuildStageRequest:
         assert "--tools" in cmd
         assert cmd[cmd.index("--tools") + 1] == "read"
         assert "--no-tools" not in cmd
-        assert "--no-extensions" in cmd
+        assert "--no-extensions" not in cmd
         assert "--no-skills" in cmd
         assert "--no-prompt-templates" in cmd
         assert "--no-themes" in cmd
         assert cmd[cmd.index("--model") + 1] == "copilot/gpt-4.1"
         assert cmd[cmd.index("--thinking") + 1] == "off"
         assert cmd[cmd.index("--system-prompt") + 1] == "system"
+
+    def test_pi_route_can_disable_extensions_explicitly(self):
+        cmd, _stdin_text = _build_stage_request(
+            ["pi"],
+            "pi",
+            "system",
+            "user prompt",
+            route={"no_extensions": True},
+        )
+        assert "--no-extensions" in cmd
 
     def test_pi_route_can_override_tools(self):
         cmd, stdin_text = _build_stage_request(

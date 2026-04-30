@@ -861,7 +861,7 @@ def _build_stage_request(
                 cmd.append("--no-tools")
         elif not _has_option(cmd, "--tools", "-t", "--no-tools", "-nt", "--no-builtin-tools", "-nbt"):
             cmd.extend(["--tools", "read"])
-        if _route_flag(route, "no_extensions", True) and not _has_option(cmd, "--no-extensions", "-e", "--extension"):
+        if _route_flag(route, "no_extensions", False) and not _has_option(cmd, "--no-extensions", "-e", "--extension"):
             cmd.append("--no-extensions")
         if _route_flag(route, "no_skills", True) and not _has_option(cmd, "--no-skills", "--skill"):
             cmd.append("--no-skills")

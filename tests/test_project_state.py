@@ -11,6 +11,7 @@ from arquimedes.project_state import (
     load_project_state,
     merge_project_section_delta,
     merge_project_state_delta,
+    resolve_project_item,
     save_project_state,
     set_project_section,
 )
@@ -217,3 +218,43 @@ def test_two_reflection_writes_interleave_with_current_timestamp(tmp_path):
 
     assert second["revision"] == 2
     assert second["body"] == "Segunda reflexión."
+
+
+def test_resolve_project_item_removes_exact_text_and_writes_note(tmp_path):
+    state = load_project_state("2407-casa-rio", root=tmp_path)
+    state["missing_information"] = ["Confirmar acometida electrica", "Pedir catastro"]
+    save_project_state("2407-casa-rio", state, root=tmp_path)
+
+    result = resolve_project_item(
+        "2407-casa-rio",
+        item="Confirmar acometida electrica",
+        note="La acometida queda confirmada por el tecnico.",
+        actor="hermes",
+        source_refs=["discord://2407/321"],
+        root=tmp_path,
+    )
+
+    assert result["field"] == "missing_information"
+    assert result["item"] == "Confirmar acometida electrica"
+    assert result["state"]["missing_information"] == ["Pedir catastro"]
+    notes = load_project_notes("2407-casa-rio", root=tmp_path)
+    assert notes[-1]["kind"] == "coordination"
+    assert "La acometida queda confirmada" in notes[-1]["text"]
+    assert notes[-1]["source_refs"] == ["discord://2407/321"]
+
+
+def test_resolve_project_item_accepts_field_index(tmp_path):
+    state = load_project_state("2407-casa-rio", root=tmp_path)
+    state["risks_or_blockers"] = ["Licencia pendiente", "Coste estructura"]
+    save_project_state("2407-casa-rio", state, root=tmp_path)
+
+    result = resolve_project_item(
+        "2407-casa-rio",
+        item="risks_or_blockers:2",
+        note="Se ajusta la solucion estructural.",
+        actor="human",
+        root=tmp_path,
+    )
+
+    assert result["item"] == "Coste estructura"
+    assert result["state"]["risks_or_blockers"] == ["Licencia pendiente"]

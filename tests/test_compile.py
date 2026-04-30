@@ -1442,6 +1442,59 @@ def test_compile_renders_project_section_artifacts(tmp_path, monkeypatch):
     assert "Cerrar mediciones antes del viernes." in page
 
 
+def test_compile_skips_proyectos_general_project_page(tmp_path, monkeypatch, caplog):
+    import arquimedes.compile as compile_mod
+    import arquimedes.config as config_mod
+    import arquimedes.cluster as cluster_mod
+    from arquimedes.index import rebuild_index
+
+    (tmp_path / "config").mkdir()
+    (tmp_path / "config" / "config.yaml").write_text("library_root: ~/dummy\n")
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "extracted").mkdir()
+    manifests = tmp_path / "manifests"
+    manifests.mkdir()
+
+    mid = "mat_loose_project"
+    meta = _make_meta(mid, "Documento suelto")
+    meta["domain"] = "proyectos"
+    meta["collection"] = "_general"
+    mat_dir = tmp_path / "extracted" / mid
+    mat_dir.mkdir(parents=True)
+    (mat_dir / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    (mat_dir / "chunks.jsonl").write_text("", encoding="utf-8")
+    (mat_dir / "annotations.jsonl").write_text("", encoding="utf-8")
+    (manifests / "materials.jsonl").write_text(
+        json.dumps({
+            "material_id": mid,
+            "file_hash": mid,
+            "relative_path": "Proyectos/loose.pdf",
+            "file_type": "pdf",
+            "domain": "proyectos",
+            "collection": "_general",
+            "ingested_at": "2026-04-30T10:00:00+00:00",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.chdir(tmp_path)
+    rebuild_index()
+    monkeypatch.setattr(config_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(compile_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(config_mod, "load_config", lambda: {"llm": {"agent_cmd": "echo"}})
+    monkeypatch.setattr(
+        cluster_mod,
+        "cluster_concepts",
+        lambda config, llm_fn=None, force=False, domain=None, collection=None: {"skipped": True},
+    )
+
+    compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
+
+    assert not (tmp_path / "wiki" / "proyectos" / "_general" / "_index.md").exists()
+    assert (tmp_path / "wiki" / "proyectos" / "_general" / f"{mid}.md").exists()
+    assert "Skipping Proyectos/_general project page" in caplog.text
+
+
 def test_compile_groups_local_concepts_by_collection(tmp_path, monkeypatch):
     """Local concepts index groups entries deterministically by collection."""
     import shutil

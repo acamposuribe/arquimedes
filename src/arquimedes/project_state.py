@@ -37,6 +37,13 @@ LIST_FIELDS = {
     "repair_actions",
     "important_material_ids",
 }
+RESOLVABLE_FIELDS = (
+    "current_work_in_progress",
+    "next_focus",
+    "risks_or_blockers",
+    "missing_information",
+    "repair_actions",
+)
 STATE_FIELDS = LIST_FIELDS | {
     "project_title",
     "stage",
@@ -205,6 +212,88 @@ def merge_project_state_delta(project_id: str, delta: dict[str, Any], *, root: P
     next_state["updated_by"] = updated_by
     next_state["updated_at"] = str(delta.get("updated_at") or now_iso())
     return save_project_state(project_id, next_state, root=root)
+
+
+def resolve_project_item(
+    project_id: str,
+    *,
+    item: str,
+    note: str,
+    actor: str,
+    source_refs: list | None = None,
+    material_id: str | None = None,
+    confidence: float | None = None,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    """Remove a project open item and append a provenance note.
+
+    ``item`` may be either ``field:1`` (1-based list index) or exact item text
+    searched across the v1 open-item fields.
+    """
+    root = root or get_project_root()
+    project_id = validate_project_id(project_id)
+    if actor not in UPDATED_BY:
+        raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    if not str(note).strip():
+        raise ProjectStateError("resolution note is required")
+    item = str(item or "").strip()
+    if not item:
+        raise ProjectStateError("item is required")
+
+    state = load_project_state(project_id, root=root)
+    matched_field = ""
+    matched_index = -1
+    matched_text = ""
+    if ":" in item:
+        maybe_field, maybe_index = item.split(":", 1)
+        maybe_field = maybe_field.strip()
+        if maybe_field in RESOLVABLE_FIELDS and maybe_index.strip().isdigit():
+            idx = int(maybe_index.strip()) - 1
+            values = list(state.get(maybe_field) or [])
+            if 0 <= idx < len(values):
+                matched_field = maybe_field
+                matched_index = idx
+                matched_text = str(values[idx])
+    if not matched_field:
+        normalized_item = " ".join(item.casefold().split())
+        for field in RESOLVABLE_FIELDS:
+            for idx, value in enumerate(state.get(field) or []):
+                if " ".join(str(value).casefold().split()) == normalized_item:
+                    matched_field = field
+                    matched_index = idx
+                    matched_text = str(value)
+                    break
+            if matched_field:
+                break
+    if not matched_field:
+        raise ProjectStateError(
+            "item not found; use exact text or field:1 with one of "
+            + ", ".join(RESOLVABLE_FIELDS)
+        )
+
+    next_values = list(state.get(matched_field) or [])
+    next_values.pop(matched_index)
+    next_state = merge_project_state_delta(
+        project_id,
+        {"updated_by": actor, matched_field: next_values},
+        root=root,
+    )
+    resolution_note = append_project_note(
+        project_id,
+        kind="coordination",
+        text=f"Resuelto: {matched_text}\n{note.strip()}",
+        actor=actor,
+        source_refs=source_refs or [],
+        material_id=material_id,
+        confidence=confidence,
+        root=root,
+    )
+    return {
+        "field": matched_field,
+        "item": matched_text,
+        "state": next_state,
+        "note": resolution_note,
+    }
 
 
 def append_project_note(

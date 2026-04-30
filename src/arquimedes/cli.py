@@ -2070,6 +2070,101 @@ def project_append_cmd(project_id: str, field: str, text: str, actor: str, no_re
         raise click.ClickException(str(exc))
 
 
+@project_group.command("resolve")
+@click.argument("project_id")
+@click.option("--item", required=True, help="Exact item text or field:1 reference.")
+@click.option("--note", required=True, help="Resolution note.")
+@click.option("--source-ref", "source_refs", multiple=True, help="Source reference, repeatable.")
+@click.option("--material-id", default=None, help="Optional material id.")
+@click.option("--confidence", type=float, default=None, help="Optional confidence.")
+@click.option("--actor", default="hermes", show_default=True, help="hermes|human|cli")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately.")
+def project_resolve_cmd(
+    project_id: str,
+    item: str,
+    note: str,
+    source_refs: tuple[str, ...],
+    material_id: str | None,
+    confidence: float | None,
+    actor: str,
+    no_recompile: bool,
+):
+    """Resolve an open project item and record a note."""
+    from arquimedes.project_state import ProjectStateError, resolve_project_item
+
+    try:
+        resolved = resolve_project_item(
+            project_id,
+            item=item,
+            note=note,
+            actor=actor,
+            source_refs=list(source_refs),
+            material_id=material_id,
+            confidence=confidence,
+        )
+        _echo_json({"project_id": project_id, "resolved": resolved, "compile": _compile_after_project_write(no_recompile)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
+@project_group.command("search")
+@click.argument("project_id")
+@click.argument("query")
+@click.option("--deep", is_flag=True, help="Multi-layer retrieval (depth 2 by default).")
+@click.option("--depth", type=click.IntRange(1, 3), default=None, help="Retrieval depth 1-3.")
+@click.option("--facet", multiple=True, help="Additional facet filter. Repeatable.")
+@click.option("--limit", default=20, show_default=True, help="Max number of material cards.")
+@click.option("--chunk-limit", default=5, show_default=True, help="Max chunks per material at depth 2+.")
+@click.option("--annotation-limit", default=3, show_default=True, help="Max annotations per material at depth 2+.")
+@click.option("--figure-limit", default=3, show_default=True, help="Max figures per material at depth 2+.")
+@click.option("--concept-limit", default=3, show_default=True, help="Max concept hits per material at depth 2+.")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def project_search_cmd(
+    project_id: str,
+    query: str,
+    deep: bool,
+    depth: int | None,
+    facet: tuple[str, ...],
+    limit: int,
+    chunk_limit: int,
+    annotation_limit: int,
+    figure_limit: int,
+    concept_limit: int,
+    human: bool,
+):
+    """Search within one Proyectos project dossier."""
+    from arquimedes.project_state import ProjectStateError, validate_project_id
+    from arquimedes.search import format_human, search as do_search
+
+    if depth is not None:
+        effective_depth = depth
+    elif deep:
+        effective_depth = 2
+    else:
+        effective_depth = 1
+
+    try:
+        project_id = validate_project_id(project_id)
+        result = do_search(
+            query,
+            depth=effective_depth,
+            facets=["domain=proyectos", *list(facet)],
+            collection=project_id,
+            limit=limit,
+            chunk_limit=chunk_limit,
+            annotation_limit=annotation_limit,
+            figure_limit=figure_limit,
+            concept_limit=concept_limit,
+        )
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+    if human:
+        click.echo(format_human(result))
+    else:
+        click.echo(result.to_json())
+
+
 @project_group.command("recompile")
 @click.argument("project_id")
 def project_recompile_cmd(project_id: str):

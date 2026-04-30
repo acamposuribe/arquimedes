@@ -155,3 +155,76 @@ def test_project_section_set_writes_artifact_without_recompile(tmp_path, monkeyp
     assert payload["compile"] is None
     assert payload["section"]["protected"] is True
     assert project_state_mod.load_project_sections("2407-casa-rio", root=tmp_path)["proximo_foco"]["body"] == "Cerrar mediciones antes del viernes."
+
+
+def test_project_resolve_removes_item_and_writes_note(tmp_path, monkeypatch):
+    import arquimedes.project_state as project_state_mod
+
+    monkeypatch.setattr(project_state_mod, "get_project_root", lambda: tmp_path)
+    state = project_state_mod.load_project_state("2407-casa-rio", root=tmp_path)
+    state["missing_information"] = ["Confirmar acometida"]
+    project_state_mod.save_project_state("2407-casa-rio", state, root=tmp_path)
+
+    result = CliRunner().invoke(
+        cli,
+        [
+            "project",
+            "resolve",
+            "2407-casa-rio",
+            "--item",
+            "missing_information:1",
+            "--note",
+            "Confirmada por la ingenieria.",
+            "--source-ref",
+            "discord://2407/444",
+            "--no-recompile",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.output)
+    assert payload["compile"] is None
+    assert payload["resolved"]["field"] == "missing_information"
+    assert payload["resolved"]["state"]["missing_information"] == []
+    notes = project_state_mod.load_project_notes("2407-casa-rio", root=tmp_path)
+    assert notes[-1]["kind"] == "coordination"
+    assert notes[-1]["source_refs"] == ["discord://2407/444"]
+
+
+def test_project_search_scopes_to_proyectos_collection(monkeypatch):
+    calls = []
+
+    class FakeResult:
+        total = 1
+
+        def to_json(self):
+            return '{"total": 1}'
+
+    def fake_search(query, **kwargs):
+        calls.append((query, kwargs))
+        return FakeResult()
+
+    monkeypatch.setattr("arquimedes.search.search", fake_search)
+
+    result = CliRunner().invoke(
+        cli,
+        ["project", "search", "2407-casa-rio", "licencia", "--deep", "--facet", "year=2026"],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.output)["total"] == 1
+    assert calls == [
+        (
+            "licencia",
+            {
+                "depth": 2,
+                "facets": ["domain=proyectos", "year=2026"],
+                "collection": "2407-casa-rio",
+                "limit": 20,
+                "chunk_limit": 5,
+                "annotation_limit": 3,
+                "figure_limit": 3,
+                "concept_limit": 3,
+            },
+        )
+    ]

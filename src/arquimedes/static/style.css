@@ -536,8 +536,23 @@ img { max-width: 100%; display: block; }
 .wiki-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 15.5rem;
+  grid-template-areas:
+    "body aside-top"
+    "body aside-bottom";
   gap: 1.15rem;
   align-items: start;
+}
+
+.wiki-layout > .wiki-body {
+  grid-area: body;
+}
+
+.wiki-aside--top {
+  grid-area: aside-top;
+}
+
+.wiki-aside--bottom {
+  grid-area: aside-bottom;
 }
 
 .wiki-body {
@@ -2029,9 +2044,16 @@ body.lightbox-open { overflow: hidden; }
 
 @media (max-width: 920px) {
   .site-shell,
-  .wiki-layout,
   .home-grid {
     grid-template-columns: 1fr;
+  }
+
+  .wiki-layout {
+    grid-template-columns: 1fr;
+    grid-template-areas:
+      "aside-top"
+      "body"
+      "aside-bottom";
   }
 
   .site-rail {

@@ -13,7 +13,7 @@
         data-zoom-description="{{ item.description_text }}"
         data-zoom-group="figures"
         data-zoom-meta="{% if item.source_page %}p. {{ item.source_page }}{% endif %}{% if item.visual_type_text %}{% if item.source_page %} · {% endif %}{{ item.visual_type_text }}{% endif %}"
-        data-zoom-src="{{ item.image_url }}"
+        data-zoom-src="{{ item.zoom_url }}"
         data-zoom-title="{{ item.figure_id }}"
         title="{{ item.figure_id }}"
         type="button">

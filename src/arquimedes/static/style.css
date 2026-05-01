@@ -1059,8 +1059,9 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 
 .figure-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
-  gap: 0.6rem;
+  grid-template-columns: repeat(4, minmax(0, 7rem));
+  justify-content: start;
+  gap: 0.7rem;
 }
 
 .figure-card {
@@ -1190,7 +1191,7 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 
 .home-figure-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(8rem, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 0.55rem;
 }
 
@@ -1214,6 +1215,16 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 .home-figure-tile:hover img {
   transform: scale(1.03);
   opacity: 0.88;
+}
+
+@media (max-width: 760px) {
+  .home-figure-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .figure-grid {
+    grid-template-columns: repeat(2, minmax(0, 7rem));
+  }
 }
 
 .project-dashboard {

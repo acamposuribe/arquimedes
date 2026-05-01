@@ -120,7 +120,7 @@ def test_home_page_shows_random_figure_discovery_before_recent_materials(tmp_pat
     assert response.status_code == 200
     assert 'class="home-figure-grid"' in response.text
     assert 'href="/materials/mat_001"' in response.text
-    assert 'src="/figures/mat_001/fig_0001.png"' in response.text
+    assert 'src="/figures-low/mat_001/fig_0001.png"' in response.text
     assert response.text.index('class="home-figure-grid"') < response.text.index("Research Recent Materials")
 
 
@@ -221,7 +221,7 @@ def test_material_route_rewrites_links(tmp_path, monkeypatch):
     assert '/wiki/shared/concepts/archive' in response.text
     assert response.text.count('/source/mat_001') == 1
     assert response.text.count('/extracted/mat_001/text') == 1
-    assert '/figures/mat_001/fig_0001.png' in response.text
+    assert '/figures-low/mat_001/fig_0001.png' in response.text
     assert 'data-zoom-src="/thumbnails/mat_001/page_0001.png"' in response.text
     assert 'data-zoom-group="figures"' in response.text
     assert '<blockquote>\n<p>Gallery caption</p>\n</blockquote>' not in response.text
@@ -344,7 +344,7 @@ def test_wiki_material_page_rewrites_figure_links(tmp_path, monkeypatch):
     client = TestClient(serve_mod.create_app())
     response = client.get("/wiki/research/papers/mat_001")
     assert response.status_code == 200
-    assert '/figures/mat_001/fig_0001.png' in response.text
+    assert '/figures-low/mat_001/fig_0001.png' in response.text
     assert 'data-zoom-src="/thumbnails/mat_001/page_0001.png"' in response.text
 
 
@@ -391,6 +391,7 @@ def test_figure_and_source_routes(tmp_path, monkeypatch):
     client = TestClient(serve_mod.create_app())
     assert client.get("/source/mat_001").status_code == 200
     assert client.get("/figures/mat_001/fig_0001.png").status_code == 200
+    assert client.get("/figures-low/mat_001/fig_0001.png").status_code == 200
     assert client.get("/thumbnails/mat_001/page_0001.png").status_code == 200
 
 
@@ -404,6 +405,7 @@ def test_figures_page_exposes_zoom_targets(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert 'data-zoom-group="figures"' in response.text
     assert 'data-zoom-src="/figures/mat_001/fig_0001.png"' in response.text
+    assert 'src="/figures-low/mat_001/fig_0001.png"' in response.text
     assert 'data-zoom-caption="Caption"' in response.text
     assert 'data-zoom-meta="p. 4 · plan"' in response.text
 
@@ -793,7 +795,7 @@ def test_collection_page_renders_material_cards_with_word_truncation_and_preview
     assert 'class="material-card"' in response.text
     assert "word44..." in response.text
     assert "word45" not in response.text
-    assert '/figures/mat_001/fig_0001.png' in response.text
+    assert '/figures-low/mat_001/fig_0001.png' in response.text
     assert response.text.index(">Materials</h2>") < response.text.index(">Key Concepts</h2>")
 
 

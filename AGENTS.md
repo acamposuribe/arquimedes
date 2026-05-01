@@ -2,6 +2,27 @@
 
 > If you are an agent **investigating** the knowledge base (answering questions about its contents), stop here and read [docs/collaborator/agent-handbook.md](docs/collaborator/agent-handbook.md) instead. This file is for agents **modifying the Arquimedes code itself**.
 
+## Approach
+- Think before acting. Read existing files before writing code.
+- Be concise in output but thorough in reasoning.
+- Prefer editing over rewriting whole files.
+- Do not re-read files you have already read unless the file may have changed.
+- Skip files over 100KB unless explicitly required.
+- Suggest running /cost when a session is running long to monitor cache ratio.
+- Recommend starting a new session when switching to an unrelated task.
+- Test your code before declaring done.
+- No sycophantic openers or closing fluff.
+- Keep solutions simple and direct.
+- User instructions always override this file.
+
+## Project
+
+Collaborative LLM knowledge base for architecture (building design) practice and research.
+
+### Always keep spec and plan in sync
+
+When implementation changes affect the spec or plan, update those documents immediately — never let them drift. The spec and plan are the source of truth for collaborators and other LLM agents picking up work. 
+
 <!-- code-review-graph MCP tools -->
 ## MCP Tools: code-review-graph
 

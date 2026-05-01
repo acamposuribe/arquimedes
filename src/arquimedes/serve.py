@@ -304,7 +304,7 @@ def _rewrite_target(target: str, current_path: str, material_id: str | None) -> 
     if material_id and path.startswith("figures/"):
         name = PurePosixPath(path).name
         if Path(name).suffix.lower() in _IMAGE_EXTENSIONS:
-            return f"/figures/{material_id}/{name}"
+            return f"/figures-low/{material_id}/{name}"
     if path.startswith("wiki/") and path.endswith(".md"):
         return wiki_url(path)
     resolved = _resolve_relative(current_path, path)
@@ -315,7 +315,7 @@ def _rewrite_target(target: str, current_path: str, material_id: str | None) -> 
     if resolved and len(resolved.parts) >= 4 and resolved.parts[0] == "extracted" and resolved.parts[2] == "figures":
         name = resolved.name
         if Path(name).suffix.lower() in _IMAGE_EXTENSIONS:
-            return f"/figures/{resolved.parts[1]}/{name}"
+            return f"/figures-low/{resolved.parts[1]}/{name}"
     return target
 
 
@@ -437,7 +437,8 @@ def _figure_view_models(material_id: str, figures: list[dict]) -> list[dict]:
             "visual_type_text": _plain(figure.get("visual_type")),
             "caption_text": _plain(figure.get("caption")),
             "description_text": _plain(figure.get("description")),
-            "image_url": f"/figures/{material_id}/{name}",
+            "image_url": f"/figures-low/{material_id}/{name}",
+            "zoom_url": f"/figures/{material_id}/{name}",
         })
     return items
 
@@ -515,7 +516,7 @@ def _home_figure_tiles(domain: str, limit: int = 12) -> list[dict]:
         if not read_mod.material_figure_image_path(material_id, image_name):
             continue
         tiles.append({
-            "image_url": f"/figures/{material_id}/{image_name}",
+            "image_url": f"/figures-low/{material_id}/{image_name}",
             "material_url": f"/materials/{material_id}",
             "title": str(row.get("title") or material_id),
             "caption": _plain(row.get("caption")) or _plain(row.get("description")) or str(row.get("title") or material_id),
@@ -523,6 +524,28 @@ def _home_figure_tiles(domain: str, limit: int = 12) -> list[dict]:
         if len(tiles) >= limit:
             break
     return tiles
+
+
+def _low_res_figure_path(material_id: str, filename: str, size: int = 360) -> Path | None:
+    source = read_mod.material_figure_image_path(material_id, filename)
+    if not source:
+        return None
+    cache_dir = source.parent / ".lowres"
+    cache_name = f"{source.stem}-{size}.jpg"
+    cached = cache_dir / cache_name
+    if cached.exists() and cached.stat().st_mtime >= source.stat().st_mtime:
+        return cached
+
+    try:
+        from PIL import Image, ImageOps
+
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        with Image.open(source) as image:
+            thumb = ImageOps.fit(image.convert("RGB"), (size, size), method=Image.Resampling.LANCZOS)
+            thumb.save(cached, format="JPEG", quality=72, optimize=True)
+    except Exception:
+        return source
+    return cached
 
 
 def _collection_sidebar_context(domain: str, collection: str) -> list[dict]:
@@ -1017,6 +1040,15 @@ def create_app(config: dict | None = None) -> FastAPI:
         if "/" in filename or "\\" in filename or Path(filename).suffix.lower() not in _IMAGE_EXTENSIONS:
             raise HTTPException(status_code=404, detail="Figure not found")
         path = read_mod.material_figure_image_path(material_id, filename)
+        if not path:
+            raise HTTPException(status_code=404, detail="Figure not found")
+        return FileResponse(path)
+
+    @app.get("/figures-low/{material_id}/{filename}")
+    def low_res_figure_image(material_id: str, filename: str):
+        if "/" in filename or "\\" in filename or Path(filename).suffix.lower() not in _IMAGE_EXTENSIONS:
+            raise HTTPException(status_code=404, detail="Figure not found")
+        path = _low_res_figure_path(material_id, filename)
         if not path:
             raise HTTPException(status_code=404, detail="Figure not found")
         return FileResponse(path)

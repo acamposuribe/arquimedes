@@ -171,7 +171,7 @@
       <details class="project-state-group" open>
         <summary>{{ group.label }}</summary>
         <div class="project-state-edit-list">
-          {% for item in group.items %}
+          {% for item in group['items'] %}
           <form class="project-state-edit-item" method="post" action="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/edit" onsubmit="return confirm('¿Guardar este cambio en los datos estructurados del proyecto?');">
             <input type="hidden" name="actor" value="human">
             <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">

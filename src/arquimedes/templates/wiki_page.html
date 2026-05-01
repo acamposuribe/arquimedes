@@ -169,17 +169,26 @@
       <h2>Datos estructurados del proyecto</h2>
       {% for group in project_state_panel %}
       <details class="project-state-group" open>
-        <summary>{{ group.label }}</summary>
+        <summary>
+          <span>{{ group.label }}</span>
+          <button class="project-inline-icon project-inline-icon--add" type="button" title="Añadir elemento" onclick="this.closest('details').querySelector('.project-state-add-item').hidden = !this.closest('details').querySelector('.project-state-add-item').hidden;">+</button>
+        </summary>
+        <form class="project-state-add-item" hidden method="post" action="/projects/{{ project_id }}/state/{{ group.field }}/add" data-confirm-message="¿Añadir este elemento a los datos estructurados del proyecto?" data-preserve-scroll="true">
+          <input type="hidden" name="actor" value="human">
+          <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+          <textarea name="text" placeholder="Nuevo elemento..."></textarea>
+          <button class="project-inline-add-submit" type="submit">Añadir</button>
+        </form>
         <div class="project-state-edit-list">
           {% for item in group['items'] %}
-          <form class="project-state-edit-item" method="post" action="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/edit" onsubmit="return confirm('¿Guardar este cambio en los datos estructurados del proyecto?');">
+          <form class="project-state-edit-item" method="post" action="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/edit" data-confirm-message="¿Guardar este cambio en los datos estructurados del proyecto?" data-preserve-scroll="true">
             <input type="hidden" name="actor" value="human">
             <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-            <textarea name="text">{{ item.text }}</textarea>
-            <div class="project-state-edit-actions">
-              <button type="submit">Guardar</button>
-              <button type="submit" class="project-note-delete" formaction="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/delete" formnovalidate onclick="return confirm('¿Eliminar este elemento de los datos estructurados del proyecto?');">Eliminar</button>
+            <div class="project-inline-card-actions">
+              <button class="project-inline-icon" type="submit" title="Guardar">✓</button>
+              <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" formaction="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/delete" formnovalidate data-confirm-message="¿Eliminar este elemento de los datos estructurados del proyecto?" data-preserve-scroll="true">×</button>
             </div>
+            <textarea name="text">{{ item.text }}</textarea>
           </form>
           {% endfor %}
         </div>
@@ -383,7 +392,26 @@
 
     {% if project_notes and (project_notes.open or project_notes.archived) %}
     <section class="panel project-notes-panel">
-      <h2>Notas</h2>
+      <div class="project-notes-panel-header">
+        <h2>Notas</h2>
+        <button class="project-inline-icon project-inline-icon--add" type="button" title="Añadir nota" onclick="this.closest('.project-notes-panel').querySelector('.project-note-add-form').hidden = !this.closest('.project-notes-panel').querySelector('.project-note-add-form').hidden;">+</button>
+      </div>
+      <form class="project-note-add-form" hidden method="post" action="/projects/{{ project_id }}/notes/add" data-confirm-message="¿Añadir esta nota al proyecto?" data-preserve-scroll="true">
+        <input type="hidden" name="actor" value="human">
+        <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+        <select name="kind">
+          <option value="decision">decision</option>
+          <option value="requirement">requirement</option>
+          <option value="risk">risk</option>
+          <option value="deadline">deadline</option>
+          <option value="coordination">coordination</option>
+          <option value="learning">learning</option>
+          <option value="mistake">mistake</option>
+          <option value="repair">repair</option>
+        </select>
+        <textarea name="text" placeholder="Nueva nota..."></textarea>
+        <button class="project-inline-add-submit" type="submit">Añadir</button>
+      </form>
       {% if project_notes.open %}
       <div class="project-sticky-notes">
         {% for note in project_notes.open %}
@@ -395,9 +423,9 @@
             <span class="project-sticky-note-date">{{ note.timestamp[:10] }}</span>
           </div>
           <textarea name="text">{{ note.text }}</textarea>
-          <div class="project-sticky-note-actions">
-            <button type="submit">Guardar</button>
-            <button type="submit" class="project-note-delete" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>Eliminar</button>
+          <div class="project-inline-card-actions">
+            <button class="project-inline-icon" type="submit" title="Guardar">✓</button>
+            <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>×</button>
           </div>
         </form>
         {% endfor %}
@@ -416,9 +444,9 @@
               <span class="project-sticky-note-date">{{ note.timestamp[:10] }}</span>
             </div>
             <textarea name="text">{{ note.text }}</textarea>
-            <div class="project-sticky-note-actions">
-              <button type="submit">Guardar</button>
-              <button type="submit" class="project-note-delete" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>Eliminar</button>
+            <div class="project-inline-card-actions">
+              <button class="project-inline-icon" type="submit" title="Guardar">✓</button>
+              <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>×</button>
             </div>
           </form>
           {% endfor %}

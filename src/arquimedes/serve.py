@@ -674,10 +674,8 @@ def _project_state_panel_context(project_id: str) -> list[dict]:
         ("requirements", "Requisitos"),
         ("risks_or_blockers", "Problemas, riesgos y bloqueos"),
         ("missing_information", "Información pendiente"),
-        ("positive_learnings", "Aprendizajes positivos"),
         ("mistakes_or_regrets", "Errores"),
         ("repair_actions", "Acciones de reparación"),
-        ("important_material_ids", "Materiales importantes"),
     ]
     groups = []
     for field, label in specs:
@@ -1071,6 +1069,11 @@ def create_app(config: dict | None = None) -> FastAPI:
         def update():
             return JSONResponse(freshness_mod.update_workspace())
 
+    @app.post("/projects/{project_id}/notes/add")
+    def add_project_note(project_id: str, kind: str = Form("decision"), text: str = Form(...), actor: str = Form("human"), return_to: str = Form("/")):
+        project_state_mod.append_project_note(project_id, kind=kind, text=text, actor=actor, root=read_mod.get_project_root())
+        return RedirectResponse(url=return_to or "/", status_code=303)
+
     @app.post("/projects/{project_id}/notes/{note_id}/edit")
     def edit_project_note(project_id: str, note_id: str, text: str = Form(...), actor: str = Form("human"), return_to: str = Form("/")):
         project_state_mod.update_project_note(project_id, note_id=note_id, text=text, actor=actor, root=read_mod.get_project_root())
@@ -1079,6 +1082,11 @@ def create_app(config: dict | None = None) -> FastAPI:
     @app.post("/projects/{project_id}/notes/{note_id}/delete")
     def delete_project_note(project_id: str, note_id: str, actor: str = Form("human"), return_to: str = Form("/")):
         project_state_mod.delete_project_note(project_id, note_id=note_id, actor=actor, root=read_mod.get_project_root())
+        return RedirectResponse(url=return_to or "/", status_code=303)
+
+    @app.post("/projects/{project_id}/state/{field}/add")
+    def add_project_state_item(project_id: str, field: str, text: str = Form(...), actor: str = Form("human"), return_to: str = Form("/")):
+        project_state_mod.add_project_state_list_item(project_id, field=field, text=text, actor=actor, root=read_mod.get_project_root())
         return RedirectResponse(url=return_to or "/", status_code=303)
 
     @app.post("/projects/{project_id}/state/{field}/{index}/edit")

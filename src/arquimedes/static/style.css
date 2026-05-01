@@ -682,6 +682,7 @@ img { max-width: 100%; display: block; }
   margin-top: 0.6rem;
 }
 .project-state-edit-item {
+  position: relative;
   display: grid;
   gap: 0.45rem;
   padding: 0.75rem 0.8rem;
@@ -704,24 +705,11 @@ img { max-width: 100%; display: block; }
   line-height: 1.45;
 }
 .project-state-edit-item textarea:focus { outline: none; }
-.project-state-edit-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-.project-state-edit-actions button {
-  padding: 0.28rem 0.58rem;
-  border: 1px solid var(--line-dark);
-  border-radius: 999px;
-  background: #fff;
-  color: var(--ink);
-  font: inherit;
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 0.75rem;
-  cursor: pointer;
-}
-.project-state-edit-actions button:hover { background: var(--panel); }
 .project-state-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
   cursor: pointer;
   color: var(--muted);
   font-family: system-ui, -apple-system, sans-serif;
@@ -730,6 +718,78 @@ img { max-width: 100%; display: block; }
   letter-spacing: 0.08em;
   line-height: 1.25;
   text-transform: uppercase;
+}
+.project-inline-card-actions {
+  position: absolute;
+  top: 0.38rem;
+  right: 0.38rem;
+  display: flex;
+  gap: 0.22rem;
+}
+.project-inline-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.78);
+  color: var(--muted);
+  font: inherit;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.78rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.project-inline-icon:hover {
+  background: #fff;
+  color: var(--ink);
+}
+.project-inline-icon--delete:hover { color: #8a2b1c; }
+.project-inline-icon--add {
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 0.95rem;
+}
+.project-inline-add-submit {
+  align-self: start;
+  padding: 0.26rem 0.56rem;
+  border: 1px solid var(--line-dark);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.74rem;
+  cursor: pointer;
+}
+.project-state-add-item,
+.project-note-add-form {
+  display: grid;
+  gap: 0.45rem;
+  margin: 0.55rem 0 0.7rem;
+}
+.project-state-add-item textarea,
+.project-note-add-form textarea,
+.project-note-add-form select {
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.86rem;
+}
+.project-note-add-form select {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+.project-notes-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 .project-state-group ul {
   margin: 0.55rem 0 0;
@@ -783,6 +843,7 @@ img { max-width: 100%; display: block; }
 }
 
 .project-sticky-note {
+  position: relative;
   display: grid;
   gap: 0.55rem;
   padding: 0.8rem 0.85rem;
@@ -839,24 +900,6 @@ img { max-width: 100%; display: block; }
   outline: none;
 }
 
-.project-sticky-note-actions {
-  display: flex;
-  justify-content: space-between;
-  gap: 0.5rem;
-}
-
-.project-sticky-note-actions button {
-  padding: 0.32rem 0.6rem;
-  border: 1px solid rgba(0, 0, 0, 0.16);
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.65);
-  color: var(--ink);
-  font: inherit;
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 0.76rem;
-  cursor: pointer;
-}
-.project-sticky-note-actions button:hover { background: rgba(255, 255, 255, 0.92); }
 .project-note-delete { color: #8a2b1c; }
 
 .wiki-body h1 { font-size: 1.6rem; font-weight: 400; border-bottom: 1px solid var(--line-dark); padding-bottom: 0.28rem; margin: 0 0 0.55rem; }
@@ -1800,6 +1843,60 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 }
 
 body.lightbox-open { overflow: hidden; }
+
+.confirm-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: grid;
+  place-items: center;
+  padding: 1rem;
+  background: rgba(16, 20, 28, 0.42);
+}
+.confirm-modal[hidden] { display: none; }
+.confirm-modal-card {
+  width: min(26rem, 100%);
+  padding: 1rem 1rem 0.9rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.18);
+}
+.confirm-modal-card h2 {
+  margin: 0 0 0.45rem;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.98rem;
+}
+.confirm-modal-card p {
+  margin: 0;
+  color: var(--muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+.confirm-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.9rem;
+}
+.confirm-modal-actions button {
+  padding: 0.38rem 0.7rem;
+  border: 1px solid var(--line-dark);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.confirm-modal-actions button:last-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.confirm-modal-actions button:hover { opacity: 0.92; }
 
 /* ── Utility ─────────────────────────────────────── */
 

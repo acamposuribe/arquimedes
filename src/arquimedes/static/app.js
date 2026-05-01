@@ -9,6 +9,10 @@ const lightboxCaptionText = document.getElementById("lightbox-caption-text");
 const lightboxDescription = document.getElementById("lightbox-description");
 const lightboxPrev = document.getElementById("lightbox-prev");
 const lightboxNext = document.getElementById("lightbox-next");
+const confirmModal = document.getElementById("confirm-modal");
+const confirmModalMessage = document.getElementById("confirm-modal-message");
+const confirmModalConfirm = document.getElementById("confirm-modal-confirm");
+const confirmModalCancel = document.getElementById("confirm-modal-cancel");
 
 function setBanner(data) {
   if (!banner || !data) return;
@@ -48,6 +52,73 @@ if (banner) {
     // Already checked this session — hide banner immediately
     banner.style.display = "none";
   }
+}
+
+// ── Confirm modal + scroll restore ───────────────
+
+if (confirmModal && confirmModalMessage && confirmModalConfirm && confirmModalCancel) {
+  let pendingAction = null;
+
+  const restoreY = sessionStorage.getItem("arquimedes-restore-scroll-y");
+  if (restoreY !== null) {
+    sessionStorage.removeItem("arquimedes-restore-scroll-y");
+    window.addEventListener("load", () => {
+      window.scrollTo({top: Number(restoreY) || 0, behavior: "instant"});
+    }, {once: true});
+  }
+
+  function closeConfirmModal() {
+    confirmModal.setAttribute("hidden", "");
+    document.body.classList.remove("lightbox-open");
+    pendingAction = null;
+  }
+
+  function openConfirmModal(message, action) {
+    pendingAction = action;
+    confirmModalMessage.textContent = message || "¿Confirmar esta acción?";
+    confirmModal.removeAttribute("hidden");
+    document.body.classList.add("lightbox-open");
+  }
+
+  function preserveScroll(node) {
+    if (node?.dataset?.preserveScroll === "true" || node?.form?.dataset?.preserveScroll === "true") {
+      sessionStorage.setItem("arquimedes-restore-scroll-y", String(window.scrollY || window.pageYOffset || 0));
+    }
+  }
+
+  document.addEventListener("submit", (event) => {
+    const form = event.target instanceof HTMLFormElement ? event.target : null;
+    if (!form || form.dataset.confirmBypass === "true") return;
+    const submitter = event.submitter instanceof HTMLElement ? event.submitter : null;
+    const message = submitter?.dataset.confirmMessage || form.dataset.confirmMessage;
+    if (!message) return;
+    event.preventDefault();
+    openConfirmModal(message, () => {
+      preserveScroll(submitter || form);
+      form.dataset.confirmBypass = "true";
+      if (submitter instanceof HTMLButtonElement || submitter instanceof HTMLInputElement) {
+        form.requestSubmit(submitter);
+      } else {
+        form.requestSubmit();
+      }
+      delete form.dataset.confirmBypass;
+    });
+  }, true);
+
+  confirmModalConfirm.addEventListener("click", () => {
+    const action = pendingAction;
+    closeConfirmModal();
+    if (action) action();
+  });
+
+  confirmModalCancel.addEventListener("click", closeConfirmModal);
+  confirmModal.addEventListener("click", (event) => {
+    if (event.target === confirmModal) closeConfirmModal();
+  });
+  document.addEventListener("keydown", (event) => {
+    if (confirmModal.hasAttribute("hidden")) return;
+    if (event.key === "Escape") closeConfirmModal();
+  });
 }
 
 // ── Lightbox ──────────────────────────────────────

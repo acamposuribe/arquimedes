@@ -82,6 +82,16 @@
       </figcaption>
     </figure>
   </div>
+  <div class="confirm-modal" hidden id="confirm-modal">
+    <div class="confirm-modal-card" role="dialog" aria-modal="true" aria-labelledby="confirm-modal-title">
+      <h2 id="confirm-modal-title">Confirmar acción</h2>
+      <p id="confirm-modal-message"></p>
+      <div class="confirm-modal-actions">
+        <button id="confirm-modal-cancel" type="button">Cancelar</button>
+        <button id="confirm-modal-confirm" type="button">Confirmar</button>
+      </div>
+    </div>
+  </div>
   <script src="/static/app.js?v={{ asset_version }}"></script>
 </body>
 </html>

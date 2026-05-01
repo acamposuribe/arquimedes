@@ -184,6 +184,31 @@ def save_project_state(project_id: str, state: dict[str, Any], *, root: Path | N
     return state
 
 
+def add_project_state_list_item(
+    project_id: str,
+    *,
+    field: str,
+    text: str,
+    actor: str,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    if actor not in UPDATED_BY:
+        raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    field = validate_state_field(field)
+    if field not in LIST_FIELDS:
+        raise ProjectStateError(f"{field} is not list-valued")
+    if not str(text).strip():
+        raise ProjectStateError("item text is required")
+    root = root or get_project_root()
+    state = load_project_state(project_id, root=root)
+    values = list(state.get(field) or [])
+    values.append(str(text).strip())
+    state[field] = values
+    state["updated_by"] = actor
+    state["updated_at"] = now_iso()
+    return save_project_state(project_id, state, root=root)
+
+
 def update_project_state_list_item(
     project_id: str,
     *,

@@ -896,7 +896,7 @@ def _material_search_context(material_id: str, query: str, depth: int) -> dict:
                     "pages_label": _pages_label(chunk.source_pages),
                     "emphasized": chunk.emphasized,
                     "excerpt_html": _excerpt_html(chunk.text or chunk.summary, query),
-                    "full_text_html": _excerpt_html(chunk.text or chunk.summary, query, radius=1000),
+                    "source_page_url": f"/source/{material_id}#page={chunk.source_pages[0]}" if chunk.source_pages else "",
                 }
                 for chunk in evidence.chunks
             ],

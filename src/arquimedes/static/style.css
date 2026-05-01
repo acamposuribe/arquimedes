@@ -1105,24 +1105,16 @@ img { max-width: 100%; display: block; }
   border-radius: 4px;
   background: #fafbfc;
 }
-.search-evidence-item--expandable summary {
-  list-style: none;
-  cursor: pointer;
+.search-evidence-open-source {
+  margin-left: auto;
+  color: var(--accent);
+  text-decoration: none;
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 0.78rem;
 }
-.search-evidence-item--expandable summary::-webkit-details-marker {
-  display: none;
-}
-.search-evidence-item--expandable[open] {
-  border-color: var(--accent);
-}
-.search-evidence-item--expandable .search-evidence-summary,
-.search-evidence-item--expandable .search-evidence-excerpt {
-  margin-right: 1.1rem;
-}
-.search-evidence-fulltext {
-  margin-top: 0.6rem;
-  padding-top: 0.6rem;
-  border-top: 1px solid var(--line);
+.search-evidence-open-source:hover {
+  text-decoration: underline;
 }
 
 .search-evidence-meta {

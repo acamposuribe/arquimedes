@@ -13,7 +13,8 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from arquimedes import enrich_prompts, enrich_stamps, llm
+from arquimedes import enrich_prompts, enrich_stamps, llm, project_state
+from arquimedes.config import get_project_root
 from arquimedes.domain_profiles import domain_prompt_version, is_proyectos_domain
 from arquimedes.llm import get_model_id
 from arquimedes.models import (
@@ -318,6 +319,18 @@ def enrich_document_stage(
         meta_path, document_text_path = enrich_prompts.build_document_input_files(
             output_dir, chunks, annotations
         )
+        if is_project_domain:
+            project_id = str(meta.get("collection") or "").strip()
+            if project_id:
+                try:
+                    prompt_meta = dict(_load_json(meta_path, default={}))
+                    current_stage = str(project_state.load_project_state(project_id, root=get_project_root()).get("stage") or "").strip()
+                    if current_stage:
+                        prompt_meta["project_context"] = {**dict(prompt_meta.get("project_context") or {}), "current_project_phase": current_stage}
+                        meta_path = output_dir / "document.meta.work.json"
+                        meta_path.write_text(json.dumps(prompt_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
 
         # LLM reads the source files directly and returns a JSON patch.
         system, messages = enrich_prompts.build_document_file_prompt(

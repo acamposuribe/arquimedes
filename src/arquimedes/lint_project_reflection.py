@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,33 @@ def _project_reflection_stage_dir(root: Path) -> Path:
 
 def _project_reflection_evidence_path(root: Path, project_id: str) -> Path:
     return _project_reflection_stage_dir(root) / f"{project_id}.evidence.json"
+
+
+def _project_reflection_failure_path(root: Path, project_id: str) -> Path:
+    return _project_reflection_stage_dir(root) / f"{project_id}.failure.json"
+
+
+def _write_project_reflection_failure(
+    root: Path,
+    project_id: str,
+    *,
+    error: BaseException,
+    raw_response: str,
+    evidence_path: Path,
+    parsed: Any = None,
+) -> None:
+    path = _project_reflection_failure_path(root, project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "project_id": project_id,
+        "failed_at": datetime.now(timezone.utc).isoformat(),
+        "error_type": type(error).__name__,
+        "error": str(error),
+        "raw_response": raw_response,
+        "parsed_response": parsed,
+        "evidence_path": str(evidence_path),
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
 
 
 def _project_material_packet(meta: dict) -> dict:
@@ -242,6 +270,8 @@ def _run_project_reflections_impl(
         fingerprint = _project_reflection_fingerprint(root, project_id, new_metas)
         deps._write_json(evidence_path, _project_reflection_payload(root, project_id, new_metas))
         system, user = _project_reflection_prompt(evidence_path)
+        raw = ""
+        parsed: Any = None
         try:
             raw = llm_fn(system, [{"role": "user", "content": user}])
             parsed = parse_json_or_repair(llm_fn, raw, PROJECT_REFLECTION_SCHEMA)
@@ -274,7 +304,19 @@ def _run_project_reflections_impl(
                 evidence_path.unlink()
             except OSError:
                 pass
+            try:
+                _project_reflection_failure_path(root, project_id).unlink()
+            except OSError:
+                pass
         except BaseException as exc:
+            _write_project_reflection_failure(
+                root,
+                project_id,
+                error=exc,
+                raw_response=raw,
+                parsed=parsed,
+                evidence_path=evidence_path,
+            )
             failures.append(exc)
 
     output_keys = {row["project_id"] for row in output if row.get("project_id")}

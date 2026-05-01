@@ -88,7 +88,7 @@
 <section class="home-section home-section--wide">
   <h2>{{ active_domain_label }} {{ ui_label('recent_materials', active_domain, 'Recent Materials') }}</h2>
   {% if recent_materials %}
-  <div class="stack">
+  <div class="stack home-recent-materials-grid">
     {% for item in recent_materials %}
     {% include "partials/material_card.html" %}
     {% endfor %}

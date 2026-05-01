@@ -538,7 +538,7 @@ def _project_home_cards(collections: list[dict]) -> list[dict]:
     return sorted(cards, key=lambda card: card["title"].lower())
 
 
-def _home_figure_tiles(domain: str, limit: int = 12) -> list[dict]:
+def _home_figure_tiles(domain: str, limit: int = 15) -> list[dict]:
     tiles: list[dict] = []
     for row in read_mod.random_figures(limit=limit * 2, domain=domain):
         material_id = str(row.get("material_id") or "").strip()

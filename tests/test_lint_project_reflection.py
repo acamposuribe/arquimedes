@@ -114,6 +114,58 @@ def test_run_reflective_lint_project_reflection_updates_state_and_sections(tmp_p
     assert records[0]["reflected_material_ids"] == ["mat_project"]
 
 
+def test_project_reflection_failure_writes_raw_response_debug(tmp_path, monkeypatch):
+    import pytest
+    import arquimedes.project_state as project_state_mod
+
+    _write_project_material(tmp_path)
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    raw_response = json.dumps({
+        "state_delta": {"stage": "anteproyecto"},
+        "section_deltas": [],
+        "_finished": True,
+    })
+
+    def llm_factory(_stage: str):
+        def llm(_system, _messages):
+            return raw_response
+
+        return llm
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(lint_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(lint_mod, "get_index_path", lambda: tmp_path / "indexes" / "search.sqlite")
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+    monkeypatch.setattr(project_state_mod, "get_project_root", lambda: tmp_path)
+
+    with pytest.raises(project_state_mod.ProjectStateError):
+        lint_mod.run_reflective_lint(
+            {"llm": {"agent_cmd": "echo"}},
+            {"summary": {"issues": 0}, "issues": []},
+            stages=["project-reflection"],
+            llm_factory=llm_factory,
+        )
+
+    debug_path = tmp_path / "derived" / "tmp" / "project_reflections" / "2407-casa-rio.failure.json"
+    debug = json.loads(debug_path.read_text(encoding="utf-8"))
+    assert debug["raw_response"] == raw_response
+    assert debug["parsed_response"]["state_delta"]["stage"] == "anteproyecto"
+    assert "stage must be one of" in debug["error"]
+
+
 def test_project_reflection_stage_skips_general_bucket(tmp_path, monkeypatch):
     _write_project_material(tmp_path)
     meta_path = tmp_path / "extracted" / "mat_project" / "meta.json"

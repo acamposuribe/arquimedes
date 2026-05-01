@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode, urlsplit
 
@@ -998,12 +999,14 @@ def create_app(config: dict | None = None) -> FastAPI:
             )
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
     app.mount("/static", StaticFiles(directory=str(_HERE / "static")), name="static")
+    asset_version = str(int(time.time()))
     _TEMPLATES.env.globals.update(
         breadcrumbs=breadcrumbs,
         wiki_url=wiki_url,
         material_url=material_url,
         truncate_words=truncate_words,
         ui_label=_ui_label,
+        asset_version=asset_version,
     )
     _TEMPLATES.env.globals["public_exposure"] = public_exposure
 

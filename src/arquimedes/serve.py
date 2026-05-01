@@ -696,6 +696,7 @@ def _project_material_groups(domain: str, collection: str) -> list[dict]:
             "display_title": display_title,
             "phase_key": phase_key,
             "phase_label": phase_label,
+            "material_date": str(project_extraction.get("material_date") or ""),
             "material_url": f"/materials/{material_id}",
             "summary": _plain(meta.get("summary")),
             "document_type": _plain(meta.get("document_type")) or str(meta.get("raw_document_type") or ""),
@@ -706,7 +707,10 @@ def _project_material_groups(domain: str, collection: str) -> list[dict]:
 
     groups: list[dict] = []
     for type_key, items in grouped.items():
-        items.sort(key=lambda x: (_PROJECT_PHASE_ORDER.get(x.get("phase_key", "unknown"), 999), x["title"].lower()))
+        if type_key == "site_photo":
+            items.sort(key=lambda x: (str(x.get("material_date") or ""), x["title"].lower()), reverse=True)
+        else:
+            items.sort(key=lambda x: (_PROJECT_PHASE_ORDER.get(x.get("phase_key", "unknown"), 999), x["title"].lower()))
         variant = "gallery" if type_key in _PROJECT_GALLERY_TYPES else "list"
         phase_groups = []
         if type_key == "drawing_set":

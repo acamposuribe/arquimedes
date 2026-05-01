@@ -636,6 +636,51 @@ def test_collection_page_renders_material_cards_with_word_truncation_and_preview
     assert response.text.index(">Materials</h2>") < response.text.index(">Key Concepts</h2>")
 
 
+def test_proyectos_project_page_handles_resolved_wiki_paths(tmp_path, monkeypatch):
+    real_root = tmp_path / "real"
+    alias_root = tmp_path / "alias"
+    real_root.mkdir()
+    try:
+        alias_root.symlink_to(real_root, target_is_directory=True)
+    except OSError:
+        alias_root = real_root
+
+    _repo(alias_root, monkeypatch)
+    (real_root / "wiki" / "proyectos" / "2407-casa-rio").mkdir(parents=True)
+    (real_root / "wiki" / "proyectos" / "2407-casa-rio" / "_index.md").write_text(
+        "# Casa Río\n\n"
+        "## Estado del proyecto\n\n"
+        "En marcha.\n\n"
+        "## Materiales importantes\n\n"
+        "- [Acta de arranque](mat_proyecto.md)\n",
+        encoding="utf-8",
+    )
+    (real_root / "wiki" / "proyectos" / "2407-casa-rio" / "mat_proyecto.md").write_text(
+        "# Acta de arranque\n",
+        encoding="utf-8",
+    )
+    _write_json(real_root / "extracted" / "mat_proyecto" / "meta.json", {
+        "material_id": "mat_proyecto",
+        "title": "Acta de arranque",
+        "domain": "proyectos",
+        "collection": "2407-casa-rio",
+        "summary": {"value": "Reunión inicial del proyecto."},
+        "project_extraction": {"project_material_type": {"value": "meeting_report"}},
+    })
+    con = sqlite3.connect(str(real_root / "indexes" / "search.sqlite"))
+    con.execute("CREATE TABLE materials (material_id TEXT, title TEXT, summary TEXT, domain TEXT, collection TEXT, document_type TEXT, year TEXT)")
+    con.execute("INSERT INTO materials VALUES (?,?,?,?,?,?,?)", ("mat_proyecto", "Acta de arranque", "Reunión inicial.", "proyectos", "2407-casa-rio", "acta", "2026"))
+    con.commit()
+    con.close()
+
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/wiki/proyectos/2407-casa-rio")
+    assert response.status_code == 200
+    assert "Casa Río" in response.text
+    assert "Informes de reunión" in response.text
+    assert "/materials/mat_proyecto" in response.text
+
+
 def test_concept_page_uses_concept_search_label_and_linked_material_scope(tmp_path, monkeypatch):
     root = _repo(tmp_path, monkeypatch)
     (root / "wiki" / "research" / "papers" / "concepts").mkdir(parents=True, exist_ok=True)

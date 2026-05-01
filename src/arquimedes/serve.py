@@ -190,12 +190,20 @@ def _page_domain_from_wiki_path(path: Path | None) -> str | None:
     if path is None:
         return None
     try:
-        rel_parts = path.relative_to(read_mod.get_project_root() / "wiki").parts
+        rel_parts = path.resolve().relative_to((read_mod.get_project_root() / "wiki").resolve()).parts
     except ValueError:
         return None
     if rel_parts and rel_parts[0] in _DOMAINS:
         return rel_parts[0]
     return None
+
+
+def _project_rel_path(path: Path) -> str:
+    return path.resolve().relative_to(read_mod.get_project_root().resolve()).as_posix()
+
+
+def _wiki_rel_parts(path: Path) -> tuple[str, ...]:
+    return path.resolve().relative_to((read_mod.get_project_root() / "wiki").resolve()).parts
 
 
 def _active_domain(request: Request, explicit_domain: str | None = None, page_domain: str | None = None) -> str:
@@ -666,7 +674,7 @@ def _material_page_context(material_id: str, body: str) -> dict:
 
 
 def _wiki_context(path: Path, body: str, *, material_id: str | None = None, title: str | None = None, **extra) -> dict:
-    rel = path.relative_to(read_mod.get_project_root()).as_posix()
+    rel = _project_rel_path(path)
     return {
         "breadcrumbs": breadcrumbs(rel),
         "content_html": render_wiki_markdown(body, rel, material_id),
@@ -876,7 +884,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                     path,
                     material["content_body"],
                     **material,
-                    related_materials_html=render_wiki_markdown(material["related_materials_body"], path.relative_to(read_mod.get_project_root()).as_posix(), material_id) if material["related_materials_body"] else "",
+                    related_materials_html=render_wiki_markdown(material["related_materials_body"], _project_rel_path(path), material_id) if material["related_materials_body"] else "",
                     **search_context,
                 ),
             },
@@ -993,7 +1001,7 @@ def create_app(config: dict | None = None) -> FastAPI:
             material = _material_page_context(material_id, body)
             content_body = material["content_body"]
             extra = material
-            extra["related_materials_html"] = render_wiki_markdown(material["related_materials_body"], page_path.relative_to(read_mod.get_project_root()).as_posix(), material_id) if material["related_materials_body"] else ""
+            extra["related_materials_html"] = render_wiki_markdown(material["related_materials_body"], _project_rel_path(page_path), material_id) if material["related_materials_body"] else ""
             search_query = q.strip()
             page_search = {"kind": "material", "label": _ui_label("search_this_material", str(extra.get("domain") or page_domain or ""), "Search This Material"), "query": search_query, "results": None}
             extra.update({"search_query": "", "search_depth": depth, "search_scope": "all", "search_hits": None, "page_search": page_search})
@@ -1017,13 +1025,12 @@ def create_app(config: dict | None = None) -> FastAPI:
         page_record = read_mod.wiki_page_record(page_path)
         if page_path.name == "_index.md" and not material_id:
             try:
-                wiki_root = read_mod.get_project_root() / "wiki"
-                rel_parts = page_path.relative_to(wiki_root).parts
+                rel_parts = _wiki_rel_parts(page_path)
                 if len(rel_parts) == 3 and "shared" not in rel_parts and "concepts" not in rel_parts:
                     coll_domain, coll_name = rel_parts[0], rel_parts[1]
                     before_materials, _, after_materials = _split_markdown_section(body, _heading_candidates("materials", "Materials"))
                     content_body = before_materials
-                    collection_after_html = render_wiki_markdown(after_materials, page_path.relative_to(read_mod.get_project_root()).as_posix()) if after_materials else ""
+                    collection_after_html = render_wiki_markdown(after_materials, _project_rel_path(page_path)) if after_materials else ""
                     if is_proyectos_domain(coll_domain, default="research"):
                         project_material_groups = _project_material_groups(coll_domain, coll_name) or None
                     else:

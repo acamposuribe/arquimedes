@@ -662,17 +662,21 @@ img { max-width: 100%; display: block; }
   margin-top: 0;
 }
 .project-state-block {
-  column-count: 2;
-  column-gap: 0.85rem;
+  display: block;
 }
-.project-state-block > h2 {
-  column-span: all;
+.project-state-columns {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.85rem;
+  align-items: start;
+}
+.project-state-column {
+  display: grid;
+  gap: 0.65rem;
+  align-content: start;
 }
 .project-state-group {
-  break-inside: avoid;
-  display: inline-block;
-  width: 100%;
-  margin: 0 0 0.65rem;
+  margin: 0;
   padding: 0.65rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -703,7 +707,7 @@ img { max-width: 100%; display: block; }
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 0.82rem;
+  font-size: 0.88rem;
   line-height: 1.4;
 }
 .project-state-edit-item textarea:focus { outline: none; }
@@ -884,7 +888,7 @@ img { max-width: 100%; display: block; }
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 0.81rem;
+  font-size: 0.87rem;
   line-height: 1.4;
 }
 .project-sticky-note textarea:focus {
@@ -1949,8 +1953,8 @@ body.lightbox-open { overflow: hidden; }
   }
 
   .home-grid,
-  .home-recent-materials-grid { grid-template-columns: 1fr; }
-  .project-state-block { column-count: 1; }
+  .home-recent-materials-grid,
+  .project-state-columns { grid-template-columns: 1fr; }
   .project-card-grid,
   .project-state-grid,
   .project-extraction-grid {
@@ -2020,13 +2024,13 @@ body.lightbox-open { overflow: hidden; }
 }
 .project-material-tile {
   display: grid;
-  grid-template-rows: auto minmax(0, 1fr);
-  aspect-ratio: 1 / 1.16;
+  grid-template-rows: minmax(0, 1fr) auto;
+  aspect-ratio: 1 / 1.11;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 4px;
-  background: #fff;
-  padding: 0.28rem;
+  background: #f3f4f6;
+  padding: 0.22rem;
   text-decoration: none;
 }
 .project-material-tile img {
@@ -2040,11 +2044,11 @@ body.lightbox-open { overflow: hidden; }
 }
 .project-material-tile-title {
   overflow: hidden;
-  margin: 0 0 0.2rem;
+  margin: 0.12rem 0 0;
   color: var(--muted);
-  font-size: 0.64rem;
+  font-size: 0.62rem;
   font-weight: 600;
-  line-height: 1.15;
+  line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

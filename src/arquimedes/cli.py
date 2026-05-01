@@ -2208,6 +2208,45 @@ def project_search_cmd(
         click.echo(result.to_json())
 
 
+@project_group.command("reflect")
+@click.argument("project_id")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately after reflection.")
+def project_reflect_cmd(project_id: str, no_recompile: bool):
+    """Force one LLM-backed project reflection for a specific project."""
+    from arquimedes.config import get_project_root, load_config
+    from arquimedes import lint as lint_mod
+    from arquimedes import read as read_mod
+    from arquimedes.llm import get_model_id, make_cli_llm_fn
+    from arquimedes.lint_project_reflection import _run_project_reflections_impl
+    from arquimedes.project_state import ProjectStateError, validate_project_id
+
+    try:
+        project_id = validate_project_id(project_id)
+        metas = []
+        for row in read_mod.materials_for_collection("proyectos", project_id):
+            material_id = str(row.get("material_id") or "").strip()
+            if material_id:
+                metas.append(read_mod.load_material_meta(material_id))
+        if not metas:
+            raise click.ClickException(f"No materiales found for project {project_id!r}")
+        config = load_config()
+        shared_llm_state: dict = {}
+        llm_factory = lambda stage: make_cli_llm_fn(config, "lint", state=shared_llm_state)
+        result = _run_project_reflections_impl(
+            lint_mod,
+            get_project_root(),
+            {("proyectos", project_id): metas},
+            llm_factory,
+            None,
+            get_model_id(config, "lint"),
+            project_ids={project_id},
+            force=True,
+        )
+        _echo_json({"project_id": project_id, "reflection": result, "compile": _compile_after_project_write(no_recompile)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
 @project_group.command("recompile")
 @click.argument("project_id")
 def project_recompile_cmd(project_id: str):

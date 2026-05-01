@@ -294,10 +294,18 @@ def _normalize_section_deltas(parsed: dict) -> list[dict]:
     return deltas
 
 
-def _eligible_project_groups(groups: dict[tuple[str, str], list[dict]]) -> list[tuple[str, list[dict]]]:
+def _eligible_project_groups(
+    groups: dict[tuple[str, str], list[dict]],
+    *,
+    project_ids: set[str] | None = None,
+) -> list[tuple[str, list[dict]]]:
     eligible = []
     for (domain, collection), metas in groups.items():
-        if domain == "proyectos" and collection != "_general" and metas:
+        if domain != "proyectos" or collection == "_general":
+            continue
+        if project_ids is not None and collection not in project_ids:
+            continue
+        if metas:
             eligible.append((collection, metas))
     return sorted(eligible, key=lambda row: row[0])
 
@@ -309,13 +317,16 @@ def _run_project_reflections_impl(
     llm_factory=None,
     tool=None,
     route_signature: str = "",
+    *,
+    project_ids: set[str] | None = None,
+    force: bool = False,
 ) -> dict:
     del tool
     existing = deps._existing_by_key(_project_reflection_records_path(root), "project_id")
     output: list[dict] = []
     changed = 0
     failures: list[BaseException] = []
-    eligible = _eligible_project_groups(groups)
+    eligible = _eligible_project_groups(groups, project_ids=project_ids)
     if not eligible:
         deps._write_jsonl(_project_reflection_records_path(root), list(existing.values()))
         return {
@@ -328,7 +339,7 @@ def _run_project_reflections_impl(
     for project_id, metas in eligible:
         existing_record = existing.get(project_id)
         new_metas = _new_materials_for_reflection(metas, existing_record)
-        if not new_metas and not _has_new_human_evidence(root, project_id, existing_record):
+        if not force and not new_metas and not _has_new_human_evidence(root, project_id, existing_record):
             output.append(existing_record)
             continue
 

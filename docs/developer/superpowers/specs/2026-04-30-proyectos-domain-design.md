@@ -340,12 +340,13 @@ Deterministic writes (no LLM, always available):
 - `arq project note <project-id> --kind decision|requirement|risk|deadline|coordination|learning|mistake|repair --text ...` — append a project note
 - `arq project section set <project-id> <section-id> --text ... --source hermes` — write/replace section body verbatim
 - `arq project recompile <project-id>` — force a per-project compile after a batch of writes
+- `arq project reflect <project-id>` — force one project-reflection pass for a specific project and then recompile
 
 LLM-backed writes (require enrichment routes, may be unavailable in offline contexts):
 
 - `arq project section improve <project-id> <section-id> --instruction ...` — calls the section-improve LLM stage. This is **not** a deterministic CLI write; it is a single-section reflection invocation that produces a section-update delta and routes it through the merge protocol above. It is ratelimited and obeys the same precedence rules as nightly reflection.
 
-`arq project note`, `update`, `append`, `resolve`, and `section set` trigger an immediate per-project recompile by default so Hermes notes appear on the page right away. `--no-recompile` is available for batched writes followed by a single `arq project recompile`.
+`arq project note`, `update`, `append`, `resolve`, `section set`, and `reflect` trigger an immediate per-project recompile by default so Hermes changes and reflection results appear on the page right away. `--no-recompile` is available for batched writes followed by a single `arq project recompile`.
 
 Hermes needs a short handbook, not a protocol layer. The handbook should tell it:
 

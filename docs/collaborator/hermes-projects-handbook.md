@@ -63,6 +63,12 @@ Read the current dossier:
 arq project status <project-id>
 ```
 
+Force a fresh project reflection when a human explicitly asks to re-run synthesis for that project:
+
+```bash
+arq project reflect <project-id>
+```
+
 Record a note:
 
 ```bash
@@ -111,6 +117,14 @@ arq project note <project-id> --kind risk --text "..." --no-recompile
 arq project section set <project-id> riesgos --text "..." --no-recompile
 arq project recompile <project-id>
 ```
+
+If a human asks Hermes to "re-run", "refresh", or "force" the project synthesis after new notes or section edits, use:
+
+```bash
+arq project reflect <project-id>
+```
+
+That command forces one LLM-backed reflection for the specific project even if the incremental lint logic would otherwise skip it.
 
 ## Provenance
 

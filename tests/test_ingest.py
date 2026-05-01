@@ -162,6 +162,46 @@ def test_ingest_registers_new_file_types(tmp_path, monkeypatch):
     assert "Research/legacy/old.doc" not in by_path
 
 
+def test_ingest_can_ignore_configured_file_extensions(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    (project_root / "manifests").mkdir(parents=True, exist_ok=True)
+
+    files = {
+        "Research/papers/draft.docx": b"docx-bytes",
+        "Research/papers/spec.pdf": b"pdf-bytes",
+        "Research/papers/notes.MD": b"markdown-bytes",
+    }
+    for rel, data in files.items():
+        p = library_root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(config={"ingest": {"ignore_extensions": ["docx", ".md"]}})
+
+    by_path = {item.relative_path: item.file_type for item in result}
+    assert by_path == {"Research/papers/spec.pdf": "pdf"}
+
+
+def test_ingest_ignores_configured_extension_for_explicit_file(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    (project_root / "manifests").mkdir(parents=True, exist_ok=True)
+    docx = library_root / "Research" / "papers" / "draft.docx"
+    docx.parent.mkdir(parents=True, exist_ok=True)
+    docx.write_bytes(b"docx-bytes")
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(path="Research/papers/draft.docx", config={"ingest": {"ignore_extensions": [".docx"]}})
+
+    assert result == []
+
+
 def test_ingest_recognizes_proyectos_domain_and_general_bucket(tmp_path, monkeypatch):
     library_root = tmp_path / "library"
     project_root = tmp_path / "project"

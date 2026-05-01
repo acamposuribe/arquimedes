@@ -13,6 +13,11 @@
 - Phases 4–6 — done: `src/arquimedes/extract_office.py` implements DOCX/PPTX/XLSX extractors using `python-docx`, `python-pptx`, `openpyxl` (added to `pyproject.toml`); tests in `tests/test_extract_office.py` use generated fixtures.
 - Phase 7 — done: end-to-end dispatch test in `tests/test_extract.py` plus warn-skip test for unknown `file_type`. Audited downstream: `enrich.py:_allows_figure_enrichment` excludes only image/scanned types; new doc-like types pass through and short-circuit cleanly because no figures dir is produced. `serve.py`'s `file_type == "image"` branch is image-only by design.
 - Phase 8 — done: `docs/developer/PIPELINE.md` lists the new supported extensions.
+- Follow-up — done: ingest supports `ingest.ignore_extensions` / `ingest.ignored_extensions` so a vault can opt out of otherwise-supported extensions such as `.docx`.
+
+## Future step: Office embedded figure extraction
+
+DOCX/PPTX extraction currently prioritizes deterministic text/table extraction and does not emit embedded images as `figures/` artifacts. A future slice should add Office media extraction without changing the current synthetic-page/chunk contract: copy meaningful embedded images from OOXML media parts into `extracted/<material_id>/figures/`, create `Figure` sidecars, attach them to a stable synthetic page (or a better inferred location when available), and decide how captions/alt text should be derived. Keep this separate from the ignore-extension control so vaults that do not want Office ingestion can continue to disable `.docx`/`.pptx`/`.xlsx` in config.
 
 ## Goal
 

@@ -108,7 +108,37 @@ def save_manifest(project_root: Path, materials: dict[str, MaterialManifest]) ->
     manifest_path.write_text("\n".join(lines) + "\n" if lines else "")
 
 
-def scan_library(library_root: Path) -> list[Path]:
+def _ignored_extensions(config: dict | None = None) -> set[str]:
+    """Return configured file extensions to ignore during ingest.
+
+    Config shape::
+
+        ingest:
+          ignore_extensions: [.docx, pptx]
+
+    Values are normalized case-insensitively and may be written with or without
+    a leading dot.
+    """
+    ingest_config = (config or {}).get("ingest") or {}
+    raw = ingest_config.get("ignore_extensions") or ingest_config.get("ignored_extensions") or []
+    if isinstance(raw, str):
+        raw = [raw]
+    ignored: set[str] = set()
+    try:
+        values = list(raw)
+    except TypeError:
+        values = []
+    for value in values:
+        ext = str(value or "").strip().lower()
+        if not ext:
+            continue
+        if not ext.startswith("."):
+            ext = f".{ext}"
+        ignored.add(ext)
+    return ignored
+
+
+def scan_library(library_root: Path, ignored_extensions: set[str] | None = None) -> list[Path]:
     """Find all supported files in the library, recursively.
 
     Match extensions case-insensitively so mixed-case names like ``Draft.Docx``
@@ -117,6 +147,7 @@ def scan_library(library_root: Path) -> list[Path]:
     duplicating them. Directory realpaths are tracked to avoid symlink loops.
     """
     files: list[Path] = []
+    ignored = ignored_extensions or set()
     visited_dirs: set[Path] = set()
 
     def walk(directory: Path) -> None:
@@ -137,7 +168,11 @@ def scan_library(library_root: Path) -> list[Path]:
             try:
                 if child.is_dir():
                     walk(child)
-                elif child.is_file() and child.suffix.lower() in SUPPORTED_EXTENSIONS:
+                elif (
+                    child.is_file()
+                    and child.suffix.lower() in SUPPORTED_EXTENSIONS
+                    and child.suffix.lower() not in ignored
+                ):
                     files.append(child)
             except OSError:
                 continue
@@ -208,13 +243,14 @@ def ingest(
     library_root = get_library_root(config)
     project_root = get_project_root()
     enabled_domains = get_enabled_domains(config)
+    ignored_extensions = _ignored_extensions(config)
 
     if not library_root.exists():
         raise FileNotFoundError(f"Library root does not exist: {library_root}")
 
     # Determine what to scan
     if path is None:
-        files = scan_library(library_root)
+        files = scan_library(library_root, ignored_extensions=ignored_extensions)
     else:
         raw_targets = [path] if isinstance(path, str) else list(path)
         files = []
@@ -223,9 +259,10 @@ def ingest(
             if not target.is_absolute():
                 target = library_root / target
             if target.is_file():
-                files.append(target)
+                if target.suffix.lower() not in ignored_extensions:
+                    files.append(target)
             elif target.is_dir():
-                files.extend(scan_library(target))
+                files.extend(scan_library(target, ignored_extensions=ignored_extensions))
             else:
                 raise FileNotFoundError(f"Path does not exist: {target}")
         files = list(dict.fromkeys(files))

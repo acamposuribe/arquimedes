@@ -139,9 +139,17 @@ def _meta_list(value: Any) -> list[str]:
     return []
 
 
+def _open_project_notes(root: Path, project_id: str) -> list[dict]:
+    return [
+        note
+        for note in load_project_notes(project_id, root=root)
+        if str(note.get("status") or "open") == "open"
+    ]
+
+
 def _project_reflection_payload(root: Path, project_id: str, metas: list[dict]) -> dict:
     state = load_project_state(project_id, root=root)
-    notes = load_project_notes(project_id, root=root)
+    notes = _open_project_notes(root, project_id)
     sections = load_project_sections(project_id, root=root)
     return {
         "kind": "project_reflection",
@@ -194,6 +202,19 @@ def _notes_signature(notes: list[dict]) -> str:
     ])
 
 
+def _open_note_fingerprints(notes: list[dict]) -> dict[str, dict]:
+    return {
+        str(note.get("note_id") or ""): {
+            "kind": note.get("kind", ""),
+            "text": note.get("text", ""),
+            "source_refs": note.get("source_refs", []),
+            "material_id": note.get("material_id", ""),
+        }
+        for note in notes
+        if str(note.get("note_id") or "").strip()
+    }
+
+
 def _sections_signature(sections: dict[str, dict]) -> str:
     return canonical_hash({
         section_id: {
@@ -213,9 +234,11 @@ def _state_external_signature(state: dict) -> str:
     })
 
 
-def _evidence_signatures(root: Path, project_id: str) -> dict[str, str]:
+def _evidence_signatures(root: Path, project_id: str) -> dict[str, Any]:
+    open_notes = _open_project_notes(root, project_id)
     return {
-        "notes_signature": _notes_signature(load_project_notes(project_id, root=root)),
+        "notes_signature": _notes_signature(open_notes),
+        "open_note_fingerprints": _open_note_fingerprints(open_notes),
         "sections_signature": _sections_signature(load_project_sections(project_id, root=root)),
         "state_external_signature": _state_external_signature(load_project_state(project_id, root=root)),
     }
@@ -225,7 +248,16 @@ def _has_new_human_evidence(root: Path, project_id: str, existing_record: dict |
     if not existing_record:
         return True
     signatures = _evidence_signatures(root, project_id)
-    return any(existing_record.get(key) != value for key, value in signatures.items())
+    if existing_record.get("sections_signature") != signatures.get("sections_signature"):
+        return True
+    if existing_record.get("state_external_signature") != signatures.get("state_external_signature"):
+        return True
+    current_notes = signatures.get("open_note_fingerprints") or {}
+    previous_notes = existing_record.get("open_note_fingerprints") or {}
+    for note_id, fingerprint in current_notes.items():
+        if previous_notes.get(note_id) != fingerprint:
+            return True
+    return False
 
 
 def _project_reflection_prompt(evidence_paths: list[Path]) -> tuple[str, str]:
@@ -370,7 +402,7 @@ def _run_project_reflections_impl(
                     status = str(item.get("status") or "").strip()
                     if note_id and status in {"incorporated", "superseded"}:
                         set_project_note_status(project_id, note_id=note_id, status=status, actor="reflection", root=root)
-            project_open_notes = [n for n in load_project_notes(project_id, root=root) if str(n.get("status") or "") == "open"]
+            project_open_notes = _open_project_notes(root, project_id)
             if project_open_notes:
                 mark_project_notes_incorporated(project_id, actor="reflection", root=root)
 

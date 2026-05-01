@@ -171,22 +171,29 @@
       <details class="project-state-group" open>
         <summary>
           <span>{{ group.label }}</span>
-          <button class="project-inline-icon project-inline-icon--add" type="button" title="Añadir elemento" onclick="this.closest('details').querySelector('.project-state-add-item').hidden = !this.closest('details').querySelector('.project-state-add-item').hidden;">+</button>
+          <button class="project-inline-icon project-inline-icon--add" type="button" title="Añadir elemento" onclick="this.closest('details').querySelector('.project-state-add-item').hidden = false; this.closest('details').querySelector('.project-state-add-item textarea').focus();">+</button>
         </summary>
-        <form class="project-state-add-item" hidden method="post" action="/projects/{{ project_id }}/state/{{ group.field }}/add" data-confirm-message="¿Añadir este elemento a los datos estructurados del proyecto?" data-preserve-scroll="true">
-          <input type="hidden" name="actor" value="human">
-          <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-          <textarea name="text" placeholder="Nuevo elemento..."></textarea>
-          <button class="project-inline-add-submit" type="submit">Añadir</button>
-        </form>
         <div class="project-state-edit-list">
+          <form class="project-state-edit-item project-state-add-item" hidden method="post" action="/projects/{{ project_id }}/state/{{ group.field }}/add" data-confirm-message="¿Añadir este elemento a los datos estructurados del proyecto?" data-preserve-scroll="true">
+            <input type="hidden" name="actor" value="human">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <div class="project-inline-card-actions">
+              <button class="project-inline-icon project-inline-icon--save" type="submit" title="Guardar" aria-label="Guardar nuevo elemento">
+                <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 2.5h7l3 3V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 2.5h5v3H5z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 10.5h6" stroke="currentColor" stroke-width="1.3"/></svg>
+              </button>
+              <button class="project-inline-icon project-inline-icon--delete" type="button" title="Cancelar" aria-label="Cancelar" onclick="this.closest('form').hidden = true; this.closest('form').reset();">×</button>
+            </div>
+            <textarea name="text" placeholder="Nuevo elemento..."></textarea>
+          </form>
           {% for item in group['items'] %}
           <form class="project-state-edit-item" method="post" action="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/edit" data-confirm-message="¿Guardar este cambio en los datos estructurados del proyecto?" data-preserve-scroll="true">
             <input type="hidden" name="actor" value="human">
             <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
             <div class="project-inline-card-actions">
-              <button class="project-inline-icon" type="submit" title="Guardar">✓</button>
-              <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" formaction="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/delete" formnovalidate data-confirm-message="¿Eliminar este elemento de los datos estructurados del proyecto?" data-preserve-scroll="true">×</button>
+              <button class="project-inline-icon project-inline-icon--save" type="submit" title="Guardar" aria-label="Guardar cambios">
+                <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 2.5h7l3 3V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 2.5h5v3H5z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 10.5h6" stroke="currentColor" stroke-width="1.3"/></svg>
+              </button>
+              <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" aria-label="Eliminar elemento" formaction="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/delete" formnovalidate data-confirm-message="¿Eliminar este elemento de los datos estructurados del proyecto?" data-preserve-scroll="true">×</button>
             </div>
             <textarea name="text">{{ item.text }}</textarea>
           </form>
@@ -394,26 +401,9 @@
     <section class="panel project-notes-panel">
       <div class="project-notes-panel-header">
         <h2>Notas</h2>
-        <button class="project-inline-icon project-inline-icon--add" type="button" title="Añadir nota" onclick="this.closest('.project-notes-panel').querySelector('.project-note-add-form').hidden = !this.closest('.project-notes-panel').querySelector('.project-note-add-form').hidden;">+</button>
       </div>
-      <form class="project-note-add-form" hidden method="post" action="/projects/{{ project_id }}/notes/add" data-confirm-message="¿Añadir esta nota al proyecto?" data-preserve-scroll="true">
-        <input type="hidden" name="actor" value="human">
-        <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
-        <select name="kind">
-          <option value="decision">decision</option>
-          <option value="requirement">requirement</option>
-          <option value="risk">risk</option>
-          <option value="deadline">deadline</option>
-          <option value="coordination">coordination</option>
-          <option value="learning">learning</option>
-          <option value="mistake">mistake</option>
-          <option value="repair">repair</option>
-        </select>
-        <textarea name="text" placeholder="Nueva nota..."></textarea>
-        <button class="project-inline-add-submit" type="submit">Añadir</button>
-      </form>
-      {% if project_notes.open %}
       <div class="project-sticky-notes">
+        {% if project_notes.open %}
         {% for note in project_notes.open %}
         <form class="project-sticky-note project-sticky-note--{{ note.kind }}" method="post" action="/projects/{{ project_id }}/notes/{{ note.note_id }}/edit">
           <input type="hidden" name="actor" value="human">
@@ -424,13 +414,15 @@
           </div>
           <textarea name="text">{{ note.text }}</textarea>
           <div class="project-inline-card-actions">
-            <button class="project-inline-icon" type="submit" title="Guardar">✓</button>
-            <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>×</button>
+            <button class="project-inline-icon project-inline-icon--save" type="submit" title="Guardar" aria-label="Guardar cambios">
+              <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 2.5h7l3 3V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 2.5h5v3H5z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 10.5h6" stroke="currentColor" stroke-width="1.3"/></svg>
+            </button>
+            <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" aria-label="Eliminar nota" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>×</button>
           </div>
         </form>
         {% endfor %}
+        {% endif %}
       </div>
-      {% endif %}
       {% if project_notes.archived %}
       <details class="project-archived-notes">
         <summary>Notas archivadas ({{ project_notes.archived|length }})</summary>
@@ -445,8 +437,10 @@
             </div>
             <textarea name="text">{{ note.text }}</textarea>
             <div class="project-inline-card-actions">
-              <button class="project-inline-icon" type="submit" title="Guardar">✓</button>
-              <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>×</button>
+              <button class="project-inline-icon project-inline-icon--save" type="submit" title="Guardar" aria-label="Guardar cambios">
+                <svg aria-hidden="true" viewBox="0 0 16 16"><path d="M3 2.5h7l3 3V13a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 2.5h5v3H5z" fill="none" stroke="currentColor" stroke-width="1.3"/><path d="M5 10.5h6" stroke="currentColor" stroke-width="1.3"/></svg>
+              </button>
+              <button class="project-inline-icon project-inline-icon--delete" type="submit" title="Eliminar" aria-label="Eliminar nota" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>×</button>
             </div>
           </form>
           {% endfor %}

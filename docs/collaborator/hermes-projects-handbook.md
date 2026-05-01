@@ -4,6 +4,22 @@ Use this guide when you are helping maintain `Proyectos/` project dossiers.
 
 ## Project Identity
 
+Always start by listing the available Proyectos dossiers before guessing a project id.
+
+Get the full project list with either:
+
+```bash
+arq project list
+```
+
+or the domain-filtered overview:
+
+```bash
+arq overview --domain proyectos --human
+```
+
+Use `arq project list` when you just need the ids. Use `arq overview --domain proyectos` when you also want material counts.
+
 A Discord/project channel maps to a project when its name or context matches a folder under:
 
 ```text
@@ -34,6 +50,12 @@ Add a project note when a conversation records one of these:
 Prefer short, curated notes over dumping chat history. Do not duplicate a source material unless the conversation changes its interpretation, urgency, or priority.
 
 ## Commands
+
+List available projects:
+
+```bash
+arq project list
+```
 
 Read the current dossier:
 
@@ -82,6 +104,8 @@ Search within one project:
 ```bash
 arq project search <project-id> "licencia"
 ```
+
+If you do not yet know the exact project id, list projects first instead of searching the whole corpus blindly.
 
 Batch writes without recompiling every time:
 

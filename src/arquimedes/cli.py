@@ -1193,8 +1193,9 @@ def _format_annotations_human(rows: list[dict]) -> str:
 
 def _format_overview_human(overview: dict) -> str:
     c = overview["counts"]
+    scope = f" [{overview['domain_filter']}]" if overview.get("domain_filter") else ""
     lines = [
-        f"corpus at {overview['project_root']}",
+        f"corpus at {overview['project_root']}{scope}",
         f"  index: {'present' if overview['index_exists'] else 'missing'} ({overview['index_path']})",
         f"  counts: {c['materials']} materials, {c['chunks']} chunks, {c['figures']} figures, {c['annotations']} annotations, {c['wiki_pages']} wiki pages",
     ]
@@ -1325,15 +1326,16 @@ def annotations(material_id: str, page: int | None, kind: str | None, human: boo
 
 
 @cli.command()
+@click.option("--domain", type=click.Choice(["research", "practice", "proyectos"]), default=None, help="Optional domain filter.")
 @click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
-def overview(human: bool):
+def overview(domain: str | None, human: bool):
     """Corpus-wide snapshot: counts, collections, stamps. See docs/collaborator/agent-handbook.md."""
     from arquimedes.agent_cli import ensure_guard, emit
     from arquimedes import read as read_mod
 
     @ensure_guard
     def run():
-        emit(read_mod.build_corpus_overview(), human=human, human_formatter=_format_overview_human)
+        emit(read_mod.build_corpus_overview(domain=domain), human=human, human_formatter=_format_overview_human)
 
     run()
 
@@ -1972,6 +1974,27 @@ def _compile_after_project_write(no_recompile: bool) -> dict | None:
 def project_group():
     """Manage Proyectos project memory."""
     pass
+
+
+@project_group.command("list")
+@click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
+def project_list_cmd(human: bool):
+    """List available Proyectos project ids."""
+    from arquimedes import read as read_mod
+
+    overview = read_mod.build_corpus_overview(domain="proyectos")
+    projects = [
+        {
+            "project_id": item["collection"],
+            "material_count": item["material_count"],
+        }
+        for item in overview.get("collections") or []
+        if item.get("collection") and item.get("collection") != "_general"
+    ]
+    if human:
+        click.echo("\n".join(f"{item['project_id']}: {item['material_count']}" for item in projects))
+    else:
+        _echo_json({"projects": projects})
 
 
 @project_group.command("status")

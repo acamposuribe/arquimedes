@@ -567,23 +567,37 @@ def _count_one(sql: str, params: tuple = ()) -> int:
     return int(value or 0)
 
 
-def build_corpus_overview() -> dict:
+def build_corpus_overview(*, domain: str | None = None) -> dict:
     """Live snapshot of corpus counts and freshness stamps."""
     project_root = get_project_root()
     derived_dir = project_root / "derived"
     index_path = get_index_path()
 
-    counts = {
-        "materials": _count_one("SELECT COUNT(*) FROM materials"),
-        "chunks": _count_one("SELECT COUNT(*) FROM chunks"),
-        "figures": _count_one("SELECT COUNT(*) FROM figures"),
-        "annotations": _count_one("SELECT COUNT(*) FROM annotations"),
-        "wiki_pages": _count_one("SELECT COUNT(*) FROM wiki_pages"),
-    }
+    domain = str(domain or "").strip()
+    if domain:
+        counts = {
+            "materials": _count_one("SELECT COUNT(*) FROM materials WHERE domain = ?", (domain,)),
+            "chunks": _count_one("SELECT COUNT(*) FROM chunks WHERE material_id IN (SELECT material_id FROM materials WHERE domain = ?)", (domain,)),
+            "figures": _count_one("SELECT COUNT(*) FROM figures WHERE material_id IN (SELECT material_id FROM materials WHERE domain = ?)", (domain,)),
+            "annotations": _count_one("SELECT COUNT(*) FROM annotations WHERE material_id IN (SELECT material_id FROM materials WHERE domain = ?)", (domain,)),
+            "wiki_pages": _count_one("SELECT COUNT(*) FROM wiki_pages WHERE domain = ?", (domain,)),
+        }
+    else:
+        counts = {
+            "materials": _count_one("SELECT COUNT(*) FROM materials"),
+            "chunks": _count_one("SELECT COUNT(*) FROM chunks"),
+            "figures": _count_one("SELECT COUNT(*) FROM figures"),
+            "annotations": _count_one("SELECT COUNT(*) FROM annotations"),
+            "wiki_pages": _count_one("SELECT COUNT(*) FROM wiki_pages"),
+        }
+    params: tuple[object, ...] = ()
+    sql = "SELECT domain, collection, COUNT(*) AS c FROM materials"
+    if domain:
+        sql += " WHERE domain = ?"
+        params = (domain,)
+    sql += " GROUP BY domain, collection ORDER BY domain, collection"
     try:
-        domain_rows = _index_rows(
-            "SELECT domain, collection, COUNT(*) AS c FROM materials GROUP BY domain, collection ORDER BY domain, collection"
-        )
+        domain_rows = _index_rows(sql, params)
     except sqlite3.OperationalError:
         domain_rows = []
     collections = [
@@ -618,5 +632,6 @@ def build_corpus_overview() -> dict:
         "index_exists": index_path.exists(),
         "counts": counts,
         "collections": collections,
+        "domain_filter": domain or None,
         "stamps": stamps,
     }

@@ -317,11 +317,6 @@
       </dl>
     </section>
     {% endif %}
-    {% if project_notes_html %}
-    <section class="panel project-notes-panel">
-      {{ project_notes_html }}
-    </section>
-    {% endif %}
     {% if page_search %}
     <section class="panel">
       <h2>{{ page_search.label }}</h2>
@@ -351,6 +346,12 @@
         </div>
         <input name="depth" type="hidden" value="3">
       </form>
+    </section>
+    {% endif %}
+
+    {% if project_notes_html %}
+    <section class="panel project-notes-panel">
+      {{ project_notes_html }}
     </section>
     {% endif %}
 

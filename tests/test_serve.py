@@ -719,6 +719,7 @@ def test_proyectos_material_page_surfaces_project_extraction(tmp_path, monkeypat
         "domain": "proyectos",
         "collection": "2511-gandia",
         "year": "2026",
+        "authors": ["Alejandro Campos"],
         "project_extraction": {
             "project_material_type": "meeting_report",
             "project_relevance": "Registra acuerdos y próximos pasos del expediente.",
@@ -757,9 +758,13 @@ def test_proyectos_material_page_surfaces_project_extraction(tmp_path, monkeypat
     assert "Tipo" in response.text
     assert "Proyecto" in response.text
     assert "2511-gandia" in response.text
+    assert "Autor" in response.text
+    assert "Alejandro Campos" in response.text
     assert "Lectura de proyecto" not in response.text
     assert "Resumen duplicado." not in response.text
+    assert "Cuerpo del acta." not in response.text
     assert "Páginas" not in response.text
+    assert response.text.index("Metadatos") < response.text.index("Buscar en este material")
     assert "Registra acuerdos y próximos pasos del expediente." in response.text
     assert "Puntos principales" in response.text
     assert "Se revisa el estado de licencia." in response.text

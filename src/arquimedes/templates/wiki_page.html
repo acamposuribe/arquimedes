@@ -109,16 +109,6 @@
       {% if project_extraction.relevance %}
       <p class="project-extraction-relevance">{{ project_extraction.relevance }}</p>
       {% endif %}
-      {% if project_extraction.metadata %}
-      <dl class="project-extraction-meta">
-        {% for item in project_extraction.metadata %}
-        <div>
-          <dt>{{ item.label }}</dt>
-          <dd>{{ item.value }}</dd>
-        </div>
-        {% endfor %}
-      </dl>
-      {% endif %}
       {% if project_extraction.groups %}
       <div class="project-extraction-grid">
         {% for group in project_extraction.groups %}
@@ -135,13 +125,7 @@
       {% endif %}
     </section>
     {% endif %}
-    {% if project_extraction %}
-    {% if content_html %}
-    <section class="project-page-block">
-      {{ content_html }}
-    </section>
-    {% endif %}
-    {% else %}
+    {% if not project_extraction %}
     {{ content_html }}
     {% endif %}
     {% if project_material_groups %}
@@ -207,7 +191,7 @@
     {{ collection_after_html }}
     {% endif %}
     {% if material_figures %}
-    <section class="material-gallery">
+    <section class="material-gallery{% if project_extraction %} project-page-block{% endif %}">
       <h2>{{ ui_label('figures', active_domain, 'Figures') }}</h2>
       <div class="figure-grid">
         {% for item in material_figures %}
@@ -250,6 +234,19 @@
   </article>
 
   <aside class="wiki-aside">
+    {% if project_extraction and project_extraction.metadata %}
+    <section class="panel project-metadata-panel">
+      <h2>Metadatos</h2>
+      <dl class="project-sidebar-meta">
+        {% for item in project_extraction.metadata %}
+        <div>
+          <dt>{{ item.label }}</dt>
+          <dd>{{ item.value }}</dd>
+        </div>
+        {% endfor %}
+      </dl>
+    </section>
+    {% endif %}
     {% if page_search %}
     <section class="panel">
       <h2>{{ page_search.label }}</h2>
@@ -282,7 +279,7 @@
     </section>
     {% endif %}
 
-    {% if collection_url %}
+    {% if collection_url and not project_extraction %}
     <section class="panel">
       <h2>{{ ui_label('collection', active_domain, 'Collection') }}</h2>
       <a href="{{ collection_url }}">{{ collection_label }}</a>

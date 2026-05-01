@@ -817,36 +817,6 @@ img { max-width: 100%; display: block; }
   line-height: 1.55;
 }
 
-.project-extraction-meta {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.45rem 1rem;
-  margin: 0 0 0.9rem;
-  padding-top: 0.75rem;
-  border-top: 1px solid var(--line);
-}
-
-.project-extraction-meta div {
-  display: flex;
-  gap: 0.35rem;
-  align-items: baseline;
-}
-
-.project-extraction-meta dt {
-  color: var(--muted);
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.project-extraction-meta dd {
-  margin: 0;
-  color: var(--ink);
-  font-size: 0.9rem;
-}
-
 .project-extraction-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -910,6 +880,40 @@ img { max-width: 100%; display: block; }
 .wiki-aside .panel .meta-line {
   display: block;
   margin-top: 0.2rem;
+}
+
+.project-sidebar-meta {
+  margin: 0;
+}
+
+.project-sidebar-meta div {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.project-sidebar-meta div:first-child {
+  padding-top: 0;
+}
+
+.project-sidebar-meta div:last-child {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.project-sidebar-meta dt {
+  margin-bottom: 0.12rem;
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.project-sidebar-meta dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.86rem;
+  line-height: 1.45;
 }
 
 /* Action links in sidebar */

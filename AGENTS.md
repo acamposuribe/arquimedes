@@ -1,7 +1,5 @@
 # Arquimedes — Claude Code Instructions
 
-> If you are an agent **investigating** the knowledge base (answering questions about its contents), stop here and read [docs/collaborator/agent-handbook.md](docs/collaborator/agent-handbook.md) instead. This file is for agents **modifying the Arquimedes code itself**.
-
 ## Approach
 - Think before acting. Read existing files before writing code.
 - Be concise in output but thorough in reasoning.

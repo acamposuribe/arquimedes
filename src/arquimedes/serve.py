@@ -432,7 +432,13 @@ def _project_extraction_context(meta: dict) -> dict | None:
     relevance = _plain(project_extraction.get("project_relevance"))
     material_type = _plain(project_extraction.get("project_material_type"))
     material_type_label = _PROJECT_MATERIAL_TYPE_LABELS.get(material_type, material_type.replace("_", " ") if material_type else "")
+    authors = meta.get("authors") or []
+    if isinstance(authors, list):
+        author_text = ", ".join(str(author).strip() for author in authors if str(author).strip())
+    else:
+        author_text = str(authors or "").strip()
     metadata = [
+        {"label": "Autor", "value": author_text},
         {"label": "Año", "value": str(meta.get("year") or "").strip()},
         {"label": "Tipo", "value": material_type_label},
         {"label": "Proyecto", "value": str(meta.get("collection") or "").strip()},

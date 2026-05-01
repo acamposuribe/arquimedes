@@ -187,9 +187,7 @@ def test_refresh_delegates_to_update_workspace(repo, monkeypatch):
     import arquimedes.freshness as freshness_mod
 
     status = {
-        "repo_applicable": True,
-        "pull_attempted": False,
-        "pull_result": "clean",
+        "compiled_at": "2026-05-02T10:00:00+00:00",
         "index_rebuilt": False,
         "memory_rebuilt": False,
     }
@@ -201,4 +199,4 @@ def test_refresh_delegates_to_update_workspace(repo, monkeypatch):
 
     result_human = CliRunner().invoke(cli, ["refresh", "--human"])
     assert result_human.exit_code == 0
-    assert "pull_result" in result_human.output
+    assert "compiled_at" in result_human.output

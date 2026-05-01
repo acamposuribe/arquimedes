@@ -1,7 +1,7 @@
 # Arquimedes — Implementation Plan
 
-> **Status:** Phases 1-7 complete (Phase 7 agent tools landed 2026-04-16); Collection Graph implemented; Phase 8 web UI in progress; Phase 9 server agent + sync implemented in code/tests (2026-04-25); macOS launchd end-to-end install remains operator verification; Practice domain Phase 1 prompting/reflection customization is implemented in code/tests; Proyectos domain design is drafted for discussion
-> **Last updated:** 2026-04-30
+> **Status:** Phases 1-7 complete (Phase 7 agent tools landed 2026-04-16); Collection Graph implemented; Phase 8 web UI in progress; Phase 9 server agent (publication side) implemented and operator-verified; the original collaborator-side `arq sync` was retired when the architecture shifted to a maintainer-only vault accessed by collaborators through the remote MCP server (2026-05-02); Practice domain Phase 1 prompting/reflection customization is implemented in code/tests; Proyectos domain phases 0-6 implemented; Proyectos office-learning (Phase 7) outstanding
+> **Last updated:** 2026-05-02
 > **Spec:** [Full design spec](superpowers/specs/2026-04-04-arquimedes-knowledge-system-design.md)
 > **Phase 3 spec:** [Enrichment design](superpowers/completed/specs/2026-04-04-phase3-enrichment-design.md)
 > **Phase 4 spec:** [Search index design](superpowers/completed/specs/2026-04-04-phase4-search-index-design.md)
@@ -28,7 +28,7 @@
 
 Building a collaborative LLM knowledge base for architecture practice and research.
 
-Raw materials live in a shared iCloud folder. The repo contains extracted artifacts, wiki, indexes, and tools. A server agent (Mac Mini) auto-ingests new materials. Collaborators search via web UI or their own agents.
+Raw materials live in a shared iCloud folder. The repo contains extracted artifacts, wiki, indexes, and tools, and lives only on the maintainer machine (with a private remote as cold-storage backup). A server agent (Mac Mini) auto-ingests new materials. Collaborators search via the maintainer's remote MCP server, or via the LAN-only read-only web UI.
 
 The long-term operating model is an LLM-maintained wiki. In Arquimedes, the future **server agent** is that maintainer: it will ingest new sources, enrich them, compile/update wiki pages, run health checks, and keep indexes current. This role is assembled across multiple phases:
 - **Phases 5-6** define what the maintainer actually does (compile and lint the wiki)
@@ -210,21 +210,21 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 - [x] FastAPI + Jinja2 server (`arq serve`)
 - [x] Browse wiki tree, search with facets, view material pages
 - [x] Figure gallery, links to original iCloud files
-- [x] Freshness UX: collaborator-facing update path before search (auto-check on app open / first search in session and explicit Update button), followed by `arq index ensure`
+- [x] Freshness UX: lightweight last-compiled indicator. (Earlier collaborator-facing update path retired with the architecture shift to maintainer-only vault — see Phase 9.)
 
-## Phase 9: Server Agent + Sync
+## Phase 9: Server Agent
+
+> Architecture note: the original Phase 9 split into a maintainer-side `arq watch` (publication) and collaborator-side `arq sync` (auto-pull + ensure). The vault now lives only on the maintainer machine — collaborators reach the corpus through the remote MCP server — so `arq sync`, `freshness.update_workspace()`'s git fetch/reset/clean path, and the sync launchd job have been removed. Maintainer continues to commit + push as a cold-storage backup.
 
 - [x] Introduce a dedicated maintainer instruction file for the server agent (operational schema, not build-system docs): `docs/maintainer/MAINTAINER.md`
 - [x] `arq watch` — 30-minute scan daemon for ingest/extract/index/compile publication
 - [x] Single commit per scan cycle when changes are detected
-- [x] `arq sync` — auto-sync daemon for collaborators with `arq index ensure` after canonical reset, so local search and memory are always current before use
-- [x] `arq sync` inherits the memory bridge automatically via `arq index ensure` → `arq memory ensure`
 - [x] `arq lint --quick` after each compile, `arq lint --full` daily at 02:00 via `arq lint --install-full`
-- [x] launchd integration for watch, sync, and lint-full plist installation/status/uninstall
+- [x] launchd integration for watch and lint-full plist installation/status/uninstall
 - [x] Auto-commit + push pipeline
 - [x] Always-on maintainer flow: ingest → extract → index rebuild → compile → commit/push; reflective `global-bridge` remains nightly full-lint only
 - [x] **Material removal cascade**: when a raw file is deleted from iCloud, the watcher removes manifest entries, extracted artifacts, wiki pages, and concept cluster references before rebuild/compile/index publication
-- [ ] Operator verification on the actual macOS maintainer machine: install launchd jobs, run a real iCloud add/update/delete cycle, and confirm push/sync behavior against a separate collaborator clone
+- [x] Operator verification on the actual macOS maintainer machine
 
 ---
 
@@ -246,12 +246,11 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 | `src/arquimedes/search.py` | Search interface (card → chunk → deep) |
 | `src/arquimedes/read.py` | Deterministic read helpers for wiki/material/figure/chunk/page/annotation/overview accessors |
 | `src/arquimedes/agent_cli.py` | Shared helpers for agent-facing commands: freshness guard, JSON/human dispatch, error formatting |
-| `src/arquimedes/freshness.py` | Collaborator refresh path: fetch/reset/clean + `ensure_index_and_memory()` |
+| `src/arquimedes/freshness.py` | Last-compiled-at indicator + `ensure_index_and_memory()` |
 | `src/arquimedes/compile.py` | Wiki generation |
 | `src/arquimedes/lint_global_bridge.py` | Step 2 global bridge artifact generation from local clusters |
 | `src/arquimedes/serve.py` | Web UI (FastAPI) |
 | `src/arquimedes/watch.py` | Scheduled scan daemon for publication batches |
-| `src/arquimedes/sync.py` | Auto-sync daemon + index ensure |
 | `src/arquimedes/removal.py` | Material removal cascade for deleted library files |
 | `src/arquimedes/launchd.py` | macOS launchd plist rendering/install/status helpers |
 | `config/config.yaml` | Shared default configuration |
@@ -266,11 +265,9 @@ Collaborator-facing agent surface. CLI + handbook only (no MCP). Teach any shell
 - [ ] Deep search: `arq search --deep "thermal mass"` → multi-layer drill to chunk text
 - [ ] Compile: `arq compile` → wiki pages with links and cross-references, plus memory bridge rebuilt
 - [x] Watch unit behavior: scanner/planner detects add/modify/move/delete and empty cycles
-- [x] Sync unit behavior: `arq sync` fetches, resets, cleans, and runs index/memory ensure
 - [x] Launchd plist rendering: watch interval and lint-full calendar plist payloads render correctly
 - [x] Removal cascade unit behavior: manifest, extracted artifacts, wiki page, and cluster refs are removed idempotently
-- [ ] Watch operator verification: `arq watch` + real iCloud file → next scan runs auto-pipeline with one batch commit and push
-- [ ] Sync operator verification: second device `arq sync` → fetch/reset/clean + `arq index ensure` auto-rebuilds local index and local memory bridge
+- [x] Watch operator verification: `arq watch` + real iCloud file → next scan runs auto-pipeline with one batch commit and push
 - [ ] Web UI: `arq serve` → browse, search, view materials, open figures
 - [x] Agent CLI: `arq read <id>` returns a card with `wiki_path`; `--chunk`, `--page`, `--full`, `--detail` drill layers behave per spec
 - [x] Agent CLI: `arq figures <id>`, `arq annotations <id>`, `arq overview`, `arq refresh` return documented JSON shapes and respect `--human`

@@ -28,8 +28,6 @@ The maintainer machine is the only semantic publisher and the only host of the p
 
 Collaborators do not clone the vault. Their only contact with the system is the remote MCP, gated by Cloudflare Access.
 
-(The collaborator-clone path — destructive `git fetch && git reset --hard && git clean -fd` triggered by the presence of `config/collaborator/config.local.yaml` — is legacy code still present in `freshness.py` for backwards compatibility and will be retired.)
-
 ## Cadence
 
 - Every 30 minutes: `arq watch --once` scans the shared library and publishes one batch if anything changed.
@@ -494,7 +492,6 @@ If a deletion cascade needs undoing, revert the removal commit. The next scan re
 ## Logs
 
 - `~/.arquimedes/watch.log` records scheduled scan outcomes.
-- `~/.arquimedes/sync.log` records sync outcomes when sync is used.
 - `<local-cache-root>/logs/` contains per-stage and per-batch run details (defaults to `<vault-root>/logs/` unless `ARQUIMEDES_LOCAL_CACHE` or `local_cache_root` is set).
 
 ## Multi-vault on one human

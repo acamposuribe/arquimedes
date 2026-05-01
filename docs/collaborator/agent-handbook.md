@@ -12,7 +12,7 @@ Tool groups:
 - `search`: find materials, passages, figures, annotations, clusters, and bridges
 - `read`, `figures`, `annotations`: drill into one material
 - `related`, `material_clusters`, `collection_clusters`, `concepts`, `materials_for_collection`, `materials_for_concept`, `list_wiki_dir`, `wiki_page_record`: traverse outward from one hit
-- `refresh`: explicit freshness when you need the latest collaborator state
+- `refresh`: explicit freshness when you need the latest maintainer state
 
 Prefer the smallest tool that answers the question.
 

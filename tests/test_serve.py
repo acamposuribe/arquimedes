@@ -594,13 +594,11 @@ def test_search_route_renders_collection_and_concept_sections(tmp_path, monkeypa
     assert "Archival Habitat Cluster" in response.text
 
 
-def test_update_and_freshness_endpoints(tmp_path, monkeypatch):
+def test_freshness_endpoint(tmp_path, monkeypatch):
     _repo(tmp_path, monkeypatch)
-    monkeypatch.setattr(serve_mod.freshness_mod, "workspace_freshness_status", lambda: {"message": "Up to date"})
-    monkeypatch.setattr(serve_mod.freshness_mod, "update_workspace", lambda: {"message": "Updated", "pull_result": "ok"})
+    monkeypatch.setattr(serve_mod.freshness_mod, "workspace_freshness_status", lambda: {"message": "Up to date", "compiled_at": "2026-05-02T10:00:00+00:00"})
     client = TestClient(serve_mod.create_app())
     assert client.get("/api/freshness").json()["message"] == "Up to date"
-    assert client.post("/update").json()["message"] == "Updated"
 
 
 def test_public_exposure_unregisters_mutating_routes(tmp_path, monkeypatch):
@@ -608,7 +606,6 @@ def test_public_exposure_unregisters_mutating_routes(tmp_path, monkeypatch):
     config = {"serve": {"public_exposure": True, "allowed_hosts": ["vault.example.com"]}}
     client = TestClient(serve_mod.create_app(config), base_url="http://vault.example.com")
     assert client.get("/api/freshness").status_code == 404
-    assert client.post("/update").status_code == 404
     assert client.get("/health").json() == {"ok": True}
 
 

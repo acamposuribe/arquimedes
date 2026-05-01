@@ -16,9 +16,7 @@ def test_ensure_guard_calls_ensure_when_env_unset(monkeypatch):
     def fake_refresh():
         calls["n"] += 1
         return {
-            "repo_applicable": True,
-            "pull_attempted": True,
-            "pull_result": "ok",
+            "compiled_at": "2026-05-02T10:00:00+00:00",
             "index_rebuilt": False,
             "memory_rebuilt": False,
         }

@@ -61,8 +61,7 @@
     <main class="page">
       {% if not public_exposure %}
       <div class="freshness-banner" id="freshness-banner">
-        <span id="freshness-text">Checking workspace…</span>
-        <button data-update-url="/update" type="button">Update</button>
+        <span id="freshness-text"></span>
       </div>
       {% endif %}
       {% block content %}{% endblock %}

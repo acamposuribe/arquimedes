@@ -16,42 +16,22 @@ const confirmModalCancel = document.getElementById("confirm-modal-cancel");
 
 function setBanner(data) {
   if (!banner || !data) return;
-  const dirty = data.repo_dirty;
-  const pullFailed = data.pull_result === "error";
-  const state = pullFailed ? "error" : dirty ? "warning" : "ok";
-  banner.dataset.state = state;
-  if (bannerText) bannerText.textContent = data.message || "Workspace status unavailable.";
-  // Hide banner after a moment if everything is fine
-  if (state === "ok") {
-    setTimeout(() => { banner.style.display = "none"; }, 2500);
-  }
+  banner.dataset.state = data.compiled_at ? "ok" : "warning";
+  if (bannerText) bannerText.textContent = data.message || "";
 }
 
-async function fetchFreshness(url, options = {}) {
+async function fetchFreshness(url) {
   try {
-    const response = await fetch(url, {headers: {"Accept": "application/json"}, ...options});
+    const response = await fetch(url, {headers: {"Accept": "application/json"}});
     setBanner(await response.json());
   } catch (_) {
-    if (bannerText) bannerText.textContent = "Workspace status unavailable.";
+    if (bannerText) bannerText.textContent = "Freshness status unavailable.";
     if (banner) banner.dataset.state = "error";
   }
 }
 
 if (banner) {
-  const button = banner.querySelector("button");
-  if (button) {
-    button.addEventListener("click", () => {
-      if (bannerText) bannerText.textContent = "Updating…";
-      fetchFreshness(button.dataset.updateUrl, {method: "POST"});
-    });
-  }
-  if (!sessionStorage.getItem("arquimedes-freshness-checked")) {
-    sessionStorage.setItem("arquimedes-freshness-checked", "1");
-    fetchFreshness("/api/freshness");
-  } else {
-    // Already checked this session — hide banner immediately
-    banner.style.display = "none";
-  }
+  fetchFreshness("/api/freshness");
 }
 
 // ── Confirm modal + scroll restore ───────────────

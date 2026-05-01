@@ -20,20 +20,20 @@ The SQLite index is the operational semantic memory for agents and tools.
 
 ### Collaborators
 
-Collaborators contribute by adding files to the shared library root folder.
+Collaborators contribute by adding files to the shared library root folder. They do not clone the vault — they consume the corpus through the maintainer's remote MCP server (see `docs/collaborator/agent-handbook.md`).
 
 They do **not**:
 - run `arq cluster`
 - run `arq compile`
 - republish semantic structure
+- hold a local copy of the vault repo
 
 They may:
 - drop files into the shared library root
-- run `arq refresh`
-- run `arq index ensure` when explicitly verifying local readiness
-- search the system via CLI, web UI, or their own agents
+- query the corpus via the remote `arq-mcp` server from their agent client
+- browse the read-only web UI on the maintainer's LAN
 
-In practice, collaborator search runs the freshness path first: restore the canonical repo state, then ensure the local SQLite index and memory bridge. This step is deterministic and LLM-free.
+The `refresh` MCP tool ensures the maintainer's index + memory bridge are current before serving a query. There is no inbound pull on collaborator devices.
 
 ### Server maintainer
 
@@ -116,8 +116,8 @@ When a collaborator adds a file to the shared library root:
 - No LLM
 
 8. **Commit and push**
-- The server commits the updated semantic publication
-- Collaborators receive it on pull
+- The server commits the updated semantic publication and pushes to the private remote (cold-storage backup)
+- The vault lives only on the maintainer machine; collaborators do not pull
 - No LLM
 
 ## LLM vs Deterministic Steps
@@ -139,25 +139,6 @@ When a collaborator adds a file to the shared library root:
 - `arq index ensure`
 - `arq memory ensure`
 
-## Collaborator Recovery Pipeline
-
-After collaborators sync the repo:
-
-1. `git fetch && git reset --hard @{upstream} && git clean -fd`
-2. `arq index ensure`
-
-`arq index ensure` also ensures the local memory bridge is current.
-
-Operationally, this is not optional before collaborator search after new pulls. It is the lazy deterministic readiness step that guarantees the local query layer matches the latest published repo state.
-
-That means collaborators regain:
-- full search index
-- collection-local clusters
-- related-material graph
-- wiki page identities in SQLite
-
-without any LLM access and without re-running clustering or compile.
-
 ## Current Publication Rule
 
 Semantic publication belongs only to the server-maintainer path.
@@ -169,10 +150,6 @@ Daytime publication:
 Nightly maintenance:
 
 `lint --full (including global-bridge) -> compile / memory refresh as needed -> commit/push`
-
-Collaborators only rebuild deterministic local projections:
-
-`pull -> index ensure`
 
 ## Mental Model
 

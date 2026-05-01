@@ -1146,10 +1146,6 @@ def create_app(config: dict | None = None) -> FastAPI:
         def freshness():
             return JSONResponse(freshness_mod.workspace_freshness_status())
 
-        @app.post("/update")
-        def update():
-            return JSONResponse(freshness_mod.update_workspace())
-
     @app.post("/projects/{project_id}/notes/{note_id}/edit")
     def edit_project_note(project_id: str, note_id: str, text: str = Form(...), actor: str = Form("human"), return_to: str = Form("/")):
         project_state_mod.update_project_note(project_id, note_id=note_id, text=text, actor=actor, root=read_mod.get_project_root())

@@ -1343,18 +1343,14 @@ def overview(domain: str | None, human: bool):
 @cli.command()
 @click.option("--human", is_flag=True, help="Pretty-printed output (default: JSON).")
 def refresh(human: bool):
-    """Pull (if applicable) and ensure the index + memory are current."""
+    """Ensure the index + memory are current with the latest compile."""
     from arquimedes.freshness import update_workspace
 
     def _format_refresh_human(status: dict) -> str:
         lines = [
-            f"repo_applicable: {status.get('repo_applicable')}",
-            f"pull_attempted:  {status.get('pull_attempted')}",
-            f"pull_result:     {status.get('pull_result')}",
-            f"reset_result:    {status.get('reset_result')}",
-            f"clean_result:    {status.get('clean_result')}",
-            f"index_rebuilt:   {status.get('index_rebuilt')}",
-            f"memory_rebuilt:  {status.get('memory_rebuilt')}",
+            f"compiled_at:    {status.get('compiled_at')}",
+            f"index_rebuilt:  {status.get('index_rebuilt')}",
+            f"memory_rebuilt: {status.get('memory_rebuilt')}",
         ]
         return "\n".join(lines)
 
@@ -1730,51 +1726,6 @@ def memory_ensure_cmd():
         click.echo("Memory bridge rebuilt → indexes/search.sqlite")
     else:
         click.echo("Memory bridge is current.")
-
-
-@cli.command()
-@click.option("--install", is_flag=True, help="Install launchd service for auto-sync.")
-@click.option("--uninstall", is_flag=True, help="Uninstall launchd service for auto-sync.")
-@click.option("--status", "show_status", is_flag=True, help="Show launchd service status.")
-@click.option("--once", is_flag=True, help="Run one sync cycle and exit.")
-def sync(install: bool, uninstall: bool, show_status: bool, once: bool):
-    """Run collaborator auto-sync and local ensure."""
-    label = "com.arquimedes.sync"
-    if install or uninstall or show_status:
-        from arquimedes.config import get_project_root, load_config
-        from arquimedes.launchd import install as install_plist, render_plist, status as launchd_status, uninstall as uninstall_plist
-
-        try:
-            if uninstall:
-                click.echo(json.dumps(uninstall_plist(label), indent=2))
-                return
-            if show_status:
-                click.echo(json.dumps(launchd_status(label), indent=2))
-                return
-            config = load_config()
-            interval = int(config.get("sync", {}).get("pull_interval", 300) or 300)
-            plist = render_plist(
-                label,
-                _arq_program_args("sync", "--once"),
-                working_directory=str(get_project_root()),
-                start_interval=interval,
-                run_at_load=True,
-            )
-            click.echo(json.dumps(install_plist(label, plist), indent=2))
-            return
-        except RuntimeError as e:
-            raise click.ClickException(str(e))
-
-    from arquimedes.sync import SyncDaemon
-
-    daemon = SyncDaemon()
-    try:
-        if once:
-            click.echo(json.dumps(daemon.run_once(), ensure_ascii=False, indent=2))
-        else:
-            daemon.start()
-    except RuntimeError as e:
-        raise click.ClickException(str(e))
 
 
 @cli.command()

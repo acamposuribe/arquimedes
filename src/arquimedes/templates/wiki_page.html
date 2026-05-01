@@ -97,7 +97,29 @@
       {% endif %}
     </section>
     {% endif %}
-    {% if project_primary_image %}
+    {% set project_visual_first = project_extraction and project_extraction.material_type_key in ['drawing_set', 'site_photo'] %}
+    {% if project_visual_first and material_figures %}
+    <section class="material-gallery project-page-block project-visual-block">
+      <div class="figure-grid">
+        {% for item in material_figures %}
+        <figure class="figure-card">
+          <button class="figure-zoom"
+            data-zoom-alt="{{ item.figure_id }}"
+            data-zoom-caption="{{ item.caption_text }}"
+            data-zoom-description="{{ item.description_text }}"
+            data-zoom-group="figures"
+            data-zoom-meta="{% if item.source_page %}p. {{ item.source_page }}{% endif %}{% if item.visual_type_text %}{% if item.source_page %} · {% endif %}{{ item.visual_type_text }}{% endif %}"
+            data-zoom-src="{{ item.zoom_url }}"
+            data-zoom-title="{{ item.figure_id }}"
+            title="{{ item.figure_id }}"
+            type="button">
+            <img alt="{{ item.figure_id }}" loading="lazy" src="{{ item.image_url }}">
+          </button>
+        </figure>
+        {% endfor %}
+      </div>
+    </section>
+    {% elif project_primary_image %}
     <section class="project-primary-image-block">
       <a href="{{ project_primary_image.zoom_url }}">
         <img alt="{{ project_primary_image.title }}" src="{{ project_primary_image.image_url }}">
@@ -136,6 +158,16 @@
     {% if not project_extraction %}
     {% if project_collection %}
     <section class="project-page-block project-overview-block">
+      {% if project_phase_timeline %}
+      <div class="project-phase-timeline" aria-label="Fase del proyecto">
+        {% for step in project_phase_timeline.steps %}
+        <div class="project-phase-step project-phase-step--{{ step.state }}">
+          <span class="project-phase-dot"></span>
+          <span class="project-phase-label">{{ step.label }}</span>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
       {{ content_html }}
     </section>
     {% else %}
@@ -238,9 +270,9 @@
     {% if collection_after_html %}
     {{ collection_after_html }}
     {% endif %}
-    {% if material_figures %}
+    {% if material_figures and not project_visual_first %}
     <section class="material-gallery{% if project_extraction %} project-page-block{% endif %}">
-      <h2>{{ ui_label('figures', active_domain, 'Figures') }}</h2>
+      {% if not project_extraction %}<h2>{{ ui_label('figures', active_domain, 'Figures') }}</h2>{% endif %}
       <div class="figure-grid">
         {% for item in material_figures %}
         <figure class="figure-card">

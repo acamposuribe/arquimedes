@@ -566,6 +566,61 @@ img { max-width: 100%; display: block; }
 
 .project-overview-block h1 { margin-top: 0; }
 
+.project-phase-timeline {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 0;
+  margin: 0 0 1rem;
+  padding: 0.25rem 0 0.75rem;
+}
+.project-phase-step {
+  position: relative;
+  display: grid;
+  justify-items: center;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-align: center;
+  text-transform: uppercase;
+}
+.project-phase-step::before {
+  content: "";
+  position: absolute;
+  top: 0.42rem;
+  left: 0;
+  right: 0;
+  height: 2px;
+  background: var(--line);
+  z-index: 0;
+}
+.project-phase-step:first-child::before { left: 50%; }
+.project-phase-step:last-child::before { right: 50%; }
+.project-phase-dot {
+  position: relative;
+  z-index: 1;
+  width: 0.85rem;
+  height: 0.85rem;
+  border: 2px solid var(--line);
+  border-radius: 50%;
+  background: var(--panel);
+}
+.project-phase-step--done::before,
+.project-phase-step--active::before { background: var(--accent); }
+.project-phase-step--done .project-phase-dot,
+.project-phase-step--active .project-phase-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+.project-phase-step--active {
+  color: var(--ink);
+}
+.project-phase-step--active .project-phase-dot {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
 .project-state-block {
   border-left: 3px solid var(--accent);
 }
@@ -1640,7 +1695,12 @@ body.lightbox-open { overflow: hidden; }
 
   .home-grid,
   .home-recent-materials-grid,
-  .project-state-block { grid-template-columns: 1fr; }
+  .project-state-block,
+  .project-phase-timeline { grid-template-columns: 1fr; }
+  .project-phase-step { justify-items: start; grid-template-columns: auto 1fr; text-align: left; }
+  .project-phase-step::before { left: 0.38rem; right: auto; top: 0; bottom: 0; width: 2px; height: auto; }
+  .project-phase-step:first-child::before { left: 0.38rem; top: 0.42rem; }
+  .project-phase-step:last-child::before { right: auto; bottom: calc(100% - 0.42rem); }
   .project-card-grid,
   .project-state-grid,
   .project-extraction-grid {
@@ -1711,7 +1771,7 @@ body.lightbox-open { overflow: hidden; }
 .project-material-tile {
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 1 / 1.16;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -1721,11 +1781,12 @@ body.lightbox-open { overflow: hidden; }
 }
 .project-material-tile img {
   width: 100%;
-  height: 100%;
+  aspect-ratio: 1 / 1;
+  height: auto;
   min-height: 0;
-  object-fit: contain;
+  align-self: start;
+  object-fit: cover;
   display: block;
-  padding-bottom: 0.08rem;
 }
 .project-material-tile-title {
   overflow: hidden;

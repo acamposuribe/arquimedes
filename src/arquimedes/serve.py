@@ -454,6 +454,7 @@ def _project_extraction_context(meta: dict) -> dict | None:
     return {
         "title": str(meta.get("title") or meta.get("material_id") or "").strip(),
         "material_type": material_type_label,
+        "material_type_key": material_type,
         "metadata": metadata,
         "relevance": relevance,
         "groups": groups,
@@ -648,6 +649,27 @@ def _project_drawing_grid_title(title: str, phase_label: str) -> str:
     if phase and value.casefold().startswith(phase.casefold() + " —"):
         return value[len(phase) + 2:].strip()
     return value
+
+
+def _project_phase_timeline(stage: str) -> dict:
+    steps = [
+        ("lead", "Encargo"),
+        ("schematic_design", "Anteproyecto"),
+        ("basic_project", "Proyecto básico"),
+        ("execution_project", "Proyecto de ejecución"),
+        ("construction", "Dirección de obra"),
+        ("handover", "Finalizado"),
+    ]
+    aliases = {"feasibility": "lead", "tender": "execution_project", "archived": "handover"}
+    active = aliases.get(str(stage or ""), str(stage or ""))
+    active_idx = next((idx for idx, (key, _label) in enumerate(steps) if key == active), 0)
+    return {
+        "steps": [
+            {"key": key, "label": label, "state": "done" if idx < active_idx else "active" if idx == active_idx else "pending"}
+            for idx, (key, label) in enumerate(steps)
+        ],
+        "active_label": steps[active_idx][1],
+    }
 
 
 def _project_material_groups(domain: str, collection: str) -> list[dict]:
@@ -1239,6 +1261,7 @@ def create_app(config: dict | None = None) -> FastAPI:
         project_recent_html = ""
         project_notes_html = ""
         project_state_html = ""
+        project_phase_timeline = None
         page_record = read_mod.wiki_page_record(page_path)
         if page_path.name == "_index.md" and not material_id:
             try:
@@ -1272,6 +1295,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                         if structured_state:
                             content_body = "\n\n".join(part for part in [before_state, after_state] if part)
                             project_state_html = render_wiki_markdown(structured_state, _project_rel_path(page_path))
+                        project_phase_timeline = _project_phase_timeline(project_state_mod.load_project_state(coll_name).get("stage", "lead"))
                         project_material_groups = _project_material_groups(coll_domain, coll_name) or None
                     else:
                         collection_material_thumbs = _collection_sidebar_context(coll_domain, coll_name) or None
@@ -1341,6 +1365,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                 "project_recent_html": project_recent_html,
                 "project_notes_html": project_notes_html,
                 "project_state_html": project_state_html,
+                "project_phase_timeline": project_phase_timeline,
                 "page_search": page_search,
             },
         )

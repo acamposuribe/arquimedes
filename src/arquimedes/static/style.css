@@ -939,7 +939,7 @@ img { max-width: 100%; display: block; }
 }
 
 .wiki-body li {
-  padding: 0.42rem 0;
+  padding: 0.42rem;
   border-bottom: 1px solid var(--line);
   line-height: 1.55;
   font-size: 0.92rem;
@@ -1064,7 +1064,7 @@ img { max-width: 100%; display: block; }
 }
 
 .wiki-body img {
-  margin: 0.75rem auto;
+  margin: 0;
   border: 1px solid var(--line);
   padding: 2px;
   border-radius: 2px;
@@ -2095,12 +2095,12 @@ body.lightbox-open { overflow: hidden; }
 .project-material-tile {
   display: flex;
   flex-direction: column;
-  gap: 0.3rem;
+  gap: 0.36rem;
   overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fbfbfc;
-  padding: 0.68rem 0.8rem;
+  padding: 0.36rem;
   text-decoration: none;
 }
 .project-material-tile img {
@@ -2113,14 +2113,15 @@ body.lightbox-open { overflow: hidden; }
 }
 .project-material-tile-title {
   display: block;
-  overflow: hidden;
+  overflow: visible;
+  margin: 0;
   color: var(--ink);
   font-family: system-ui, -apple-system, sans-serif;
-  font-size: 0.88rem;
-  font-weight: 600;
-  line-height: 1.4;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  font-size: 0.72rem;
+  font-weight: 400;
+  line-height: 1.15;
+  white-space: normal;
+  text-overflow: clip;
 }
 .project-material-tile-fallback {
   display: flex;
@@ -2134,17 +2135,21 @@ body.lightbox-open { overflow: hidden; }
   text-align: center;
 }
 
-.project-material-list {
+.wiki-body .project-material-list {
   list-style: none;
   margin: 0.6rem 0 0;
   padding: 0;
+  border-top: none;
   display: grid;
   gap: 0.7rem;
 }
+.wiki-body .project-material-list::before {
+  content: none;
+}
 .project-material-row {
   display: flex;
-  gap: 0.55rem;
-  padding: 0.68rem 2rem 0.68rem 0.8rem;
+  gap: 0.65rem;
+  padding: 0.68rem 0.8rem;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fbfbfc;
@@ -2154,10 +2159,20 @@ body.lightbox-open { overflow: hidden; }
   flex: 0 0 3.15rem;
   width: 3.15rem;
   height: 3.15rem;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--surface-alt, #f3f3f3);
+}
+.project-material-row-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 .project-material-row-body {
   flex: 1;
   min-width: 0;
+  padding-right: 0.1rem;
   font-family: system-ui, -apple-system, sans-serif;
 }
 .project-material-row-title {

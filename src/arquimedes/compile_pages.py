@@ -935,8 +935,9 @@ def render_project_page(
     if structured_specs:
         lines.append("## Datos estructurados del proyecto\n")
         for _, heading, values in structured_specs:
-            lines.append(f"### {heading}\n")
+            lines.append(f"<details class=\"project-state-group\">\n<summary>{heading}</summary>\n")
             _render_bullets(lines, values)
+            lines.append("</details>\n")
 
     if recent_additions:
         lines.append("## Historial reciente\n")

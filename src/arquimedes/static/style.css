@@ -1064,6 +1064,13 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
   gap: 0.7rem;
 }
 
+.wiki-body .material-gallery .figure-grid,
+.panel > .figure-grid {
+  grid-template-columns: repeat(4, 7rem);
+  justify-content: start;
+  align-items: start;
+}
+
 .figure-card {
   background: var(--panel);
   border: 1px solid var(--line);

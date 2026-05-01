@@ -94,12 +94,99 @@ def test_home_page_scopes_domain_navigation(tmp_path, monkeypatch):
     response = client.get("/?domain=practice")
     assert response.status_code == 200
     assert 'href="/?domain=practice" class="active"' in response.text
-    assert "Práctica Colecciones" in response.text
+    assert "Práctica Materiales recientes" in response.text
+    assert '<div class="home-grid">' not in response.text
+    assert '<ul class="wiki-list">' not in response.text
     assert "/wiki/practice/projects" in response.text
     assert "/wiki/research/papers" not in response.text
     assert "/wiki/practice/bridge-concepts/practice-beta" in response.text
     assert "/wiki/research/bridge-concepts/research-alpha" not in response.text
     assert 'name="domain" type="hidden" value="practice"' in response.text
+
+
+def test_home_page_shows_random_figure_discovery_before_recent_materials(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    con = sqlite3.connect(str(root / "indexes" / "search.sqlite"))
+    con.execute("CREATE TABLE materials (material_id TEXT, title TEXT, summary TEXT, domain TEXT, collection TEXT, document_type TEXT, year TEXT)")
+    con.execute("CREATE TABLE figures (figure_id TEXT, material_id TEXT, description TEXT, caption TEXT, visual_type TEXT, source_page INTEGER, relevance TEXT, image_path TEXT)")
+    con.execute("INSERT INTO materials VALUES (?,?,?,?,?,?,?)", ("mat_001", "Material One", "Summary", "research", "papers", "paper", "2024"))
+    con.execute("INSERT INTO figures VALUES (?,?,?,?,?,?,?,?)", ("fig_0001", "mat_001", "Plan description", "Plan caption", "plan", 1, "substantive", "figures/fig_0001.png"))
+    con.commit()
+    con.close()
+    (root / "extracted" / "mat_001" / "figures" / "fig_0001.png").write_bytes(b"png")
+
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/?domain=research")
+    assert response.status_code == 200
+    assert 'class="home-figure-grid"' in response.text
+    assert 'href="/materials/mat_001"' in response.text
+    assert 'src="/figures/mat_001/fig_0001.png"' in response.text
+    assert response.text.index('class="home-figure-grid"') < response.text.index("Research Recent Materials")
+
+
+def test_proyectos_home_renders_project_dashboard_not_recent_materials(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "list_domains_and_collections",
+        lambda domain=None: [{"domain": "proyectos", "collection": "2511-gandia"}] if domain == "proyectos" else [],
+    )
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "materials_for_collection",
+        lambda domain, collection: [
+            {"material_id": "mat_001", "title": "Acta"},
+            {"material_id": "mat_002", "title": "Foto"},
+        ],
+    )
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "recent_materials",
+        lambda limit=10, domain=None: [
+            {
+                "material_id": "mat_001",
+                "title": "WhatsApp Image",
+                "summary": "Confusing recent material",
+                "domain": "proyectos",
+                "collection": "2511-gandia",
+                "document_type": "site_photo",
+                "year": "2026",
+            }
+        ],
+    )
+    _write_json(root / "derived" / "projects" / "2511-gandia" / "project_state.json", {
+        "domain": "proyectos",
+        "project_id": "2511-gandia",
+        "project_title": "2511 (35) Edificio Gandia",
+        "stage": "basic_project",
+        "stage_confidence": 0.8,
+        "last_material_ids": [],
+        "main_objectives": [],
+        "current_work_in_progress": ["Cerrar levantamiento del estado actual."],
+        "next_focus": ["Preparar consulta municipal."],
+        "known_conditions": [],
+        "decisions": [],
+        "requirements": [],
+        "risks_or_blockers": ["Medianera pendiente de revisión."],
+        "missing_information": [],
+        "positive_learnings": [],
+        "mistakes_or_regrets": [],
+        "repair_actions": [],
+        "important_material_ids": [],
+        "updated_at": "2026-05-01T08:00:00+00:00",
+        "updated_by": "human",
+    })
+
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/?domain=proyectos")
+    assert response.status_code == 200
+    assert "2511 (35) Edificio Gandia" in response.text
+    assert "Cerrar levantamiento del estado actual." in response.text
+    assert "Preparar consulta municipal." in response.text
+    assert "Medianera pendiente de revisión." in response.text
+    assert "2 materiales" in response.text
+    assert "WhatsApp Image" not in response.text
+    assert "Materiales recientes" not in response.text
 
 
 def test_material_route_rewrites_links(tmp_path, monkeypatch):
@@ -259,6 +346,33 @@ def test_wiki_material_page_rewrites_figure_links(tmp_path, monkeypatch):
     assert response.status_code == 200
     assert '/figures/mat_001/fig_0001.png' in response.text
     assert 'data-zoom-src="/thumbnails/mat_001/page_0001.png"' in response.text
+
+
+def test_material_page_collapses_long_page_thumbnail_strip(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material One",
+        "domain": "research",
+        "collection": "papers",
+    })
+    thumbs_dir = root / "extracted" / "mat_001" / "thumbnails"
+    thumbs_dir.mkdir()
+    pages = []
+    for page in range(1, 22):
+        filename = f"page_{page:04d}.png"
+        (thumbs_dir / filename).write_bytes(b"png")
+        pages.append(json.dumps({"page_number": page, "thumbnail_path": f"thumbnails/{filename}"}))
+    (root / "extracted" / "mat_001" / "pages.jsonl").write_text("\n".join(pages) + "\n", encoding="utf-8")
+    (root / "wiki" / "research" / "papers" / "mat_001.md").write_text("# Material One\n", encoding="utf-8")
+
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_001")
+    assert response.status_code == 200
+    assert '<details class="thumb-details">' in response.text
+    assert "<span>Pages</span>" in response.text
+    assert '<span class="meta-line">(21)</span>' in response.text
+    assert 'data-zoom-src="/thumbnails/mat_001/page_0021.png"' in response.text
 
 
 def test_figure_and_source_routes(tmp_path, monkeypatch):
@@ -594,6 +708,53 @@ def test_practice_material_page_localizes_ui_and_parses_spanish_sections(tmp_pat
     assert response.text.index(">Fuente</h2>") < response.text.index(">Materiales relacionados</h2>")
 
 
+def test_proyectos_material_page_surfaces_project_extraction(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "proyectos" / "2511-gandia").mkdir(parents=True)
+    _write_json(root / "extracted" / "mat_project" / "meta.json", {
+        "material_id": "mat_project",
+        "title": "Acta de seguimiento",
+        "domain": "proyectos",
+        "collection": "2511-gandia",
+        "project_extraction": {
+            "project_material_type": "meeting_report",
+            "project_relevance": "Registra acuerdos y próximos pasos del expediente.",
+            "main_points": ["Se revisa el estado de licencia."],
+            "decisions": ["Enviar documentación actualizada."],
+            "requirements": ["Incorporar medición de medianera."],
+            "risks_or_blockers": ["Licencia pendiente."],
+            "open_items": ["Confirmar respuesta municipal."],
+            "actors": ["Ayuntamiento"],
+            "dates_and_deadlines": ["2026-05-15"],
+            "spatial_or_design_scope": ["Medianera norte"],
+            "budget_signals": ["Revisar coste de demolición."],
+            "evidence_refs": ["p. 1"],
+        },
+    })
+    (root / "wiki" / "proyectos" / "2511-gandia" / "mat_project.md").write_text(
+        "# Acta de seguimiento\n\nCuerpo del acta.\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_project")
+    assert response.status_code == 200
+    assert "Resumen operativo" in response.text
+    assert "Informes de reunión" in response.text
+    assert "Registra acuerdos y próximos pasos del expediente." in response.text
+    assert "Puntos principales" in response.text
+    assert "Se revisa el estado de licencia." in response.text
+    assert "Decisiones" in response.text
+    assert "Enviar documentación actualizada." in response.text
+    assert "Requisitos" in response.text
+    assert "Riesgos y bloqueos" in response.text
+    assert "Licencia pendiente." in response.text
+    assert "Pendientes" in response.text
+    assert "Confirmar respuesta municipal." in response.text
+    assert "Referencias de evidencia" in response.text
+    assert "p. 1" in response.text
+
+
 def test_collection_page_renders_material_cards_with_word_truncation_and_previews(tmp_path, monkeypatch):
     root = _repo(tmp_path, monkeypatch)
     _write_json(root / "extracted" / "mat_001" / "meta.json", {
@@ -652,7 +813,9 @@ def test_proyectos_project_page_handles_resolved_wiki_paths(tmp_path, monkeypatc
         "## Estado del proyecto\n\n"
         "En marcha.\n\n"
         "## Materiales importantes\n\n"
-        "- [Acta de arranque](mat_proyecto.md)\n",
+        "- [Acta de arranque](mat_proyecto.md)\n\n"
+        "## Historial reciente\n\n"
+        "- [Acta de arranque](mat_proyecto.md) (2026-04-30)\n",
         encoding="utf-8",
     )
     (real_root / "wiki" / "proyectos" / "2407-casa-rio" / "mat_proyecto.md").write_text(
@@ -679,6 +842,7 @@ def test_proyectos_project_page_handles_resolved_wiki_paths(tmp_path, monkeypatc
     assert "Casa Río" in response.text
     assert "Informes de reunión" in response.text
     assert "/materials/mat_proyecto" in response.text
+    assert response.text.index(">Materiales del proyecto</h2>") < response.text.index(">Historial reciente</h2>")
 
 
 def test_concept_page_uses_concept_search_label_and_linked_material_scope(tmp_path, monkeypatch):

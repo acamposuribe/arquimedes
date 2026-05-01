@@ -15,6 +15,7 @@ from markupsafe import Markup, escape
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from arquimedes import freshness as freshness_mod
+from arquimedes import project_state as project_state_mod
 from arquimedes import read as read_mod
 from arquimedes import search as search_mod
 from arquimedes.compile_pages import (
@@ -163,6 +164,7 @@ def _heading_candidates(key: str, default: str) -> list[str]:
         default,
         generated_label(key, "research", default=default),
         generated_label(key, "practice", default=default),
+        generated_label(key, "proyectos", default=default),
     ]
     seen: set[str] = set()
     ordered: list[str] = []
@@ -379,6 +381,51 @@ def _plain(value) -> str:
     return str(value or "")
 
 
+def _plain_list(value) -> list[str]:
+    if isinstance(value, dict):
+        value = value.get("value")
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    return [text] if text else []
+
+
+_PROJECT_EXTRACTION_LIST_FIELDS = [
+    ("main_points", "Puntos principales"),
+    ("decisions", "Decisiones"),
+    ("requirements", "Requisitos"),
+    ("risks_or_blockers", "Riesgos y bloqueos"),
+    ("open_items", "Pendientes"),
+    ("actors", "Actores"),
+    ("dates_and_deadlines", "Fechas y plazos"),
+    ("spatial_or_design_scope", "Ámbito espacial o de diseño"),
+    ("budget_signals", "Señales de presupuesto"),
+    ("evidence_refs", "Referencias de evidencia"),
+]
+
+
+def _project_extraction_context(meta: dict) -> dict | None:
+    if not is_proyectos_domain(str(meta.get("domain") or ""), default="research"):
+        return None
+    project_extraction = meta.get("project_extraction")
+    if not isinstance(project_extraction, dict):
+        return None
+    groups = [
+        {"key": key, "label": label, "items": items}
+        for key, label in _PROJECT_EXTRACTION_LIST_FIELDS
+        if (items := _plain_list(project_extraction.get(key)))
+    ]
+    relevance = _plain(project_extraction.get("project_relevance"))
+    material_type = _plain(project_extraction.get("project_material_type"))
+    if not (relevance or material_type or groups):
+        return None
+    return {
+        "material_type": _PROJECT_MATERIAL_TYPE_LABELS.get(material_type, material_type.replace("_", " ") if material_type else ""),
+        "relevance": relevance,
+        "groups": groups,
+    }
+
+
 def _figure_view_models(material_id: str, figures: list[dict]) -> list[dict]:
     items = []
     for figure in figures:
@@ -416,19 +463,66 @@ def _thumbnail_view_models(material_id: str) -> list[dict]:
 def _material_sidebar_context(material_id: str) -> dict:
     meta = read_mod.load_material_meta(material_id)
     figures = read_mod.load_material_figures(material_id)
+    page_thumbnails = _thumbnail_view_models(material_id)
     return {
         "material_id": material_id,
         "title": str(meta.get("title") or material_id),
         "domain": str(meta.get("domain") or ""),
+        "project_extraction": _project_extraction_context(meta),
         "collection_url": wiki_url(f"wiki/{meta.get('domain')}/{meta.get('collection')}/_index.md") if meta.get("domain") and meta.get("collection") else "",
         "collection_label": f"{meta.get('domain')}/{meta.get('collection')}" if meta.get("domain") and meta.get("collection") else "",
         "source_url": f"/source/{material_id}" if read_mod.material_source_path(material_id) else "",
         "extracted_text_url": f"/extracted/{material_id}/text" if read_mod.material_extracted_text_path(material_id) else "",
         "figures_url": f"/materials/{material_id}/figures" if figures else "",
         "figure_count": len(_figure_view_models(material_id, figures)),
-        "page_thumbnails": _thumbnail_view_models(material_id),
+        "page_thumbnails": page_thumbnails,
+        "page_thumbnail_count": len(page_thumbnails),
+        "page_thumbnails_collapsed": len(page_thumbnails) > 20,
         "no_figures": not figures,
     }
+
+
+def _project_home_cards(collections: list[dict]) -> list[dict]:
+    cards: list[dict] = []
+    for item in collections:
+        project_id = str(item.get("collection") or "").strip()
+        domain = str(item.get("domain") or "").strip()
+        if not project_id or project_id == "_general" or not is_proyectos_domain(domain, default="research"):
+            continue
+        state = project_state_mod.load_project_state(project_id, root=read_mod.get_project_root())
+        material_count = len(read_mod.materials_for_collection(domain, project_id))
+        cards.append({
+            "project_id": project_id,
+            "title": str(state.get("project_title") or project_id),
+            "url": wiki_url(f"wiki/{domain}/{project_id}/_index.md"),
+            "stage": str(state.get("stage") or "lead").replace("_", " "),
+            "updated_at": str(state.get("updated_at") or "")[:10],
+            "material_count": material_count,
+            "current_work": [str(value) for value in (state.get("current_work_in_progress") or []) if str(value).strip()][:2],
+            "next_focus": [str(value) for value in (state.get("next_focus") or []) if str(value).strip()][:2],
+            "risks": [str(value) for value in (state.get("risks_or_blockers") or []) if str(value).strip()][:2],
+        })
+    return sorted(cards, key=lambda card: card["title"].lower())
+
+
+def _home_figure_tiles(domain: str, limit: int = 12) -> list[dict]:
+    tiles: list[dict] = []
+    for row in read_mod.random_figures(limit=limit * 2, domain=domain):
+        material_id = str(row.get("material_id") or "").strip()
+        image_name = PurePosixPath(str(row.get("image_path") or "")).name
+        if not material_id or not image_name or Path(image_name).suffix.lower() not in _IMAGE_EXTENSIONS:
+            continue
+        if not read_mod.material_figure_image_path(material_id, image_name):
+            continue
+        tiles.append({
+            "image_url": f"/figures/{material_id}/{image_name}",
+            "material_url": f"/materials/{material_id}",
+            "title": str(row.get("title") or material_id),
+            "caption": _plain(row.get("caption")) or _plain(row.get("description")) or str(row.get("title") or material_id),
+        })
+        if len(tiles) >= limit:
+            break
+    return tiles
 
 
 def _collection_sidebar_context(domain: str, collection: str) -> list[dict]:
@@ -786,6 +880,8 @@ def create_app(config: dict | None = None) -> FastAPI:
     def home(request: Request, domain: str = ""):
         active_domain = _active_domain(request, domain)
         index_missing = not get_index_path().exists()
+        collections = read_mod.list_domains_and_collections(active_domain)
+        is_projects_home = is_proyectos_domain(active_domain, default="research")
         return _TEMPLATES.TemplateResponse(
             request,
             "home.html",
@@ -796,8 +892,10 @@ def create_app(config: dict | None = None) -> FastAPI:
                     page_title="Arquimedes",
                     active_domain=active_domain,
                     index_missing=index_missing,
-                    recent_materials=read_mod.recent_materials(domain=active_domain),
-                    collections=read_mod.list_domains_and_collections(active_domain),
+                    recent_materials=[] if is_projects_home else read_mod.recent_materials(domain=active_domain),
+                    collections=collections,
+                    home_figures=[] if is_projects_home else _home_figure_tiles(active_domain),
+                    project_cards=_project_home_cards(collections) if is_projects_home else [],
                 ),
             },
         )
@@ -1032,6 +1130,14 @@ def create_app(config: dict | None = None) -> FastAPI:
                     content_body = before_materials
                     collection_after_html = render_wiki_markdown(after_materials, _project_rel_path(page_path)) if after_materials else ""
                     if is_proyectos_domain(coll_domain, default="research"):
+                        before_recent, recent_history, after_recent = _split_markdown_section(
+                            content_body,
+                            _heading_candidates("recent_additions", "Recent Additions"),
+                        )
+                        if recent_history:
+                            content_body = before_recent
+                            recent_tail = "\n\n".join(part for part in [recent_history, after_recent] if part)
+                            collection_after_html = render_wiki_markdown(recent_tail, _project_rel_path(page_path))
                         project_material_groups = _project_material_groups(coll_domain, coll_name) or None
                     else:
                         collection_material_thumbs = _collection_sidebar_context(coll_domain, coll_name) or None

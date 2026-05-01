@@ -361,6 +361,31 @@ def recent_materials(limit: int = 10, domain: str | None = None) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def random_figures(limit: int = 12, domain: str | None = None) -> list[dict]:
+    scoped_domain = _normalized_domain(domain)
+    params: tuple = (limit,)
+    where = "WHERE f.image_path != ''"
+    if scoped_domain:
+        where += " AND m.domain = ?"
+        params = (scoped_domain, limit)
+    try:
+        rows = _index_rows(
+            f"""
+            SELECT f.figure_id, f.material_id, f.image_path, f.caption, f.description,
+                   m.title, m.domain, m.collection
+            FROM figures f
+            JOIN materials m ON m.material_id = f.material_id
+            {where}
+            ORDER BY RANDOM()
+            LIMIT ?
+            """,
+            params,
+        )
+    except sqlite3.OperationalError:
+        return []
+    return [dict(row) for row in rows]
+
+
 # ---------------------------------------------------------------------------
 # Phase 7 agent-facing accessors
 # ---------------------------------------------------------------------------

@@ -97,6 +97,34 @@
       {% endif %}
     </section>
     {% endif %}
+    {% if project_extraction %}
+    <section class="project-extraction-panel">
+      <p class="eyebrow">Resumen operativo</p>
+      <div class="project-extraction-header">
+        <h2>Lectura de proyecto</h2>
+        {% if project_extraction.material_type %}
+        <span class="project-card-count">{{ project_extraction.material_type }}</span>
+        {% endif %}
+      </div>
+      {% if project_extraction.relevance %}
+      <p class="project-extraction-relevance">{{ project_extraction.relevance }}</p>
+      {% endif %}
+      {% if project_extraction.groups %}
+      <div class="project-extraction-grid">
+        {% for group in project_extraction.groups %}
+        <section class="project-extraction-group project-extraction-group--{{ group.key }}">
+          <h3>{{ group.label }}</h3>
+          <ul>
+            {% for item in group['items'] %}
+            <li>{{ item }}</li>
+            {% endfor %}
+          </ul>
+        </section>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </section>
+    {% endif %}
     {{ content_html }}
     {% if project_material_groups %}
     <section class="collection-materials-section project-material-section">
@@ -250,20 +278,25 @@
 
     {% if page_thumbnails %}
     <section class="panel thumb-panel">
-      <h2>{{ ui_label('pages_nav', active_domain, 'Pages') }}</h2>
-      <div class="thumb-strip">
-        {% for item in page_thumbnails %}
-        <button class="thumb-button"
-          data-zoom-alt="{{ item.label }}"
-          data-zoom-group="pages"
-          data-zoom-src="{{ item.image_url }}"
-          title="{{ item.label }}"
-          type="button">
-          <img alt="{{ item.label }}" loading="lazy" src="{{ item.image_url }}">
-          <span>{{ item.label }}</span>
-        </button>
-        {% endfor %}
-      </div>
+      <details class="thumb-details"{% if not page_thumbnails_collapsed %} open{% endif %}>
+        <summary>
+          <span>{{ ui_label('pages_nav', active_domain, 'Pages') }}</span>
+          <span class="meta-line">({{ page_thumbnail_count }})</span>
+        </summary>
+        <div class="thumb-strip">
+          {% for item in page_thumbnails %}
+          <button class="thumb-button"
+            data-zoom-alt="{{ item.label }}"
+            data-zoom-group="pages"
+            data-zoom-src="{{ item.image_url }}"
+            title="{{ item.label }}"
+            type="button">
+            <img alt="{{ item.label }}" loading="lazy" src="{{ item.image_url }}">
+            <span>{{ item.label }}</span>
+          </button>
+          {% endfor %}
+        </div>
+      </details>
     </section>
     {% endif %}
     {% if collection_material_thumbs %}

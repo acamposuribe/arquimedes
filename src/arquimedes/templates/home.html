@@ -17,33 +17,85 @@
 </div>
 {% endif %}
 
-<div class="home-grid">
-  <section class="home-section">
-    <h2>{{ active_domain_label }} {{ ui_label('collections_summary', active_domain, 'Collections')|capitalize }}</h2>
-    {% if collections %}
-    <ul class="wiki-list">
-      {% for item in collections %}
-      <li>
-        <a href="{{ wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') }}">{{ item.collection }}</a>
-      </li>
-      {% endfor %}
-    </ul>
-    {% else %}
-    <p class="meta-line">{{ ui_label('no_indexed_collections_yet', active_domain, 'No indexed collections yet.') }}</p>
-    {% endif %}
-  </section>
-
-  <section class="home-section">
-    <h2>{{ active_domain_label }} {{ ui_label('recent_materials', active_domain, 'Recent Materials') }}</h2>
-    {% if recent_materials %}
-    <div class="stack">
-      {% for item in recent_materials %}
-      {% include "partials/material_card.html" %}
-      {% endfor %}
-    </div>
-    {% else %}
-    <p class="meta-line">{{ ui_label('no_indexed_materials_yet', active_domain, 'No indexed materials yet.') }}</p>
-    {% endif %}
-  </section>
-</div>
+{% if active_domain == 'proyectos' %}
+<section class="project-dashboard">
+  {% if project_cards %}
+  <div class="project-card-grid">
+    {% for project in project_cards %}
+    <article class="project-card">
+      <div class="project-card-header">
+        <div>
+          <p class="eyebrow">{{ project.stage }}</p>
+          <h2><a href="{{ project.url }}">{{ project.title }}</a></h2>
+        </div>
+        <span class="project-card-count">{{ project.material_count }} {{ ui_label('materials_summary', active_domain, 'materiales') }}</span>
+      </div>
+      <div class="project-state-grid">
+        <div>
+          <h3>{{ ui_label('trabajo_en_curso', active_domain, 'Trabajo en curso') }}</h3>
+          {% if project.current_work %}
+          <ul>
+            {% for item in project.current_work %}<li>{{ item }}</li>{% endfor %}
+          </ul>
+          {% else %}
+          <p class="meta-line">Sin datos registrados.</p>
+          {% endif %}
+        </div>
+        <div>
+          <h3>{{ ui_label('proximo_foco', active_domain, 'Próximo foco') }}</h3>
+          {% if project.next_focus %}
+          <ul>
+            {% for item in project.next_focus %}<li>{{ item }}</li>{% endfor %}
+          </ul>
+          {% else %}
+          <p class="meta-line">Sin datos registrados.</p>
+          {% endif %}
+        </div>
+        <div>
+          <h3>{{ ui_label('riesgos', active_domain, 'Problemas, riesgos y bloqueos') }}</h3>
+          {% if project.risks %}
+          <ul>
+            {% for item in project.risks %}<li>{{ item }}</li>{% endfor %}
+          </ul>
+          {% else %}
+          <p class="meta-line">Sin datos registrados.</p>
+          {% endif %}
+        </div>
+      </div>
+      {% if project.updated_at %}
+      <p class="meta-line">Actualizado {{ project.updated_at }}</p>
+      {% endif %}
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="meta-line">{{ ui_label('no_indexed_collections_yet', active_domain, 'No indexed collections yet.') }}</p>
+{% endif %}
+</section>
+{% else %}
+{% if home_figures %}
+<section class="home-section home-figures-section">
+  <h2>{{ active_domain_label }} {{ ui_label('figures', active_domain, 'Figures') }}</h2>
+  <div class="home-figure-grid">
+    {% for item in home_figures %}
+    <a class="home-figure-tile" href="{{ item.material_url }}" title="{{ item.title }}">
+      <img alt="{{ item.caption }}" loading="lazy" src="{{ item.image_url }}">
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
+<section class="home-section home-section--wide">
+  <h2>{{ active_domain_label }} {{ ui_label('recent_materials', active_domain, 'Recent Materials') }}</h2>
+  {% if recent_materials %}
+  <div class="stack">
+    {% for item in recent_materials %}
+    {% include "partials/material_card.html" %}
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="meta-line">{{ ui_label('no_indexed_materials_yet', active_domain, 'No indexed materials yet.') }}</p>
+  {% endif %}
+</section>
+{% endif %}
 {% endblock %}

@@ -165,6 +165,7 @@ _PROJECT_DOCUMENT_PATCH_SCHEMA = """{
         \"project_material_type\": \"meeting_report|meeting_notes|client_request|authority_request|regulation|drawing_set|technical_report|working_document|budget_table|site_photo|map_or_cartography|contract_or_admin|email_or_message_export|schedule|unknown\",
         \"project_phase\": \"lead|feasibility|schematic_design|basic_project|execution_project|tender|construction|handover|archived|unknown\",
         \"drawing_scope\": \"string, for drawing_set only: phase/sheet/scope such as Anteproyecto. Planta baja; otherwise empty string\",
+        \"material_date\": \"YYYY-MM-DD when known, especially for site_photo/fotografías de obra; otherwise empty string\",
         \"project_relevance\": \"required string\",
         \"main_points\": [\"strings\"],
         \"decisions\": [\"strings\"],

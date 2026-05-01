@@ -62,6 +62,7 @@ Esquema de salida:
     "project_material_type": "{material_types}",
     "project_phase": "lead|feasibility|schematic_design|basic_project|execution_project|tender|construction|handover|archived|unknown",
     "drawing_scope": "...",
+    "material_date": "YYYY-MM-DD or empty string",
     "project_relevance": "...",
     "main_points": ["..."],
     "decisions": ["..."],
@@ -92,6 +93,7 @@ project_extraction:
 - project_phase debe identificar la fase del material si aparece o se infiere con evidencia: lead, feasibility, schematic_design, basic_project, execution_project, tender, construction, handover, archived o unknown.
 - Para drawing_set, el título del material y drawing_scope deben ser específicos y útiles dentro del proyecto: no uses solo el nombre del proyecto. Incluye fase + contenido de plano cuando sea posible, por ejemplo "Anteproyecto. Planta baja", "Proyecto básico. Alzados", "Proyecto de ejecución. Detalles constructivos". Si hay varias láminas, resume el alcance: "Anteproyecto. Plantas y secciones".
 - Para drawing_set, si el título actual es genérico o coincide con el proyecto/colección, corrígelo en el campo title de salida con ese patrón fase + alcance.
+- Para site_photo/fotografías de obra, rellena material_date con la fecha real de captura o envío si aparece en nombre de archivo, metadatos o contenido. Usa formato ISO YYYY-MM-DD. No uses fecha de ingesta salvo que sea la única fecha disponible y dilo en evidence_refs.
 - Distingue decisiones ya tomadas de requisitos, bloqueos y preguntas abiertas.
 - Usa evidence_refs para páginas, figuras, tablas, nombres de archivo o marcas temporales que respalden los puntos importantes.
 """

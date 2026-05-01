@@ -626,6 +626,19 @@ def _collection_material_cards(domain: str, collection: str) -> list[dict]:
     return sorted(cards, key=lambda card: card["title"].lower())
 
 
+def _format_project_date_es(value: str) -> str:
+    match = re.search(r"(\d{4})-(\d{2})-(\d{2})", str(value or ""))
+    if not match:
+        return ""
+    year, month, day = match.groups()
+    months = {
+        "01": "enero", "02": "febrero", "03": "marzo", "04": "abril",
+        "05": "mayo", "06": "junio", "07": "julio", "08": "agosto",
+        "09": "septiembre", "10": "octubre", "11": "noviembre", "12": "diciembre",
+    }
+    return f"{int(day)} {months.get(month, month)} {year}"
+
+
 def _project_drawing_grid_title(title: str, phase_label: str) -> str:
     """Shorten drawing card titles inside phase subsections."""
     value = str(title or "").strip()
@@ -674,10 +687,13 @@ def _project_material_groups(domain: str, collection: str) -> list[dict]:
             phase_key = "unknown"
         phase_label = _PROJECT_PHASE_LABELS.get(phase_key, phase_key)
         full_title = str(project_extraction.get("drawing_scope") or meta.get("title") or material_id) if type_key == "drawing_set" else str(meta.get("title") or material_id)
+        display_title = _project_drawing_grid_title(full_title, phase_label) if type_key == "drawing_set" else full_title
+        if type_key == "site_photo":
+            display_title = _format_project_date_es(str(project_extraction.get("material_date") or "")) or display_title
         grouped.setdefault(type_key, []).append({
             "material_id": material_id,
             "title": full_title,
-            "display_title": _project_drawing_grid_title(full_title, phase_label) if type_key == "drawing_set" else full_title,
+            "display_title": display_title,
             "phase_key": phase_key,
             "phase_label": phase_label,
             "material_url": f"/materials/{material_id}",

@@ -662,15 +662,17 @@ img { max-width: 100%; display: block; }
   margin-top: 0;
 }
 .project-state-block {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 0.65rem 0.85rem;
+  column-count: 2;
+  column-gap: 0.85rem;
 }
 .project-state-block > h2 {
-  grid-column: 1 / -1;
+  column-span: all;
 }
 .project-state-group {
-  margin: 0;
+  break-inside: avoid;
+  display: inline-block;
+  width: 100%;
+  margin: 0 0 0.65rem;
   padding: 0.65rem 0.75rem;
   border: 1px solid var(--line);
   border-radius: 4px;
@@ -1947,8 +1949,8 @@ body.lightbox-open { overflow: hidden; }
   }
 
   .home-grid,
-  .home-recent-materials-grid,
-  .project-state-block { grid-template-columns: 1fr; }
+  .home-recent-materials-grid { grid-template-columns: 1fr; }
+  .project-state-block { column-count: 1; }
   .project-card-grid,
   .project-state-grid,
   .project-extraction-grid {

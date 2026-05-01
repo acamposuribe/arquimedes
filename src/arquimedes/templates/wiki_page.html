@@ -168,7 +168,7 @@
     <section class="project-page-block project-state-block">
       <h2>Datos estructurados del proyecto</h2>
       {% for group in project_state_panel %}
-      <details class="project-state-group" open>
+      <details class="project-state-group">
         <summary>
           <span>{{ group.label }}</span>
           <button class="project-inline-icon project-inline-icon--add" type="button" title="Añadir elemento" onclick="this.closest('details').querySelector('.project-state-add-item').hidden = false; this.closest('details').querySelector('.project-state-add-item textarea').focus();">+</button>

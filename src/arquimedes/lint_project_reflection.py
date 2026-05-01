@@ -280,7 +280,9 @@ Tareas:
 - Las notas con status=superseded solo deben servir como rastro histórico; no recuperes su contenido salvo que explique una contradicción o corrección posterior.
 - Si una nota añade información nueva sin contradecir el estado previo, intégrala de forma aditiva: amplía listas o matiza secciones, pero no elimines conclusiones previas no relacionadas.
 - No reemplaces una lista completa ni una sección completa solo porque una nota mencione un punto puntual. Conserva conclusiones válidas previas salvo contradicción directa, resolución explícita o evidencia nueva más fuerte.
-- project_state es la memoria estructurada canónica: rellena ahí los hechos, listas, riesgos, decisiones, requisitos, aprendizajes y acciones.
+- project_state es la memoria estructurada canónica: rellena ahí los hechos, listas, riesgos, decisiones, requisitos y acciones operativas del proyecto.
+- Los campos de errores, bloqueos, reparaciones y riesgos deben referirse al proyecto/obra/cliente/equipo humano, no a limitaciones internas de Arquimedes, OCR, extracción, prompts, chunks, embeddings o calidad del pipeline. Esos problemas internos no pertenecen a la memoria del proyecto.
+- Los aprendizajes visibles para humanos deben ser lecciones útiles para futuros proyectos o para la práctica del estudio, no comentarios sobre el funcionamiento interno de Arquimedes.
 - section_deltas es la capa editorial visible: propón secciones solo cuando aporten una síntesis narrativa útil para humanos.
 - No copies listas de project_state punto por punto en section_deltas. Las secciones deben sintetizar, priorizar y explicar; si solo repetirían la lista estructurada, omítelas.
 - note_status_updates puede marcar notas open como incorporated cuando ya hayan quedado absorbidas en state/sections, o como superseded cuando evidencia nueva las contradiga explícitamente.

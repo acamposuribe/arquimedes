@@ -345,6 +345,7 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
         config = load_config()
 
     from arquimedes.config import (
+        get_enabled_domains,
         get_extracted_root,
         get_indexes_root,
         get_manifests_root,
@@ -357,6 +358,7 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
     indexes_dir.mkdir(parents=True, exist_ok=True)
 
     manifest_path = manifests_dir / "materials.jsonl"
+    enabled_domains = get_enabled_domains(config)
     material_ids: list[str] = []
     if manifest_path.exists():
         with open(manifest_path) as f:
@@ -364,7 +366,9 @@ def rebuild_index(config: dict | None = None) -> IndexStats:
                 line = line.strip()
                 if line:
                     try:
-                        material_ids.append(json.loads(line)["material_id"])
+                        record = json.loads(line)
+                        if str(record.get("domain") or "").strip().lower() in enabled_domains:
+                            material_ids.append(record["material_id"])
                     except (json.JSONDecodeError, KeyError):
                         pass
 

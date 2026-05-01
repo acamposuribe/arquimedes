@@ -32,6 +32,7 @@ from arquimedes.domain_profiles import (
     is_practice_domain,
     is_proyectos_domain,
 )
+from arquimedes.config import get_enabled_domains
 from arquimedes.index import get_index_path
 
 _PROJECT_GALLERY_TYPES = {"drawing_set", "site_photo", "map_or_cartography"}
@@ -1056,6 +1057,12 @@ def _search_facets_for_domain(facets: list[str], domain: str) -> list[str]:
     return scoped
 
 
+def _enabled_ui_domains(request: Request) -> tuple[str, ...]:
+    enabled = get_enabled_domains(getattr(request.app.state, "config", {}) or {})
+    domains = tuple(domain for domain in _DOMAINS if domain in enabled)
+    return domains or _DOMAINS
+
+
 def _base_context(
     request: Request,
     *,
@@ -1064,7 +1071,10 @@ def _base_context(
     page_domain: str | None = None,
     **extra,
 ) -> dict:
+    enabled_domains = _enabled_ui_domains(request)
     resolved_domain = _active_domain(request, active_domain, page_domain)
+    if resolved_domain not in enabled_domains:
+        resolved_domain = enabled_domains[0]
     collections = read_mod.list_domains_and_collections(resolved_domain)
     return {
         "page_title": page_title,
@@ -1078,7 +1088,7 @@ def _base_context(
                 "url": _domain_tab_url(request, domain, resolved_domain),
                 "active": domain == resolved_domain,
             }
-            for domain in _DOMAINS
+            for domain in enabled_domains
         ],
         "nav_collections": collections,
         "nav_global_concepts": read_mod.list_glossary_concepts(resolved_domain),

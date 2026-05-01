@@ -57,6 +57,9 @@ _MAINTAINER_PROFILE_HEADER = """\
 
 _DEFAULT_SHARED_CONFIG = {
     "library_root": DEFAULT_LIBRARY_ROOT,
+    "domains": {
+        "enabled": ["research", "practice", "proyectos"],
+    },
     "sync": {
         "pull_interval": 300,
         "auto_start": False,

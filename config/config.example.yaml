@@ -3,6 +3,14 @@
 
 library_root: "~/Library/Mobile Documents/com~apple~CloudDocs/Arquimedes"
 
+# Enable only the domains this vault should ingest, index, and publish.
+# Omit this section to enable all built-in domains.
+domains:
+  enabled:
+    - research
+    - practice
+    - proyectos
+
 sync:
   pull_interval: 300
   auto_start: false

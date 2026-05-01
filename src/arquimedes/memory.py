@@ -765,6 +765,21 @@ def _write_db_stamp(
     )
 
 
+def _index_concept_count(index_path: Path) -> int:
+    """Return number of raw concept rows in search.sqlite, or 0 if absent."""
+    if not index_path.exists():
+        return 0
+    try:
+        con = sqlite3.connect(f"file:{index_path}?mode=ro", uri=True)
+        try:
+            row = con.execute("SELECT COUNT(*) FROM concepts").fetchone()
+            return int(row[0] or 0) if row else 0
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return 0
+
+
 def read_memory_bridge_stamp(config: dict | None = None, *, project_root: Path | None = None) -> dict:
     """Read the local SQLite memory bridge stamp, if present.
 
@@ -818,6 +833,8 @@ def memory_rebuild(config: dict | None = None) -> dict:
         raise FileNotFoundError(
             f"Search index not found at {index_path}. Run `arq index rebuild` first."
         )
+    if not any(path.exists() for path in cluster_paths) and _index_concept_count(index_path) == 0:
+        return {"skipped": True, "reason": "no concepts or clusters to project"}
     if not any(path.exists() for path in cluster_paths):
         raise FileNotFoundError("Cluster files not found. Run `arq cluster` first.")
 
@@ -858,6 +875,15 @@ def memory_ensure(config: dict | None = None) -> tuple[bool, dict]:
         raise FileNotFoundError(
             f"Search index not found at {index_path}. Run `arq index rebuild` first."
         )
+
+    from arquimedes.lint_global_bridge import global_bridge_artifact_paths
+
+    cluster_paths = [
+        *global_bridge_artifact_paths(root),
+        *sorted((root / "derived" / "collections").glob("*/local_concept_clusters.jsonl")),
+    ]
+    if not any(path.exists() for path in cluster_paths) and _index_concept_count(index_path) == 0:
+        return False, {"skipped": True, "reason": "no concepts or clusters to project"}
 
     clusters_fp = _cluster_fingerprint(root)
     manifest_fp = _fingerprint_file(manifest_path)

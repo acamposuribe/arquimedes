@@ -23,6 +23,7 @@ from arquimedes.config import (
     get_indexes_root,
     get_project_root,
     get_wiki_root,
+    get_enabled_domains,
     load_config,
 )
 from arquimedes.domain_profiles import display_domain_name, get_publication_mode, is_practice_domain
@@ -612,10 +613,14 @@ def compile_wiki(
             con.close()
 
     # 4. Load all material metadata
+    enabled_domains = get_enabled_domains(config)
     all_metas: dict[str, dict] = {}
     for meta_path in sorted(extracted_root.glob("*/meta.json")):
         try:
             meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            domain = str(meta.get("domain") or "").strip().lower()
+            if domain not in enabled_domains:
+                continue
             mid = meta["material_id"]
             all_metas[mid] = meta
         except (json.JSONDecodeError, KeyError):

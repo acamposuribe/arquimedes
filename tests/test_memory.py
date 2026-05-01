@@ -166,6 +166,15 @@ _SAMPLE_CLUSTERS = [
 ]
 
 
+def _create_empty_index(repo: Path, *, with_concepts_table: bool = True) -> None:
+    (repo / "indexes").mkdir(exist_ok=True)
+    con = sqlite3.connect(str(repo / "indexes" / "search.sqlite"))
+    if with_concepts_table:
+        con.execute("CREATE TABLE concepts (concept_name TEXT)")
+    con.commit()
+    con.close()
+
+
 def _setup_two_materials_with_clusters(repo: Path) -> None:
     """Populate repo with two materials, rebuild index, write clusters, run memory_rebuild."""
     for mid in [_MID_A, _MID_B]:
@@ -179,6 +188,29 @@ def _setup_two_materials_with_clusters(repo: Path) -> None:
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
+def test_memory_rebuild_skips_when_no_concepts_or_clusters(repo, monkeypatch):
+    import arquimedes.memory as memory_mod
+
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: repo)
+    _create_empty_index(repo)
+
+    counts = memory_rebuild({"local_cache_root": str(repo)})
+
+    assert counts == {"skipped": True, "reason": "no concepts or clusters to project"}
+
+
+def test_memory_ensure_skips_when_no_concepts_or_clusters(repo, monkeypatch):
+    import arquimedes.memory as memory_mod
+
+    monkeypatch.setattr(memory_mod, "get_project_root", lambda: repo)
+    _create_empty_index(repo)
+
+    rebuilt, counts = memory_ensure({"local_cache_root": str(repo)})
+
+    assert rebuilt is False
+    assert counts == {"skipped": True, "reason": "no concepts or clusters to project"}
+
 
 @pytest.mark.skip(reason="legacy raw-material bridge memory fixtures retired")
 class TestMemoryRebuild:

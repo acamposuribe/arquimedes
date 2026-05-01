@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from arquimedes.config import load_config
+from arquimedes.config import get_enabled_domains, is_domain_enabled, load_config
 
 
 def _write(path: Path, text: str) -> None:
@@ -47,6 +47,33 @@ def test_explicit_config_overlays_shared_base_even_with_collaborator_local(tmp_p
     assert config["sync"]["pull_interval"] == 300
     assert config["enrichment"]["max_retries"] == 3
     assert config["llm"]["agent_cmd"] == "claude --print"
+
+
+def test_enabled_domains_default_to_all_builtin(tmp_path, monkeypatch):
+    root = tmp_path
+    monkeypatch.setenv("ARQUIMEDES_ROOT", str(root))
+    monkeypatch.delenv("ARQUIMEDES_CONFIG", raising=False)
+
+    _write(root / "config" / "config.yaml", 'library_root: "~/Shared"\n')
+
+    assert get_enabled_domains(load_config()) == {"research", "practice", "proyectos"}
+    assert is_domain_enabled("proyectos", load_config())
+
+
+def test_enabled_domains_are_loaded_from_config(tmp_path, monkeypatch):
+    root = tmp_path
+    monkeypatch.setenv("ARQUIMEDES_ROOT", str(root))
+    monkeypatch.delenv("ARQUIMEDES_CONFIG", raising=False)
+
+    _write(
+        root / "config" / "config.yaml",
+        'library_root: "~/Shared"\ndomains:\n  enabled:\n    - proyectos\n',
+    )
+
+    config = load_config()
+    assert get_enabled_domains(config) == {"proyectos"}
+    assert is_domain_enabled("proyectos", config)
+    assert not is_domain_enabled("research", config)
 
 
 def test_stale_env_config_falls_back_to_current_vault_defaults(tmp_path, monkeypatch):

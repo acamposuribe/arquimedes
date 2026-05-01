@@ -13,6 +13,7 @@ from pathlib import Path
 
 from arquimedes import enrich_stamps, practice_prompts
 from arquimedes.config import (
+    get_enabled_domains,
     get_indexes_root,
     get_logs_root,
     get_project_root,
@@ -1055,6 +1056,17 @@ def cluster_concepts(
     _append_log(cluster_start_time.isoformat(), "START", "local", domain_filter or "*", collection_filter or "*", force)
 
     try:
+        enabled_domains = get_enabled_domains(config)
+        if not any(should_run_clustering(enabled_domain) for enabled_domain in enabled_domains):
+            return {
+                "collections": 0,
+                "total_concepts": 0,
+                "clusters": 0,
+                "multi_material": 0,
+                "skipped": True,
+                "reason": "no enabled domains with local clustering enabled",
+            }
+
         db_path = get_indexes_root(config) / "search.sqlite"
         if not db_path.exists():
             raise FileNotFoundError(f"Search index not found at {db_path}. Run `arq index rebuild` first.")
@@ -1070,7 +1082,7 @@ def cluster_concepts(
         scopes = [
             scope
             for scope in _cluster_scopes(manifest_index, domain=domain_filter, collection=collection_filter)
-            if should_run_clustering(scope[0])
+            if scope[0] in enabled_domains and should_run_clustering(scope[0])
         ]
         if not scopes:
             return {

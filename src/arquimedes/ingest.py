@@ -6,7 +6,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from arquimedes.config import get_library_root, get_project_root, load_config
+from arquimedes.config import get_enabled_domains, get_library_root, get_project_root, load_config
 from arquimedes.extract_image import _is_likely_scanned_document
 from arquimedes.models import MaterialManifest, compute_file_hash, compute_material_id
 
@@ -34,37 +34,31 @@ def _detect_file_type(path: Path) -> str:
 DOMAIN_FOLDERS = {"research", "practice", "proyectos"}
 
 
-def _derive_domain(relative_path: Path) -> str:
-    """Derive domain from top-level LIBRARY_ROOT folder.
-
-    LIBRARY_ROOT must contain Research/ and Practice/ folders.
-    Returns 'research' or 'practice', or '' if file is outside those folders.
-    """
+def _derive_domain(relative_path: Path, enabled_domains: set[str] | None = None) -> str:
+    """Derive an enabled domain from the top-level LIBRARY_ROOT folder."""
     parts = relative_path.parts
     if not parts:
         return ""
     top = parts[0].lower()
-    if top in DOMAIN_FOLDERS:
+    domain_folders = enabled_domains if enabled_domains is not None else DOMAIN_FOLDERS
+    if top in domain_folders:
         return top
     return ""
 
 
-def _derive_collection(relative_path: Path) -> str:
-    """Derive collection name from second-level subfolder (within domain folder).
-
-    Structure: LIBRARY_ROOT/Research/<collection>/file.pdf
-    Files directly inside the domain folder get collection '_general'.
-    """
+def _derive_collection(relative_path: Path, enabled_domains: set[str] | None = None) -> str:
+    """Derive collection name from second-level subfolder (within domain folder)."""
     parts = relative_path.parts
     top = parts[0].lower() if parts else ""
+    domain_folders = enabled_domains if enabled_domains is not None else DOMAIN_FOLDERS
 
-    if top in DOMAIN_FOLDERS:
+    if top in domain_folders:
         # Domain folder is the first level; collection is the second
         if len(parts) <= 2:
             return "_general"
         return parts[1]
     else:
-        # File outside domain folders — use first-level as collection
+        # File outside enabled domain folders — use first-level as collection
         if len(parts) <= 1:
             return "_general"
         return parts[0]
@@ -154,6 +148,7 @@ def ingest(
 
     library_root = get_library_root(config)
     project_root = get_project_root()
+    enabled_domains = get_enabled_domains(config)
 
     if not library_root.exists():
         raise FileNotFoundError(f"Library root does not exist: {library_root}")
@@ -200,8 +195,8 @@ def ingest(
                 relative = file_path.resolve().relative_to(library_root.resolve())
             except ValueError:
                 relative = Path(file_path.name)
-            domain = _derive_domain(relative)
-            collection = _derive_collection(relative)
+            domain = _derive_domain(relative, enabled_domains)
+            collection = _derive_collection(relative, enabled_domains)
             if domain and (
                 existing.relative_path != str(relative)
                 or existing.domain != domain
@@ -228,8 +223,8 @@ def ingest(
                 relative = file_path.resolve().relative_to(library_root.resolve())
             except ValueError:
                 relative = Path(file_path.name)
-            domain = _derive_domain(relative)
-            collection = _derive_collection(relative)
+            domain = _derive_domain(relative, enabled_domains)
+            collection = _derive_collection(relative, enabled_domains)
             if domain and (
                 existing.material_id == material_id
                 or existing.relative_path != str(relative)
@@ -256,8 +251,8 @@ def ingest(
         except ValueError:
             relative = Path(file_path.name)
 
-        domain = _derive_domain(relative)
-        collection = _derive_collection(relative)
+        domain = _derive_domain(relative, enabled_domains)
+        collection = _derive_collection(relative, enabled_domains)
 
         if not domain:
             print(f"  Warning: {relative} is not inside Research/ or Practice/ — skipping")

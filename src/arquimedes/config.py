@@ -12,6 +12,7 @@ import yaml
 _ENV_VAR = "ARQUIMEDES_ROOT"
 _CONFIG_ENV_VAR = "ARQUIMEDES_CONFIG"
 _LOCAL_CACHE_ENV_VAR = "ARQUIMEDES_LOCAL_CACHE"
+_BUILTIN_DOMAINS = ("research", "practice", "proyectos")
 
 
 def _existing_env_config_path() -> Path | None:
@@ -149,6 +150,41 @@ def load_config(config_path: str | Path | None = None) -> dict[str, Any]:
         config["library_root"] = str(Path(config["library_root"]).expanduser())
 
     return config
+
+
+def get_enabled_domains(config: dict[str, Any] | None = None) -> set[str]:
+    """Return the enabled domain slugs for the active vault.
+
+    Config shape::
+
+        domains:
+          enabled: [research, practice, proyectos]
+
+    Omitting the key preserves the historical behavior: all built-in domains are
+    enabled. Values are normalized to lower-case strings.
+    """
+    if config is None:
+        config = load_config()
+    domains = config.get("domains")
+    if not isinstance(domains, dict) or "enabled" not in domains:
+        return set(_BUILTIN_DOMAINS)
+    enabled = domains.get("enabled")
+    if enabled is None:
+        return set(_BUILTIN_DOMAINS)
+    if isinstance(enabled, str):
+        enabled_values = [enabled]
+    else:
+        try:
+            enabled_values = list(enabled)
+        except TypeError:
+            enabled_values = []
+    return {str(domain).strip().lower() for domain in enabled_values if str(domain).strip()}
+
+
+def is_domain_enabled(domain: str, config: dict[str, Any] | None = None) -> bool:
+    """Return whether *domain* is enabled for the active vault."""
+    normalized = str(domain or "").strip().lower()
+    return normalized in get_enabled_domains(config)
 
 
 def get_library_root(config: dict[str, Any] | None = None) -> Path:

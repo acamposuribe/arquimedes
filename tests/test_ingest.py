@@ -84,6 +84,26 @@ def test_ingest_accepts_multiple_explicit_paths(tmp_path, monkeypatch):
     }
 
 
+def test_ingest_skips_disabled_domains(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    (project_root / "manifests").mkdir(parents=True, exist_ok=True)
+
+    project_file = library_root / "Proyectos" / "2407-casa-rio" / "acta.pdf"
+    research_file = library_root / "Research" / "papers" / "paper.pdf"
+    project_file.parent.mkdir(parents=True, exist_ok=True)
+    research_file.parent.mkdir(parents=True, exist_ok=True)
+    project_file.write_bytes(b"acta")
+    research_file.write_bytes(b"paper")
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(config={"domains": {"enabled": ["proyectos"]}})
+
+    assert [item.relative_path for item in result] == ["Proyectos/2407-casa-rio/acta.pdf"]
+
+
 def test_ingest_recognizes_proyectos_domain_and_general_bucket(tmp_path, monkeypatch):
     library_root = tmp_path / "library"
     project_root = tmp_path / "project"

@@ -53,6 +53,24 @@ def test_home_handles_missing_index(tmp_path, monkeypatch):
     assert "Alpha" in response.text
 
 
+def test_home_page_only_shows_enabled_domain_tabs(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "list_domains_and_collections",
+        lambda domain=None: [{"domain": domain or "research", "collection": "papers"}],
+    )
+    monkeypatch.setattr(serve_mod.read_mod, "recent_materials", lambda limit=10, domain=None: [])
+
+    client = TestClient(serve_mod.create_app({"domains": {"enabled": ["research", "proyectos"]}}))
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'href="/?domain=research"' in response.text
+    assert 'href="/?domain=proyectos"' in response.text
+    assert 'href="/?domain=practice"' not in response.text
+
+
 def test_home_page_scopes_domain_navigation(tmp_path, monkeypatch):
     root = _repo(tmp_path, monkeypatch)
     (root / "wiki" / "shared" / "glossary").mkdir(parents=True)

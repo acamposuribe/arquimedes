@@ -101,7 +101,7 @@
       {% endif %}
     </section>
     {% endif %}
-    {% set project_visual_first = project_extraction and project_extraction.material_type_key in ['drawing_set', 'site_photo', 'map_or_cartography'] %}
+    {% set project_visual_first = project_extraction and project_extraction.material_type_key in ['drawing_set', 'map_or_cartography'] %}
     {% if project_visual_first and material_figures %}
     <section class="material-gallery project-visual-block" id="project-visual-gallery">
       {% if material_admin_mode %}
@@ -288,7 +288,7 @@
     {% endif %}
     {% if project_material_groups %}
     <section class="collection-materials-section project-material-section{% if project_collection %} project-page-block project-materials-block{% endif %}">
-      {% if project_collection %}<h2>Archivos</h2>{% else %}<h2>{{ ui_label('materials', active_domain, 'Materiales') }}</h2>{% endif %}
+      <h2>{{ ui_label('materials', active_domain, 'Materiales') }}</h2>
       {% for group in project_material_groups %}
       <details class="project-material-group project-material-group--{{ group.variant }}" open>
         <summary>

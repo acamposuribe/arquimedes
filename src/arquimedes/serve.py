@@ -1023,12 +1023,14 @@ def _delete_material_figures(material_id: str, selected_sidecars: list[str]) -> 
 
 def _wiki_context(path: Path, body: str, *, material_id: str | None = None, title: str | None = None, **extra) -> dict:
     rel = _project_rel_path(path)
+    heading_match = re.search(r"(?m)^#\s+(.+?)\s*$", body or "")
+    page_title = title or (heading_match.group(1).strip() if heading_match else "") or _label(path.stem if path.name != "_index.md" else path.parent.name)
     rendered = str(render_wiki_markdown(body, rel, material_id))
     rendered = re.sub(r"(?is)^\s*<h1[^>]*>.*?</h1>\s*", "", rendered, count=1)
     return {
         "breadcrumbs": breadcrumbs(rel),
         "content_html": Markup(rendered),
-        "page_title": title or _label(path.stem if path.name != "_index.md" else path.parent.name),
+        "page_title": page_title,
         "wiki_path": rel,
         **extra,
     }
@@ -1347,13 +1349,10 @@ def create_app(config: dict | None = None) -> FastAPI:
     @app.get("/wiki", response_class=HTMLResponse)
     def wiki_root(request: Request, domain: str = ""):
         active_domain = _active_domain(request, domain)
-        return RedirectResponse(url=f"/?domain={active_domain}", status_code=302)
+        return wiki_page(request, active_domain, domain=active_domain)
 
     @app.get("/wiki/{path:path}", response_class=HTMLResponse)
     def wiki_page(request: Request, path: str, q: str = "", depth: int = 3, domain: str = ""):
-        clean_path = path.strip("/")
-        if clean_path in {"research", "practice", "proyectos"}:
-            return RedirectResponse(url=f"/?domain={clean_path}", status_code=302)
         path = _resolve_wiki_slug_path(path)
         try:
             page_path, body = read_mod.load_wiki_page(path)

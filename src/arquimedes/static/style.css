@@ -564,14 +564,25 @@ img { max-width: 100%; display: block; }
   background: var(--panel);
 }
 
-.project-overview-block h1 { margin-top: 0; }
+.project-overview-block h1 {
+  margin-top: 0;
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
 
 .project-phase-timeline {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 0;
-  margin: 0 0 1rem;
-  padding: 0.25rem 0 0.75rem;
+  margin: 0.8rem 0 1.15rem;
+  padding: 0.15rem 0 0.35rem;
+}
+.project-phase-timeline--vertical {
+  grid-template-columns: 1fr;
+  gap: 0;
+  margin: 0;
+  padding: 0.15rem 0;
 }
 .project-phase-step {
   position: relative;
@@ -596,6 +607,23 @@ img { max-width: 100%; display: block; }
   background: var(--line);
   z-index: 0;
 }
+.project-phase-timeline--vertical .project-phase-step {
+  grid-template-columns: auto 1fr;
+  justify-items: start;
+  align-items: start;
+  min-height: 2.15rem;
+  text-align: left;
+}
+.project-phase-timeline--vertical .project-phase-step::before {
+  left: 0.38rem;
+  right: auto;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  height: auto;
+}
+.project-phase-timeline--vertical .project-phase-step:first-child::before { top: 0.42rem; left: 0.38rem; }
+.project-phase-timeline--vertical .project-phase-step:last-child::before { bottom: calc(100% - 0.42rem); right: auto; }
 .project-phase-step:first-child::before { left: 50%; }
 .project-phase-step:last-child::before { right: 50%; }
 .project-phase-dot {
@@ -1695,12 +1723,7 @@ body.lightbox-open { overflow: hidden; }
 
   .home-grid,
   .home-recent-materials-grid,
-  .project-state-block,
-  .project-phase-timeline { grid-template-columns: 1fr; }
-  .project-phase-step { justify-items: start; grid-template-columns: auto 1fr; text-align: left; }
-  .project-phase-step::before { left: 0.38rem; right: auto; top: 0; bottom: 0; width: 2px; height: auto; }
-  .project-phase-step:first-child::before { left: 0.38rem; top: 0.42rem; }
-  .project-phase-step:last-child::before { right: auto; bottom: calc(100% - 0.42rem); }
+  .project-state-block { grid-template-columns: 1fr; }
   .project-card-grid,
   .project-state-grid,
   .project-extraction-grid {

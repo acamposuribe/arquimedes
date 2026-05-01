@@ -158,16 +158,6 @@
     {% if not project_extraction %}
     {% if project_collection %}
     <section class="project-page-block project-overview-block">
-      {% if project_phase_timeline %}
-      <div class="project-phase-timeline" aria-label="Fase del proyecto">
-        {% for step in project_phase_timeline.steps %}
-        <div class="project-phase-step project-phase-step--{{ step.state }}">
-          <span class="project-phase-dot"></span>
-          <span class="project-phase-label">{{ step.label }}</span>
-        </div>
-        {% endfor %}
-      </div>
-      {% endif %}
       {{ content_html }}
     </section>
     {% else %}
@@ -361,6 +351,20 @@
         </div>
         <input name="depth" type="hidden" value="3">
       </form>
+    </section>
+    {% endif %}
+
+    {% if project_phase_timeline %}
+    <section class="panel project-phase-panel">
+      <h2>Fase del proyecto</h2>
+      <div class="project-phase-timeline project-phase-timeline--vertical" aria-label="Fase del proyecto">
+        {% for step in project_phase_timeline.steps %}
+        <div class="project-phase-step project-phase-step--{{ step.state }}">
+          <span class="project-phase-dot"></span>
+          <span class="project-phase-label">{{ step.label }}</span>
+        </div>
+        {% endfor %}
+      </div>
     </section>
     {% endif %}
 

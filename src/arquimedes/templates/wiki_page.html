@@ -100,9 +100,9 @@
     {% set project_visual_first = project_extraction and project_extraction.material_type_key in ['drawing_set', 'site_photo'] %}
     {% if project_visual_first and material_figures %}
     <section class="material-gallery project-page-block project-visual-block">
-      <div class="figure-grid">
+      <div class="figure-grid figure-grid--captioned">
         {% for item in material_figures %}
-        <figure class="figure-card">
+        <figure class="figure-card figure-card--captioned">
           <button class="figure-zoom"
             data-zoom-alt="{{ item.figure_id }}"
             data-zoom-caption="{{ item.caption_text }}"
@@ -115,6 +115,7 @@
             type="button">
             <img alt="{{ item.figure_id }}" loading="lazy" src="{{ item.image_url }}">
           </button>
+          <figcaption class="figure-card-caption">{{ item.display_title or item.figure_id }}</figcaption>
         </figure>
         {% endfor %}
       </div>

@@ -97,12 +97,43 @@
       {% endif %}
     </section>
     {% endif %}
-    {% set project_visual_first = project_extraction and project_extraction.material_type_key in ['drawing_set', 'site_photo'] %}
+    {% set project_visual_first = project_extraction and project_extraction.material_type_key in ['drawing_set', 'site_photo', 'map_or_cartography'] %}
     {% if project_visual_first and material_figures %}
-    <section class="material-gallery project-visual-block">
-      <div class="figure-grid figure-grid--captioned">
+    <section class="material-gallery project-visual-block" id="project-visual-gallery">
+      {% if material_admin_mode %}
+      <form id="figure-delete-form" class="figure-delete-form" method="post" action="/materials/{{ material_id }}/figures/delete" data-confirm-message="¿Eliminar las figuras seleccionadas? Esta acción borrará las imágenes extraídas y sus JSON asociados." data-preserve-scroll="true">
+        <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+        <div class="figure-delete-controls" hidden data-figure-delete-controls>
+          <button class="action-link action-link--danger" type="submit">Eliminar seleccionadas</button>
+          <button class="action-link-muted" type="button" data-figure-delete-cancel>Cancelar</button>
+        </div>
+        <div class="figure-grid figure-grid--admin">
+          {% for item in material_figures %}
+          <figure class="figure-card figure-card--admin">
+            <label class="figure-delete-pick" hidden data-figure-delete-pick>
+              <input type="checkbox" name="figure_sidecar" value="{{ item.sidecar_filename }}">
+              <span>Seleccionar</span>
+            </label>
+            <button class="figure-zoom"
+              data-zoom-alt="{{ item.figure_id }}"
+              data-zoom-caption="{{ item.caption_text }}"
+              data-zoom-description="{{ item.description_text }}"
+              data-zoom-group="figures"
+              data-zoom-meta="{% if item.source_page %}p. {{ item.source_page }}{% endif %}{% if item.visual_type_text %}{% if item.source_page %} · {% endif %}{{ item.visual_type_text }}{% endif %}"
+              data-zoom-src="{{ item.zoom_url }}"
+              data-zoom-title="{{ item.figure_id }}"
+              title="{{ item.figure_id }}"
+              type="button">
+              <img alt="{{ item.figure_id }}" loading="lazy" src="{{ item.image_url }}">
+            </button>
+          </figure>
+          {% endfor %}
+        </div>
+      </form>
+      {% else %}
+      <div class="figure-grid figure-grid--admin">
         {% for item in material_figures %}
-        <figure class="figure-card figure-card--captioned">
+        <figure class="figure-card figure-card--admin">
           <button class="figure-zoom"
             data-zoom-alt="{{ item.figure_id }}"
             data-zoom-caption="{{ item.caption_text }}"
@@ -115,10 +146,10 @@
             type="button">
             <img alt="{{ item.figure_id }}" loading="lazy" src="{{ item.image_url }}">
           </button>
-          <figcaption class="figure-card-caption">{{ item.display_title or item.figure_id }}</figcaption>
         </figure>
         {% endfor %}
       </div>
+      {% endif %}
     </section>
     {% elif project_primary_image %}
     <section class="project-primary-image-block">
@@ -381,6 +412,14 @@
   </article>
 
   <aside class="wiki-aside">
+    {% if material_admin_mode and project_visual_first and material_figures %}
+    <section class="panel project-admin-panel">
+      <h2>Admin</h2>
+      <div class="action-links">
+        <button class="action-link action-link--danger" type="button" data-figure-delete-toggle data-figure-delete-target="#figure-delete-form">Eliminar figuras…</button>
+      </div>
+    </section>
+    {% endif %}
     {% if project_extraction and project_extraction.metadata %}
     <section class="panel project-metadata-panel">
       <h2>Metadatos</h2>

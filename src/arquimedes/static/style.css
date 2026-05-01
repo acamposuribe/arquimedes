@@ -1489,7 +1489,7 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 
 .material-gallery { margin-top: 1.5rem; }
 .project-visual-block {
-  margin-top: 0;
+  margin: 0 0 1rem;
   padding: 0;
   background: transparent;
   border: 0;
@@ -1503,8 +1503,12 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 .figure-grid--captioned {
   gap: 0.55rem;
 }
+.figure-grid--admin {
+  gap: 0.55rem;
+}
 
 .figure-card {
+  position: relative;
   margin: 0;
   background: var(--panel);
   border: 1px solid var(--line);
@@ -1515,6 +1519,10 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
   background: #fff;
   display: grid;
   grid-template-rows: minmax(0, 1fr) auto;
+  padding: 0.22rem;
+}
+.figure-card--admin {
+  background: #fff;
   padding: 0.22rem;
 }
 
@@ -1546,6 +1554,52 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
   line-height: 1.1;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.figure-delete-form {
+  display: grid;
+  gap: 0.6rem;
+}
+.figure-delete-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.figure-delete-pick {
+  position: absolute;
+  top: 0.45rem;
+  left: 0.45rem;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.32rem;
+  padding: 0.24rem 0.42rem;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.94);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.7rem;
+  line-height: 1;
+}
+.figure-delete-pick input {
+  margin: 0;
+}
+.action-link--danger {
+  color: #8b1e24;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+}
+.action-link--danger:hover {
+  color: #6f1117;
+}
+.figure-delete-controls .action-link-muted {
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
 }
 
 /* ── Home page ───────────────────────────────────── */

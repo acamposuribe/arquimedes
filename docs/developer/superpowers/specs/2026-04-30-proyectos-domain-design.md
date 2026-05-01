@@ -30,6 +30,7 @@ That means:
 
 - collection identity is authoritative: `Proyectos/<project-name>/...` is the project
 - material pages remain useful evidence pages
+- project visual-material pages may expose an admin-only cleanup mode (`?mode=admin`) for deleting bad extracted figure artifacts directly from the web UI; this removes the extracted image file and its JSON sidecar, and is a maintenance workflow rather than normal reading mode
 - project pages become the primary semantic publication
 - clustering is disabled by default
 - bridge-concept synthesis is replaced by office-learning synthesis

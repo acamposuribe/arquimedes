@@ -121,6 +121,41 @@ if (confirmModal && confirmModalMessage && confirmModalConfirm && confirmModalCa
   });
 }
 
+// ── Figure delete mode ────────────────────────────
+
+function setFigureDeleteMode(form, enabled) {
+  if (!(form instanceof HTMLFormElement)) return;
+  form.dataset.deleteMode = enabled ? "true" : "false";
+  form.querySelectorAll("[data-figure-delete-controls], [data-figure-delete-pick]").forEach((node) => {
+    if (!(node instanceof HTMLElement)) return;
+    node.hidden = !enabled;
+  });
+  if (!enabled) {
+    form.querySelectorAll('input[type="checkbox"][name="figure_sidecar"]').forEach((input) => {
+      if (input instanceof HTMLInputElement) input.checked = false;
+    });
+  }
+}
+
+document.addEventListener("click", (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  const toggle = target?.closest("[data-figure-delete-toggle]");
+  if (toggle instanceof HTMLElement) {
+    const selector = toggle.dataset.figureDeleteTarget || "";
+    const form = selector ? document.querySelector(selector) : null;
+    if (form instanceof HTMLFormElement) {
+      setFigureDeleteMode(form, true);
+      form.scrollIntoView({block: "nearest", behavior: "smooth"});
+    }
+    return;
+  }
+  const cancel = target?.closest("[data-figure-delete-cancel]");
+  if (cancel instanceof HTMLElement) {
+    const form = cancel.closest("form");
+    if (form instanceof HTMLFormElement) setFigureDeleteMode(form, false);
+  }
+});
+
 // ── Lightbox ──────────────────────────────────────
 
 if (lightbox && lightboxImage) {

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import time
 from pathlib import Path, PurePosixPath
@@ -470,6 +471,8 @@ def _figure_view_models(material_id: str, figures: list[dict]) -> list[dict]:
             continue
         items.append({
             **figure,
+            "image_filename": name,
+            "sidecar_filename": str(figure.get("_sidecar_filename") or "").strip(),
             "visual_type_text": _plain(figure.get("visual_type")),
             "caption_text": _plain(figure.get("caption")),
             "description_text": _plain(figure.get("description")),
@@ -944,7 +947,7 @@ def _scoped_page_search_context(
     }
 
 
-def _material_page_context(material_id: str, body: str) -> dict:
+def _material_page_context(material_id: str, body: str, *, admin_mode: bool = False) -> dict:
     meta = read_mod.load_material_meta(material_id)
     if is_proyectos_domain(str(meta.get("domain") or ""), default="research"):
         body = _strip_project_material_chrome(body)
@@ -955,7 +958,65 @@ def _material_page_context(material_id: str, body: str) -> dict:
         "annotations_body": annotations_body,
         "related_materials_body": related_materials_body,
         "material_figures": _figure_view_models(material_id, read_mod.load_material_figures(material_id)),
+        "material_admin_mode": admin_mode,
     }
+
+
+def _delete_material_figures(material_id: str, selected_sidecars: list[str]) -> int:
+    material_dir = read_mod.get_project_root() / "extracted" / material_id
+    figures_dir = material_dir / "figures"
+    if not figures_dir.is_dir():
+        return 0
+    delete_ids: set[str] = set()
+    removed = 0
+    for raw_name in selected_sidecars:
+        name = PurePosixPath(str(raw_name or "")).name
+        if not name or name != str(raw_name or "").strip() or not re.fullmatch(r"fig_\d+\.json", name):
+            continue
+        sidecar_path = figures_dir / name
+        if not sidecar_path.exists():
+            continue
+        image_name = ""
+        try:
+            payload = json.loads(sidecar_path.read_text(encoding="utf-8"))
+            if isinstance(payload, dict):
+                image_name = PurePosixPath(str(payload.get("image_path") or "")).name
+                figure_id = str(payload.get("figure_id") or "").strip()
+                if figure_id:
+                    delete_ids.add(figure_id)
+        except (json.JSONDecodeError, OSError):
+            payload = None
+        if image_name and Path(image_name).suffix.lower() in _IMAGE_EXTENSIONS:
+            image_path = figures_dir / image_name
+            if image_path.exists():
+                image_path.unlink()
+            lowres_dir = figures_dir / ".lowres"
+            for cached in lowres_dir.glob(f"{Path(image_name).stem}-*.jpg") if lowres_dir.is_dir() else []:
+                cached.unlink()
+        sidecar_path.unlink()
+        removed += 1
+    pages_path = material_dir / "pages.jsonl"
+    if delete_ids and pages_path.exists():
+        rewritten: list[str] = []
+        changed = False
+        for line in pages_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                rewritten.append(line)
+                continue
+            refs = row.get("figure_refs")
+            if isinstance(refs, list):
+                kept = [ref for ref in refs if ref not in delete_ids]
+                if kept != refs:
+                    row["figure_refs"] = kept
+                    changed = True
+            rewritten.append(json.dumps(row, ensure_ascii=False))
+        if changed:
+            pages_path.write_text(("\n".join(rewritten) + "\n") if rewritten else "", encoding="utf-8")
+    return removed
 
 
 def _wiki_context(path: Path, body: str, *, material_id: str | None = None, title: str | None = None, **extra) -> dict:
@@ -1159,11 +1220,11 @@ def create_app(config: dict | None = None) -> FastAPI:
         )
 
     @app.get("/materials/{material_id}", response_class=HTMLResponse)
-    def material_page(request: Request, material_id: str, q: str = "", depth: int = 3, scope: str = "all", domain: str = ""):
+    def material_page(request: Request, material_id: str, q: str = "", depth: int = 3, scope: str = "all", domain: str = "", mode: str = ""):
         try:
             path = read_mod.material_wiki_path(material_id)
             body = read_mod.load_material_wiki(material_id)
-            material = _material_page_context(material_id, body)
+            material = _material_page_context(material_id, body, admin_mode=(mode or "").strip().lower() == "admin")
         except FileNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
         search_query = q.strip()
@@ -1206,6 +1267,18 @@ def create_app(config: dict | None = None) -> FastAPI:
                 ),
             },
         )
+
+    @app.post("/materials/{material_id}/figures/delete")
+    def material_delete_figures(request: Request, material_id: str, figure_sidecar: list[str] = Form([]), return_to: str = Form("")):
+        try:
+            meta = read_mod.load_material_meta(material_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not is_proyectos_domain(str(meta.get("domain") or ""), default="research"):
+            raise HTTPException(status_code=404, detail="Figure deletion is only available for Proyectos materials")
+        _delete_material_figures(material_id, figure_sidecar)
+        target = (return_to or "").strip() or f"/materials/{material_id}?mode=admin"
+        return RedirectResponse(url=target, status_code=303)
 
     @app.get("/materials/{material_id}/figures", response_class=HTMLResponse)
     def material_figures(request: Request, material_id: str):

@@ -49,6 +49,7 @@ Reglas:
 
 Esquema de salida:
 {{
+  "title": "...",
   "summary": "...",
   "document_type": "...",
   "keywords": ["..."],
@@ -75,6 +76,10 @@ Esquema de salida:
   }},
   "_finished": true
 }}
+
+title:
+- Para materiales drawing_set, nunca uses solo el nombre del proyecto. Usa fase + alcance de plano: "Anteproyecto. Planta baja", "Proyecto básico. Alzados", "Proyecto de ejecución. Detalles constructivos".
+- Para otros materiales, usa un título operativo específico, no solo el nombre del proyecto.
 
 summary:
 - Resume por qué este material importa para el proyecto y qué cambia en la comprensión del encargo, estado, obligaciones o riesgos.

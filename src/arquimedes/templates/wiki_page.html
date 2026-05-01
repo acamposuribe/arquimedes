@@ -164,7 +164,7 @@
           <div class="project-material-gallery">
             {% for item in phase['items'] %}
             <a class="project-material-tile" href="{{ item.material_url }}" title="{{ item.title }}">
-              <span class="project-material-tile-title">{{ item.title }}</span>
+              <span class="project-material-tile-title">{{ item.display_title or item.title }}</span>
               {% if item.thumbnail_url %}
               <img alt="{{ item.title }}" loading="lazy" src="{{ item.thumbnail_url }}">
               {% else %}
@@ -179,7 +179,7 @@
         <div class="project-material-gallery">
           {% for item in group['items'] %}
           <a class="project-material-tile" href="{{ item.material_url }}" title="{{ item.title }}">
-            <span class="project-material-tile-title">{{ item.title }}</span>
+            <span class="project-material-tile-title">{{ item.display_title or item.title }}</span>
             {% if item.thumbnail_url %}
             <img alt="{{ item.title }}" loading="lazy" src="{{ item.thumbnail_url }}">
             {% else %}

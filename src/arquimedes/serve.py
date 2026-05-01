@@ -626,6 +626,17 @@ def _collection_material_cards(domain: str, collection: str) -> list[dict]:
     return sorted(cards, key=lambda card: card["title"].lower())
 
 
+def _project_drawing_grid_title(title: str, phase_label: str) -> str:
+    """Shorten drawing card titles inside phase subsections."""
+    value = str(title or "").strip()
+    phase = str(phase_label or "").strip()
+    if phase and value.casefold().startswith(phase.casefold() + "."):
+        return value[len(phase) + 1:].strip()
+    if phase and value.casefold().startswith(phase.casefold() + " —"):
+        return value[len(phase) + 2:].strip()
+    return value
+
+
 def _project_material_groups(domain: str, collection: str) -> list[dict]:
     """Group materials in a Proyectos collection by project_material_type.
 
@@ -661,11 +672,14 @@ def _project_material_groups(domain: str, collection: str) -> list[dict]:
         phase_key = _plain(project_extraction.get("project_phase")) or "unknown"
         if phase_key not in _PROJECT_PHASE_LABELS:
             phase_key = "unknown"
+        phase_label = _PROJECT_PHASE_LABELS.get(phase_key, phase_key)
+        full_title = str(project_extraction.get("drawing_scope") or meta.get("title") or material_id) if type_key == "drawing_set" else str(meta.get("title") or material_id)
         grouped.setdefault(type_key, []).append({
             "material_id": material_id,
-            "title": str(project_extraction.get("drawing_scope") or meta.get("title") or material_id) if type_key == "drawing_set" else str(meta.get("title") or material_id),
+            "title": full_title,
+            "display_title": _project_drawing_grid_title(full_title, phase_label) if type_key == "drawing_set" else full_title,
             "phase_key": phase_key,
-            "phase_label": _PROJECT_PHASE_LABELS.get(phase_key, phase_key),
+            "phase_label": phase_label,
             "material_url": f"/materials/{material_id}",
             "summary": _plain(meta.get("summary")),
             "document_type": _plain(meta.get("document_type")) or str(meta.get("raw_document_type") or ""),

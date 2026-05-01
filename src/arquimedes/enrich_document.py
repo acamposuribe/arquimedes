@@ -152,6 +152,7 @@ _DOCUMENT_PATCH_SCHEMA = """{
 }"""
 
 _PROJECT_DOCUMENT_PATCH_SCHEMA = """{
+    \"title\": \"required string\",
     \"summary\": \"required string\",
     \"document_type\": \"required string\",
     \"keywords\": [\"required strings\"],
@@ -415,6 +416,9 @@ def enrich_document_stage(
         enriched_count["keywords"] = len(ef.value) if isinstance(ef.value, list) else 1
 
         if is_project_domain:
+            parsed_title = str(parsed.get("title") or "").strip()
+            if parsed_title:
+                meta_out["title"] = parsed_title
             # Project dossiers are archival/operational records, not research reflections.
             # Remove stale reflective fields from prior enrichments and keep concepts empty.
             meta_out.pop("methodological_conclusions", None)

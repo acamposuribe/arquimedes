@@ -682,9 +682,10 @@ img { max-width: 100%; display: block; }
   margin-top: 0.6rem;
 }
 .project-state-edit-item {
+  position: relative;
   display: grid;
-  gap: 0.45rem;
-  padding: 0.75rem 0.8rem;
+  gap: 0.3rem;
+  padding: 0.68rem 2rem 0.68rem 0.8rem;
   border: 1px solid var(--line);
   border-radius: 6px;
   background: #fbfbfc;
@@ -700,8 +701,8 @@ img { max-width: 100%; display: block; }
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 0.88rem;
-  line-height: 1.45;
+  font-size: 0.82rem;
+  line-height: 1.4;
 }
 .project-state-edit-item textarea:focus { outline: none; }
 .project-state-group summary {
@@ -719,9 +720,13 @@ img { max-width: 100%; display: block; }
   text-transform: uppercase;
 }
 .project-inline-card-actions {
+  position: absolute;
+  top: 0.45rem;
+  right: 0.4rem;
   display: flex;
-  justify-content: flex-end;
-  gap: 0.34rem;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.22rem;
 }
 .project-inline-icon {
   width: 1rem;
@@ -827,9 +832,10 @@ img { max-width: 100%; display: block; }
 }
 
 .project-sticky-note {
+  position: relative;
   display: grid;
-  gap: 0.55rem;
-  padding: 0.8rem 0.85rem;
+  gap: 0.4rem;
+  padding: 0.72rem 2rem 0.72rem 0.85rem;
   background: #fff8bf;
   border: 1px solid #eadf8b;
   border-radius: 6px;
@@ -862,10 +868,6 @@ img { max-width: 100%; display: block; }
   letter-spacing: 0.06em;
   color: rgba(0, 0, 0, 0.62);
 }
-.project-sticky-note .project-inline-card-actions,
-.project-state-edit-item .project-inline-card-actions {
-  margin: 0 0 0.05rem;
-}
 
 .project-sticky-note-kind { font-weight: 700; }
 
@@ -880,8 +882,8 @@ img { max-width: 100%; display: block; }
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 0.87rem;
-  line-height: 1.45;
+  font-size: 0.81rem;
+  line-height: 1.4;
 }
 .project-sticky-note textarea:focus {
   outline: none;

@@ -36,6 +36,23 @@ _PROJECT_MATERIAL_TYPE_ORDER: dict[str, int] = {
     key: index for index, key in enumerate(_PROJECT_MATERIAL_TYPE_LABELS)
 }
 
+_PROJECT_PHASE_LABELS: dict[str, str] = {
+    "lead": "Lead",
+    "feasibility": "Viabilidad",
+    "schematic_design": "Anteproyecto",
+    "basic_project": "Proyecto básico",
+    "execution_project": "Proyecto de ejecución",
+    "tender": "Licitación",
+    "construction": "Obra",
+    "handover": "Entrega",
+    "archived": "Archivado",
+    "unknown": "Fase sin identificar",
+}
+
+_PROJECT_PHASE_ORDER: dict[str, int] = {
+    key: index for index, key in enumerate(_PROJECT_PHASE_LABELS)
+}
+
 
 # ---------------------------------------------------------------------------
 # Enriched field unwrapper

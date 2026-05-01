@@ -21,6 +21,8 @@ from arquimedes import search as search_mod
 from arquimedes.compile_pages import (
     _PROJECT_MATERIAL_TYPE_LABELS,
     _PROJECT_MATERIAL_TYPE_ORDER,
+    _PROJECT_PHASE_LABELS,
+    _PROJECT_PHASE_ORDER,
 )
 from arquimedes.domain_profiles import (
     display_domain_name,
@@ -656,9 +658,14 @@ def _project_material_groups(domain: str, collection: str) -> list[dict]:
         if not thumbnail_url and preview_images:
             thumbnail_url = preview_images[0]["image_url"]
 
+        phase_key = _plain(project_extraction.get("project_phase")) or "unknown"
+        if phase_key not in _PROJECT_PHASE_LABELS:
+            phase_key = "unknown"
         grouped.setdefault(type_key, []).append({
             "material_id": material_id,
-            "title": str(meta.get("title") or material_id),
+            "title": str(project_extraction.get("drawing_scope") or meta.get("title") or material_id) if type_key == "drawing_set" else str(meta.get("title") or material_id),
+            "phase_key": phase_key,
+            "phase_label": _PROJECT_PHASE_LABELS.get(phase_key, phase_key),
             "material_url": f"/materials/{material_id}",
             "summary": _plain(meta.get("summary")),
             "document_type": _plain(meta.get("document_type")) or str(meta.get("raw_document_type") or ""),
@@ -669,14 +676,27 @@ def _project_material_groups(domain: str, collection: str) -> list[dict]:
 
     groups: list[dict] = []
     for type_key, items in grouped.items():
-        items.sort(key=lambda x: x["title"].lower())
+        items.sort(key=lambda x: (_PROJECT_PHASE_ORDER.get(x.get("phase_key", "unknown"), 999), x["title"].lower()))
         variant = "gallery" if type_key in _PROJECT_GALLERY_TYPES else "list"
+        phase_groups = []
+        if type_key == "drawing_set":
+            by_phase: dict[str, list[dict]] = {}
+            for item in items:
+                by_phase.setdefault(item.get("phase_key") or "unknown", []).append(item)
+            for phase_key, phase_items in sorted(by_phase.items(), key=lambda row: _PROJECT_PHASE_ORDER.get(row[0], 999)):
+                phase_groups.append({
+                    "phase_key": phase_key,
+                    "phase_label": _PROJECT_PHASE_LABELS.get(phase_key, phase_key),
+                    "items": phase_items,
+                    "count": len(phase_items),
+                })
         groups.append({
             "type_key": type_key,
             "label": _PROJECT_MATERIAL_TYPE_LABELS.get(type_key, type_key),
             "variant": variant,
             "count": len(items),
             "items": items,
+            "phase_groups": phase_groups,
         })
     groups.sort(key=lambda g: _PROJECT_MATERIAL_TYPE_ORDER.get(g["type_key"], 999))
     return groups

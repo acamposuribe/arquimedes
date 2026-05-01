@@ -1692,25 +1692,50 @@ body.lightbox-open { overflow: hidden; }
   border-radius: 999px;
 }
 
+.project-material-phase h3 {
+  margin: 0.65rem 0 0;
+  padding: 0 0.65rem;
+  color: var(--muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
 .project-material-gallery {
   padding: 0.45rem 0.65rem 0.65rem;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(105px, 1fr));
-  gap: 0.35rem;
+  grid-template-columns: repeat(auto-fill, minmax(115px, 1fr));
+  gap: 0.45rem;
 }
 .project-material-tile {
-  display: block;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   aspect-ratio: 1 / 1;
   overflow: hidden;
+  border: 1px solid var(--line);
   border-radius: 4px;
-  background: var(--surface-alt, #f3f3f3);
+  background: #fff;
+  padding: 0.28rem;
   text-decoration: none;
 }
 .project-material-tile img {
   width: 100%;
   height: 100%;
-  object-fit: cover;
+  min-height: 0;
+  object-fit: contain;
   display: block;
+  padding-bottom: 0.08rem;
+}
+.project-material-tile-title {
+  overflow: hidden;
+  margin: 0 0 0.2rem;
+  color: var(--muted);
+  font-size: 0.64rem;
+  font-weight: 600;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .project-material-tile-fallback {
   display: flex;

@@ -157,9 +157,29 @@
           <span class="project-material-group-count">{{ group.count }}</span>
         </summary>
         {% if group.variant == 'gallery' %}
+        {% if group.phase_groups %}
+        {% for phase in group.phase_groups %}
+        <div class="project-material-phase">
+          <h3>{{ phase.phase_label }}</h3>
+          <div class="project-material-gallery">
+            {% for item in phase['items'] %}
+            <a class="project-material-tile" href="{{ item.material_url }}" title="{{ item.title }}">
+              <span class="project-material-tile-title">{{ item.title }}</span>
+              {% if item.thumbnail_url %}
+              <img alt="{{ item.title }}" loading="lazy" src="{{ item.thumbnail_url }}">
+              {% else %}
+              <span class="project-material-tile-fallback">{{ item.title }}</span>
+              {% endif %}
+            </a>
+            {% endfor %}
+          </div>
+        </div>
+        {% endfor %}
+        {% else %}
         <div class="project-material-gallery">
           {% for item in group['items'] %}
           <a class="project-material-tile" href="{{ item.material_url }}" title="{{ item.title }}">
+            <span class="project-material-tile-title">{{ item.title }}</span>
             {% if item.thumbnail_url %}
             <img alt="{{ item.title }}" loading="lazy" src="{{ item.thumbnail_url }}">
             {% else %}
@@ -168,6 +188,7 @@
           </a>
           {% endfor %}
         </div>
+        {% endif %}
         {% else %}
         <ul class="project-material-list">
           {% for item in group['items'] %}

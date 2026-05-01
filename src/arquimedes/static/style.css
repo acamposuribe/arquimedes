@@ -545,6 +545,9 @@ img { max-width: 100%; display: block; }
   margin: 0;
   padding: 0;
   border: 0;
+  font-size: 1.45rem;
+  font-weight: 400;
+  line-height: 1.25;
 }
 
 .wiki-layout {
@@ -1240,19 +1243,14 @@ img { max-width: 100%; display: block; }
   line-height: 1;
 }
 .project-extraction-panel[open] .project-extraction-toggle {
+  color: var(--ink);
   font-size: 1.1rem;
 }
 .project-extraction-panel[open] .project-extraction-toggle::before {
   content: "−";
 }
-.project-extraction-panel[open] .project-extraction-toggle {
-  color: var(--ink);
-}
 .project-extraction-panel:not([open]) .project-extraction-toggle::before {
   content: "+";
-}
-.project-extraction-toggle {
-  color: transparent;
 }
 .project-extraction-body {
   margin-top: 0.8rem;

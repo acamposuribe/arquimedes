@@ -13,20 +13,28 @@
           <h3>{{ ui_label('matching_passages', active_domain, 'Matching passages') }}</h3>
           <div class="search-evidence-list">
             {% for hit in search_hits.chunks %}
-            <article class="search-evidence-item">
-              <div class="search-evidence-meta">
-                {% if hit.pages_label %}<span>{{ hit.pages_label }}</span>{% endif %}
-                {% if hit.emphasized %}<span>emphasized</span>{% endif %}
+            <details class="search-evidence-item search-evidence-item--expandable">
+              <summary>
+                <div class="search-evidence-meta">
+                  {% if hit.pages_label %}<span>{{ hit.pages_label }}</span>{% endif %}
+                  {% if hit.emphasized %}<span>emphasized</span>{% endif %}
+                </div>
+                {% if hit.summary %}
+                <p class="search-evidence-summary-label">{{ ui_label('summary', active_domain, 'Summary') }}</p>
+                <p class="search-evidence-summary">{{ hit.summary }}</p>
+                {% endif %}
+                {% if hit.excerpt_html %}
+                <p class="search-evidence-excerpt-label">{{ ui_label('full_text', active_domain, 'Full text') }}</p>
+                <p class="search-evidence-excerpt">{{ hit.excerpt_html }}</p>
+                {% endif %}
+              </summary>
+              {% if hit.full_text_html %}
+              <div class="search-evidence-fulltext">
+                <p class="search-evidence-excerpt-label">{{ ui_label('full_text', active_domain, 'Full text') }}</p>
+                <p class="search-evidence-excerpt">{{ hit.full_text_html }}</p>
               </div>
-              {% if hit.summary %}
-              <p class="search-evidence-summary-label">{{ ui_label('summary', active_domain, 'Summary') }}</p>
-              <p class="search-evidence-summary">{{ hit.summary }}</p>
               {% endif %}
-              {% if hit.excerpt_html %}
-              <p class="search-evidence-excerpt-label">{{ ui_label('full_text', active_domain, 'Full text') }}</p>
-              <p class="search-evidence-excerpt">{{ hit.excerpt_html }}</p>
-              {% endif %}
-            </article>
+            </details>
             {% endfor %}
           </div>
         </div>

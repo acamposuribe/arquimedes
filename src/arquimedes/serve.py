@@ -8,7 +8,7 @@ from urllib.parse import urlencode, urlsplit
 
 import mistune
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from markupsafe import Markup, escape
@@ -1102,40 +1102,13 @@ def create_app(config: dict | None = None) -> FastAPI:
     @app.get("/wiki", response_class=HTMLResponse)
     def wiki_root(request: Request, domain: str = ""):
         active_domain = _active_domain(request, domain)
-        try:
-            path, body = read_mod.load_wiki_page(active_domain)
-        except FileNotFoundError:
-            listing = read_mod.list_wiki_dir(active_domain)
-            return _TEMPLATES.TemplateResponse(
-                request,
-                "wiki_dir.html",
-                {
-                    "request": request,
-                    **_base_context(
-                        request,
-                        page_title=f"{_domain_label(active_domain)} Wiki",
-                        active_domain=active_domain,
-                        breadcrumbs=breadcrumbs(f"wiki/{active_domain}/_index.md"),
-                        listing=listing,
-                    ),
-                },
-            )
-        return _TEMPLATES.TemplateResponse(
-            request,
-            "wiki_page.html",
-            {
-                "request": request,
-                **_base_context(
-                    request,
-                    page_title=f"{_domain_label(active_domain)} Wiki",
-                    page_domain=active_domain,
-                ),
-                **_wiki_context(path, body, title=f"{_domain_label(active_domain)} Wiki", material_id=read_mod.material_id_for_wiki_path(path)),
-            },
-        )
+        return RedirectResponse(url=f"/?domain={active_domain}", status_code=302)
 
     @app.get("/wiki/{path:path}", response_class=HTMLResponse)
     def wiki_page(request: Request, path: str, q: str = "", depth: int = 3, domain: str = ""):
+        clean_path = path.strip("/")
+        if clean_path in {"research", "practice", "proyectos"}:
+            return RedirectResponse(url=f"/?domain={clean_path}", status_code=302)
         path = _resolve_wiki_slug_path(path)
         try:
             page_path, body = read_mod.load_wiki_page(path)

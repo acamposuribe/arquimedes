@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} · Arquimedes</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260501-compact-wiki">
+  <link rel="stylesheet" href="/static/style.css?v=20260501-14px-no-wiki-index">
 </head>
 <body>
   <header class="site-header">
@@ -27,7 +27,6 @@
       <section class="rail-section">
         <h2>{{ ui_label('navigation', active_domain, 'Navigation') }}</h2>
         <a href="{{ '/?domain=' ~ active_domain }}" {% if _path == '/' %}class="active"{% endif %}>{{ ui_label('home', active_domain, 'Home') }}</a>
-        <a href="/wiki/{{ active_domain }}" {% if _path == '/wiki' or _path.startswith('/wiki/') %}class="active"{% endif %}>{{ ui_label('wiki', active_domain, 'Wiki') }}</a>
         <a href="{{ '/search?domain=' ~ active_domain }}" {% if _path.startswith('/search') %}class="active"{% endif %}>{{ ui_label('search', active_domain, 'Search') }}</a>
       </section>
       {% if nav_collections %}

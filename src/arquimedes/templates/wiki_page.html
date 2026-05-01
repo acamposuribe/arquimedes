@@ -169,7 +169,7 @@
       <h2>Datos estructurados del proyecto</h2>
       <div class="project-state-columns">
         <div class="project-state-column">
-          {% for group in project_state_panel if loop.index0 is even %}
+          {% for group in project_state_panel[::2] %}
           <details class="project-state-group">
             <summary>
               <span>{{ group.label }}</span>
@@ -205,7 +205,7 @@
           {% endfor %}
         </div>
         <div class="project-state-column">
-          {% for group in project_state_panel if loop.index0 is odd %}
+          {% for group in project_state_panel[1::2] %}
           <details class="project-state-group">
             <summary>
               <span>{{ group.label }}</span>

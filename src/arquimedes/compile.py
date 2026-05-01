@@ -694,7 +694,25 @@ def compile_wiki(
     prev_template_version = int((prev_stamp or {}).get("template_version") or 0)
     current_cluster_stamp = _cluster_file_stamp(root)
     templates_changed = prev_template_version != COMPILE_TEMPLATE_VERSION
-    clusters_changed = (current_cluster_stamp != prev_cluster_stamp) or templates_changed or force or recompile_pages
+    expected_concept_paths = [
+        wiki_root / Path(
+            c.get("wiki_path")
+            or (
+                f"wiki/{str(c.get('domain', '')).strip()}/bridge-concepts/{c['slug']}.md"
+                if str(c.get("domain", "")).strip()
+                else f"wiki/shared/bridge-concepts/{c['slug']}.md"
+            )
+        ).relative_to("wiki")
+        for c in [*concept_page_clusters, *bridge_page_clusters]
+    ]
+    missing_concept_pages = any(not path.exists() for path in expected_concept_paths)
+    clusters_changed = (
+        current_cluster_stamp != prev_cluster_stamp
+        or templates_changed
+        or force
+        or recompile_pages
+        or missing_concept_pages
+    )
 
     # 6. Material clusters index: material_id → list of concept homes
     material_clusters: dict[str, list[dict]] = {mid: [] for mid in all_metas}

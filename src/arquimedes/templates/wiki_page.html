@@ -142,6 +142,11 @@
     {{ content_html }}
     {% endif %}
     {% endif %}
+    {% if project_state_html %}
+    <section class="project-page-block project-state-block">
+      {{ project_state_html }}
+    </section>
+    {% endif %}
     {% if project_material_groups %}
     <section class="collection-materials-section project-material-section{% if project_collection %} project-page-block project-materials-block{% endif %}">
       {% if not project_collection %}<h2>{{ ui_label('materials', active_domain, 'Materiales') }}</h2>{% endif %}

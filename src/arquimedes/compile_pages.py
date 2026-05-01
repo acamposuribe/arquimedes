@@ -918,16 +918,25 @@ def render_project_page(
         ("aprendizajes", "Aprendizajes positivos", "positive_learnings"),
         ("errores_reparaciones", "Errores y acciones de reparación", "mistakes_or_regrets"),
     ]
+    structured_specs: list[tuple[str, str, list]] = []
     for section_id, heading, field in section_specs:
         section = section_records.get(section_id) or {}
-        lines.append(f"## {section.get('title') or heading}\n")
         if section.get("body"):
+            lines.append(f"## {section.get('title') or heading}\n")
             lines.append(str(section["body"]).strip())
             lines.append("")
-        elif section_id == "errores_reparaciones":
-            _render_bullets(lines, list(state.get("mistakes_or_regrets") or []) + list(state.get("repair_actions") or []))
+        if section_id == "errores_reparaciones":
+            values = list(state.get("mistakes_or_regrets") or []) + list(state.get("repair_actions") or [])
         else:
-            _render_bullets(lines, state.get(field) or [])
+            values = state.get(field) or []
+        if values:
+            structured_specs.append((section_id, heading, values))
+
+    if structured_specs:
+        lines.append("## Datos estructurados del proyecto\n")
+        for _, heading, values in structured_specs:
+            lines.append(f"### {heading}\n")
+            _render_bullets(lines, values)
 
     if recent_additions:
         lines.append("## Historial reciente\n")

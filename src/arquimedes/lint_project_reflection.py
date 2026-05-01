@@ -241,7 +241,9 @@ Tareas:
   - current_work_in_progress: trabajo activo esta semana.
   - next_focus: foco de las próximas 1-2 semanas, no lo que ya está en curso.
 - Trata notas y secciones Hermes/humanas como evidencia de alta prioridad.
-- Propón section_deltas solo cuando mejoren una sección de página.
+- project_state es la memoria estructurada canónica: rellena ahí los hechos, listas, riesgos, decisiones, requisitos, aprendizajes y acciones.
+- section_deltas es la capa editorial visible: propón secciones solo cuando aporten una síntesis narrativa útil para humanos.
+- No copies listas de project_state punto por punto en section_deltas. Las secciones deben sintetizar, priorizar y explicar; si solo repetirían la lista estructurada, omítelas.
 - stage solo puede ser uno de: lead, feasibility, schematic_design, basic_project, execution_project, tender, construction, handover, archived. Si no puedes inferirlo, omite stage y deja stage_confidence en 0.0; nunca uses unknown.
 - Nunca borres texto protegido: si reemplazas una sección protegida como reflection, incluye justification no vacía y references_prior_body=true.
 - Copia revision como prior.revision + 1 y replaces_updated_at como el updated_at exacto de la sección previa.

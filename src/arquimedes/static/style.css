@@ -566,6 +566,30 @@ img { max-width: 100%; display: block; }
 
 .project-overview-block h1 { margin-top: 0; }
 
+.project-state-block {
+  border-left: 3px solid var(--accent);
+}
+.project-state-block h2:first-child { margin-top: 0; }
+.project-state-block h3 {
+  margin: 1rem 0 0.35rem;
+  color: var(--muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.project-state-block h3:first-of-type { margin-top: 0.25rem; }
+.project-state-block ul {
+  margin-top: 0;
+  padding-left: 1rem;
+}
+.project-state-block li {
+  margin-bottom: 0.3rem;
+  font-size: 0.9rem;
+  line-height: 1.45;
+}
+
 .project-materials-block {
   padding: 1.35rem;
 }

@@ -1219,6 +1219,10 @@ img { max-width: 100%; display: block; }
 .project-extraction-panel summary {
   list-style: none;
   cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
 }
 .project-extraction-panel summary::-webkit-details-marker {
   display: none;
@@ -1226,6 +1230,29 @@ img { max-width: 100%; display: block; }
 .project-extraction-panel summary .eyebrow {
   display: inline-block;
   margin: 0;
+}
+.project-extraction-toggle {
+  flex-shrink: 0;
+  color: var(--muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 1rem;
+  font-weight: 600;
+  line-height: 1;
+}
+.project-extraction-panel[open] .project-extraction-toggle {
+  font-size: 1.1rem;
+}
+.project-extraction-panel[open] .project-extraction-toggle::before {
+  content: "−";
+}
+.project-extraction-panel[open] .project-extraction-toggle {
+  color: var(--ink);
+}
+.project-extraction-panel:not([open]) .project-extraction-toggle::before {
+  content: "+";
+}
+.project-extraction-toggle {
+  color: transparent;
 }
 .project-extraction-body {
   margin-top: 0.8rem;
@@ -1541,6 +1568,7 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 
 .material-gallery { margin-top: 1.5rem; }
 .project-visual-block {
+  margin-top: 0;
   margin-bottom: 1.4rem;
   padding: 1.25rem 1.5rem;
   border: 1px solid var(--line);

@@ -97,7 +97,7 @@ def load_material_figures(material_id: str) -> list[dict]:
         except (json.JSONDecodeError, OSError):
             continue
         if isinstance(data, dict):
-            figures.append({**data, "_sidecar_filename": path.name})
+            figures.append(data)
     return figures
 
 

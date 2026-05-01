@@ -274,8 +274,10 @@ def merge_project_state_delta(project_id: str, delta: dict[str, Any], *, root: P
     next_state = dict(state)
     next_stage = str(delta.get("stage", next_state["stage"])).strip()
     if next_stage != next_state["stage"]:
+        if next_stage not in PROJECT_STAGES:
+            raise ProjectStateError(f"stage must be one of: {', '.join(PROJECT_STAGES)}")
         old_idx = PROJECT_STAGES.index(next_state["stage"])
-        new_idx = PROJECT_STAGES.index(next_stage) if next_stage in PROJECT_STAGES else -1
+        new_idx = PROJECT_STAGES.index(next_stage)
         if new_idx < old_idx:
             has_justification = bool(delta.get("mistakes_or_regrets") or delta.get("repair_actions"))
             if not has_justification:
@@ -435,7 +437,7 @@ def append_project_note(
     if not text.strip():
         raise ProjectStateError("note text is required")
     root = root or get_project_root()
-    notes = load_project_notes(project_id, root=root, include_deleted=True)
+    notes = load_project_notes(project_id, root=root, include_deleted=True, include_metadata=True)
     note: dict[str, Any] = {
         "note_id": f"note-{len(notes) + 1:04d}",
         "actor": actor,
@@ -455,7 +457,13 @@ def append_project_note(
     return note
 
 
-def load_project_notes(project_id: str, *, root: Path | None = None, include_deleted: bool = False) -> list[dict[str, Any]]:
+def load_project_notes(
+    project_id: str,
+    *,
+    root: Path | None = None,
+    include_deleted: bool = False,
+    include_metadata: bool = False,
+) -> list[dict[str, Any]]:
     root = root or get_project_root()
     path = project_notes_path(root, project_id)
     if not path.exists():
@@ -465,7 +473,10 @@ def load_project_notes(project_id: str, *, root: Path | None = None, include_del
         if line.strip():
             note = _normalize_note(json.loads(line), index)
             if include_deleted or note.get("status") != "deleted":
-                notes.append(note)
+                if include_metadata:
+                    notes.append(note)
+                else:
+                    notes.append({k: v for k, v in note.items() if k not in {"note_id", "status", "deleted"}})
     return notes
 
 
@@ -475,7 +486,7 @@ def update_project_note(project_id: str, *, note_id: str, text: str, actor: str,
     if not text.strip():
         raise ProjectStateError("note text is required")
     root = root or get_project_root()
-    notes = load_project_notes(project_id, root=root, include_deleted=True)
+    notes = load_project_notes(project_id, root=root, include_deleted=True, include_metadata=True)
     for note in notes:
         if note.get("note_id") == note_id:
             if note.get("deleted"):
@@ -494,7 +505,7 @@ def set_project_note_status(project_id: str, *, note_id: str, status: str, actor
     if status not in NOTE_STATUSES:
         raise ProjectStateError(f"note status must be one of: {', '.join(sorted(NOTE_STATUSES))}")
     root = root or get_project_root()
-    notes = load_project_notes(project_id, root=root, include_deleted=True)
+    notes = load_project_notes(project_id, root=root, include_deleted=True, include_metadata=True)
     for note in notes:
         if note.get("note_id") == note_id:
             note["status"] = status
@@ -511,7 +522,7 @@ def set_project_note_status(project_id: str, *, note_id: str, status: str, actor
 
 def mark_project_notes_incorporated(project_id: str, *, actor: str = "reflection", root: Path | None = None) -> list[str]:
     root = root or get_project_root()
-    notes = load_project_notes(project_id, root=root, include_deleted=True)
+    notes = load_project_notes(project_id, root=root, include_deleted=True, include_metadata=True)
     changed = []
     stamp = now_iso()
     for note in notes:

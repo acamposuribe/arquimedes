@@ -142,7 +142,7 @@ def _meta_list(value: Any) -> list[str]:
 def _open_project_notes(root: Path, project_id: str) -> list[dict]:
     return [
         note
-        for note in load_project_notes(project_id, root=root)
+        for note in load_project_notes(project_id, root=root, include_metadata=True)
         if str(note.get("status") or "open") == "open"
     ]
 
@@ -292,7 +292,11 @@ Tareas:
 - Usa updated_by=reflection implícitamente; no lo incluyas salvo que el esquema lo pida.
 """
     path_list = "\n".join(f"- {path}" for path in evidence_paths)
+    first_path = str(evidence_paths[0]) if evidence_paths else ""
     user = f"""\
+Lee el paquete de evidencia del proyecto en:
+{first_path}
+
 Lee el paquete de evidencia del proyecto en estas rutas. Si hay partes, lee todas las partes antes de responder; el archivo índice explica las rutas y evita límites de lectura:
 {path_list}
 

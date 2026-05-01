@@ -1004,7 +1004,7 @@ def _render_index_pages(
                     logger.warning("Skipping Proyectos/_general project page for %s loose material(s)", len(metas))
                     continue
                 state = project_state.load_project_state(collection, root=get_project_root())
-                notes = project_state.load_project_notes(collection, root=get_project_root())
+                notes = project_state.load_project_notes(collection, root=get_project_root(), include_metadata=True)
                 sections = project_state.load_project_sections(collection, root=get_project_root())
                 recent = sorted(
                     [

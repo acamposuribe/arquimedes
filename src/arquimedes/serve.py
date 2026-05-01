@@ -36,6 +36,9 @@ from arquimedes.config import get_enabled_domains
 from arquimedes.index import get_index_path
 
 _PROJECT_GALLERY_TYPES = {"drawing_set", "site_photo", "map_or_cartography"}
+_PROJECT_MATERIAL_TYPE_LABEL_FALLBACKS = {
+    "meeting_report": "Informes de reunión",
+}
 
 _HERE = Path(__file__).resolve().parent
 _TEMPLATES = Jinja2Templates(directory=str(_HERE / "templates"))
@@ -473,7 +476,7 @@ def _figure_view_models(material_id: str, figures: list[dict]) -> list[dict]:
         items.append({
             **figure,
             "image_filename": name,
-            "sidecar_filename": str(figure.get("_sidecar_filename") or "").strip(),
+            "sidecar_filename": str(figure.get("_sidecar_filename") or (f"{figure.get('figure_id')}.json" if figure.get("figure_id") else "")).strip(),
             "visual_type_text": _plain(figure.get("visual_type")),
             "caption_text": _plain(figure.get("caption")),
             "description_text": _plain(figure.get("description")),
@@ -658,7 +661,7 @@ def _project_drawing_grid_title(title: str, phase_label: str) -> str:
 
 def _project_notes_context(project_id: str) -> dict:
     notes = sorted(
-        project_state_mod.load_project_notes(project_id, root=read_mod.get_project_root(), include_deleted=True),
+        project_state_mod.load_project_notes(project_id, root=read_mod.get_project_root(), include_deleted=True, include_metadata=True),
         key=lambda row: (str(row.get("timestamp") or ""), str(row.get("note_id") or "")),
         reverse=True,
     )
@@ -734,7 +737,7 @@ def _project_material_groups(domain: str, collection: str) -> list[dict]:
             project_extraction = {}
         type_field = project_extraction.get("project_material_type")
         type_key = _plain(type_field) or "unknown"
-        if type_key not in _PROJECT_MATERIAL_TYPE_LABELS:
+        if type_key not in _PROJECT_MATERIAL_TYPE_LABELS and type_key not in _PROJECT_MATERIAL_TYPE_LABEL_FALLBACKS:
             type_key = "unknown"
 
         thumbs = read_mod.load_material_thumbnails(material_id)
@@ -790,7 +793,7 @@ def _project_material_groups(domain: str, collection: str) -> list[dict]:
                 })
         groups.append({
             "type_key": type_key,
-            "label": _PROJECT_MATERIAL_TYPE_LABELS.get(type_key, type_key),
+            "label": _PROJECT_MATERIAL_TYPE_LABELS.get(type_key) or _PROJECT_MATERIAL_TYPE_LABEL_FALLBACKS.get(type_key, type_key),
             "variant": variant,
             "count": len(items),
             "items": items,
@@ -1425,6 +1428,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                     if is_proyectos_domain(coll_domain, default="research"):
                         project_collection = True
                         project_id = coll_name
+                        project_material_groups = _project_material_groups(coll_domain, coll_name) or None
                         before_notes, notes_section, after_notes = _split_markdown_section(
                             content_body,
                             _heading_candidates("notas_recientes", "Notas recientes"),
@@ -1448,7 +1452,6 @@ def create_app(config: dict | None = None) -> FastAPI:
                             content_body = "\n\n".join(part for part in [before_state, after_state] if part)
                         project_state_panel = _project_state_panel_context(coll_name)
                         project_phase_timeline = _project_phase_timeline(project_state_mod.load_project_state(coll_name).get("stage", "lead"))
-                        project_material_groups = _project_material_groups(coll_domain, coll_name) or None
                     else:
                         collection_material_thumbs = _collection_sidebar_context(coll_domain, coll_name) or None
                         collection_material_cards = _collection_material_cards(coll_domain, coll_name) or None

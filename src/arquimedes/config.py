@@ -34,7 +34,8 @@ def _find_project_root() -> Path:
     Resolution order:
     1. ARQUIMEDES_ROOT environment variable (for launchd, agents, remote invocation)
     2. Walk up from CWD looking for config/config.yaml
-    3. Walk up from this file's installed location (works when `arq` is on PATH)
+    3. ARQUIMEDES_CONFIG when it points at an existing config outside the CWD vault
+    4. Walk up from this file's installed location (works when `arq` is on PATH)
     """
     # 1. Explicit env var
     env_root = os.environ.get(_ENV_VAR)
@@ -46,6 +47,15 @@ def _find_project_root() -> Path:
             f"{_ENV_VAR}={env_root} does not contain config/config.yaml"
         )
 
+    # 2. Walk up from CWD. This intentionally takes precedence over
+    # ARQUIMEDES_CONFIG so tests and ad-hoc shells can chdir into a vault even
+    # when a maintainer-level config is exported in the environment.
+    current = Path.cwd()
+    for parent in [current, *current.parents]:
+        if (parent / "config" / "config.yaml").exists():
+            return parent
+
+    # 3. Existing env config, for processes not launched from inside a vault.
     config_path = _existing_env_config_path()
     if config_path is not None:
         for ancestor in config_path.parents:
@@ -55,13 +65,7 @@ def _find_project_root() -> Path:
             return config_path.parent.parent
         return config_path.parent
 
-    # 2. Walk up from CWD
-    current = Path.cwd()
-    for parent in [current, *current.parents]:
-        if (parent / "config" / "config.yaml").exists():
-            return parent
-
-    # 3. Walk up from this file's location (installed package)
+    # 4. Walk up from this file's location (installed package)
     pkg_dir = Path(__file__).resolve().parent
     for parent in [pkg_dir, *pkg_dir.parents]:
         if (parent / "config" / "config.yaml").exists():

@@ -676,6 +676,51 @@ img { max-width: 100%; display: block; }
   border-radius: 4px;
   background: color-mix(in srgb, var(--panel) 88%, var(--bg));
 }
+.project-state-edit-list {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.6rem;
+}
+.project-state-edit-item {
+  display: grid;
+  gap: 0.45rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: #fbfbfc;
+}
+.project-state-edit-item textarea {
+  width: 100%;
+  min-height: 0;
+  field-sizing: content;
+  resize: none;
+  overflow: hidden;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+.project-state-edit-item textarea:focus { outline: none; }
+.project-state-edit-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.project-state-edit-actions button {
+  padding: 0.28rem 0.58rem;
+  border: 1px solid var(--line-dark);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--ink);
+  font: inherit;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.75rem;
+  cursor: pointer;
+}
+.project-state-edit-actions button:hover { background: var(--panel); }
 .project-state-group summary {
   cursor: pointer;
   color: var(--muted);
@@ -721,6 +766,22 @@ img { max-width: 100%; display: block; }
   gap: 0.75rem;
 }
 
+.project-archived-notes {
+  margin-top: 0.8rem;
+  padding-top: 0.7rem;
+  border-top: 1px solid var(--line);
+}
+.project-archived-notes > summary {
+  cursor: pointer;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+.project-sticky-notes--archived {
+  margin-top: 0.75rem;
+}
+
 .project-sticky-note {
   display: grid;
   gap: 0.55rem;
@@ -729,6 +790,11 @@ img { max-width: 100%; display: block; }
   border: 1px solid #eadf8b;
   border-radius: 6px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.06);
+}
+
+.project-sticky-note--archived {
+  opacity: 0.88;
+  box-shadow: none;
 }
 
 .project-sticky-note--decision { background: #fff8bf; border-color: #eadf8b; }
@@ -757,15 +823,17 @@ img { max-width: 100%; display: block; }
 
 .project-sticky-note textarea {
   width: 100%;
-  min-height: 6.5rem;
-  resize: vertical;
+  min-height: 0;
+  field-sizing: content;
+  resize: none;
+  overflow: hidden;
   padding: 0;
   border: 0;
   background: transparent;
   color: var(--ink);
   font: inherit;
-  font-size: 0.95rem;
-  line-height: 1.5;
+  font-size: 0.87rem;
+  line-height: 1.45;
 }
 .project-sticky-note textarea:focus {
   outline: none;

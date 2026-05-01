@@ -13,11 +13,13 @@ from arquimedes.project_state import (
     load_project_notes,
     load_project_sections,
     load_project_state,
+    mark_project_notes_incorporated,
     merge_project_section_delta,
     merge_project_state_delta,
+    set_project_note_status,
 )
 
-PROJECT_REFLECTION_SCHEMA = '{"state_delta":{"stage":"optional stage","stage_confidence":0.0,"main_objectives":["strings"],"current_work_in_progress":["strings"],"next_focus":["strings"],"known_conditions":["strings"],"decisions":["strings"],"requirements":["strings"],"risks_or_blockers":["strings"],"missing_information":["strings"],"positive_learnings":["strings"],"mistakes_or_regrets":["strings"],"repair_actions":["strings"],"important_material_ids":["ids"],"last_material_ids":["ids"]},"section_deltas":[{"section_id":"estado|trabajo_en_curso|riesgos|proximo_foco|...","title":"string optional","body":"string","revision":1,"replaces_updated_at":"exact prior updated_at","justification":"string","references_prior_body":true|false,"source_refs":["strings"],"evidence_material_ids":["ids"],"confidence":0.0}],"_finished":true}'
+PROJECT_REFLECTION_SCHEMA = '{"state_delta":{"stage":"optional stage","stage_confidence":0.0,"main_objectives":["strings"],"current_work_in_progress":["strings"],"next_focus":["strings"],"known_conditions":["strings"],"decisions":["strings"],"requirements":["strings"],"risks_or_blockers":["strings"],"missing_information":["strings"],"positive_learnings":["strings"],"mistakes_or_regrets":["strings"],"repair_actions":["strings"],"important_material_ids":["ids"],"last_material_ids":["ids"]},"section_deltas":[{"section_id":"estado|trabajo_en_curso|riesgos|proximo_foco|...","title":"string optional","body":"string","revision":1,"replaces_updated_at":"exact prior updated_at","justification":"string","references_prior_body":true|false,"source_refs":["strings"],"evidence_material_ids":["ids"],"confidence":0.0}],"note_status_updates":[{"note_id":"note-0001","status":"incorporated|superseded"}],"_finished":true}'
 
 
 def _project_reflection_records_path(root: Path) -> Path:
@@ -241,9 +243,15 @@ Tareas:
   - current_work_in_progress: trabajo activo esta semana.
   - next_focus: foco de las próximas 1-2 semanas, no lo que ya está en curso.
 - Trata notas y secciones Hermes/humanas como evidencia de alta prioridad.
+- Las notas con status=open son la prioridad más alta cuando contradicen inferencias previas o conclusiones débiles.
+- Las notas con status=incorporated ya fueron absorbidas antes: úsalas como contexto/procedencia, pero no dejes que reescriban de nuevo conclusiones no relacionadas.
+- Las notas con status=superseded solo deben servir como rastro histórico; no recuperes su contenido salvo que explique una contradicción o corrección posterior.
+- Si una nota añade información nueva sin contradecir el estado previo, intégrala de forma aditiva: amplía listas o matiza secciones, pero no elimines conclusiones previas no relacionadas.
+- No reemplaces una lista completa ni una sección completa solo porque una nota mencione un punto puntual. Conserva conclusiones válidas previas salvo contradicción directa, resolución explícita o evidencia nueva más fuerte.
 - project_state es la memoria estructurada canónica: rellena ahí los hechos, listas, riesgos, decisiones, requisitos, aprendizajes y acciones.
 - section_deltas es la capa editorial visible: propón secciones solo cuando aporten una síntesis narrativa útil para humanos.
 - No copies listas de project_state punto por punto en section_deltas. Las secciones deben sintetizar, priorizar y explicar; si solo repetirían la lista estructurada, omítelas.
+- note_status_updates puede marcar notas open como incorporated cuando ya hayan quedado absorbidas en state/sections, o como superseded cuando evidencia nueva las contradiga explícitamente.
 - stage solo puede ser uno de: lead, feasibility, schematic_design, basic_project, execution_project, tender, construction, handover, archived. Si no puedes inferirlo, omite stage y deja stage_confidence en 0.0; nunca uses unknown.
 - Nunca borres texto protegido: si reemplazas una sección protegida como reflection, incluye justification no vacía y references_prior_body=true.
 - Copia revision como prior.revision + 1 y replaces_updated_at como el updated_at exacto de la sección previa.
@@ -341,6 +349,19 @@ def _run_project_reflections_impl(
             for delta in _normalize_section_deltas(parsed):
                 section = merge_project_section_delta(project_id, delta, root=root)
                 sections_changed.append(section["section_id"])
+
+            note_status_updates = parsed.get("note_status_updates") or []
+            if isinstance(note_status_updates, list):
+                for item in note_status_updates:
+                    if not isinstance(item, dict):
+                        continue
+                    note_id = str(item.get("note_id") or "").strip()
+                    status = str(item.get("status") or "").strip()
+                    if note_id and status in {"incorporated", "superseded"}:
+                        set_project_note_status(project_id, note_id=note_id, status=status, actor="reflection", root=root)
+            project_open_notes = [n for n in load_project_notes(project_id, root=root) if str(n.get("status") or "") == "open"]
+            if project_open_notes:
+                mark_project_notes_incorporated(project_id, actor="reflection", root=root)
 
             run_at = datetime.now(timezone.utc).isoformat()
             reflected_material_ids = sorted(_reflected_material_ids(existing_record) | set(_material_ids(new_metas)))

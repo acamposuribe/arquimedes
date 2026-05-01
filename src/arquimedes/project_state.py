@@ -22,6 +22,7 @@ PROJECT_STAGES = (
 )
 UPDATED_BY = {"reflection", "hermes", "human", "cli"}
 NOTE_KINDS = {"decision", "requirement", "risk", "deadline", "coordination", "learning", "mistake", "repair"}
+NOTE_STATUSES = {"open", "incorporated", "superseded", "deleted"}
 LIST_FIELDS = {
     "last_material_ids",
     "main_objectives",
@@ -183,6 +184,59 @@ def save_project_state(project_id: str, state: dict[str, Any], *, root: Path | N
     return state
 
 
+def update_project_state_list_item(
+    project_id: str,
+    *,
+    field: str,
+    index: int,
+    text: str,
+    actor: str,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    if actor not in UPDATED_BY:
+        raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    field = validate_state_field(field)
+    if field not in LIST_FIELDS:
+        raise ProjectStateError(f"{field} is not list-valued")
+    if not str(text).strip():
+        raise ProjectStateError("item text is required")
+    root = root or get_project_root()
+    state = load_project_state(project_id, root=root)
+    values = list(state.get(field) or [])
+    if not 0 <= index < len(values):
+        raise ProjectStateError(f"invalid item index for {field}: {index}")
+    values[index] = str(text).strip()
+    state[field] = values
+    state["updated_by"] = actor
+    state["updated_at"] = now_iso()
+    return save_project_state(project_id, state, root=root)
+
+
+def delete_project_state_list_item(
+    project_id: str,
+    *,
+    field: str,
+    index: int,
+    actor: str,
+    root: Path | None = None,
+) -> dict[str, Any]:
+    if actor not in UPDATED_BY:
+        raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    field = validate_state_field(field)
+    if field not in LIST_FIELDS:
+        raise ProjectStateError(f"{field} is not list-valued")
+    root = root or get_project_root()
+    state = load_project_state(project_id, root=root)
+    values = list(state.get(field) or [])
+    if not 0 <= index < len(values):
+        raise ProjectStateError(f"invalid item index for {field}: {index}")
+    values.pop(index)
+    state[field] = values
+    state["updated_by"] = actor
+    state["updated_at"] = now_iso()
+    return save_project_state(project_id, state, root=root)
+
+
 def merge_project_state_delta(project_id: str, delta: dict[str, Any], *, root: Path | None = None) -> dict[str, Any]:
     root = root or get_project_root()
     state = load_project_state(project_id, root=root)
@@ -306,6 +360,9 @@ def _normalize_note(note: dict[str, Any], index: int) -> dict[str, Any]:
     if kind not in NOTE_KINDS:
         raise ProjectStateError(f"note kind must be one of: {', '.join(sorted(NOTE_KINDS))}")
     text = str(note.get("text", "")).strip()
+    status = str(note.get("status") or ("deleted" if note.get("deleted") else "open")).strip()
+    if status not in NOTE_STATUSES:
+        raise ProjectStateError(f"note status must be one of: {', '.join(sorted(NOTE_STATUSES))}")
     normalized = {
         "note_id": str(note.get("note_id") or f"note-{index + 1:04d}"),
         "actor": actor,
@@ -313,7 +370,8 @@ def _normalize_note(note: dict[str, Any], index: int) -> dict[str, Any]:
         "kind": kind,
         "text": text,
         "source_refs": _as_list(note.get("source_refs"), "note.source_refs"),
-        "deleted": bool(note.get("deleted", False)),
+        "status": status,
+        "deleted": status == "deleted",
     }
     if note.get("material_id"):
         normalized["material_id"] = str(note.get("material_id"))
@@ -360,6 +418,7 @@ def append_project_note(
         "kind": kind,
         "text": text.strip(),
         "source_refs": source_refs or [],
+        "status": "open",
         "deleted": False,
     }
     if material_id:
@@ -380,7 +439,7 @@ def load_project_notes(project_id: str, *, root: Path | None = None, include_del
     for index, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
         if line.strip():
             note = _normalize_note(json.loads(line), index)
-            if include_deleted or not note.get("deleted"):
+            if include_deleted or note.get("status") != "deleted":
                 notes.append(note)
     return notes
 
@@ -404,19 +463,45 @@ def update_project_note(project_id: str, *, note_id: str, text: str, actor: str,
     raise ProjectStateError(f"unknown note_id: {note_id}")
 
 
-def delete_project_note(project_id: str, *, note_id: str, actor: str, root: Path | None = None) -> dict[str, Any]:
+def set_project_note_status(project_id: str, *, note_id: str, status: str, actor: str, root: Path | None = None) -> dict[str, Any]:
     if actor not in UPDATED_BY:
         raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    if status not in NOTE_STATUSES:
+        raise ProjectStateError(f"note status must be one of: {', '.join(sorted(NOTE_STATUSES))}")
     root = root or get_project_root()
     notes = load_project_notes(project_id, root=root, include_deleted=True)
     for note in notes:
         if note.get("note_id") == note_id:
-            note["deleted"] = True
-            note["deleted_at"] = now_iso()
-            note["deleted_by"] = actor
+            note["status"] = status
+            note["deleted"] = status == "deleted"
+            note["updated_at"] = now_iso()
+            note["updated_by"] = actor
+            if status == "deleted":
+                note["deleted_at"] = note["updated_at"]
+                note["deleted_by"] = actor
             _save_project_notes(project_id, notes, root=root)
             return note
     raise ProjectStateError(f"unknown note_id: {note_id}")
+
+
+def mark_project_notes_incorporated(project_id: str, *, actor: str = "reflection", root: Path | None = None) -> list[str]:
+    root = root or get_project_root()
+    notes = load_project_notes(project_id, root=root, include_deleted=True)
+    changed = []
+    stamp = now_iso()
+    for note in notes:
+        if note.get("status") == "open":
+            note["status"] = "incorporated"
+            note["updated_at"] = stamp
+            note["updated_by"] = actor
+            changed.append(str(note.get("note_id") or ""))
+    if changed:
+        _save_project_notes(project_id, notes, root=root)
+    return changed
+
+
+def delete_project_note(project_id: str, *, note_id: str, actor: str, root: Path | None = None) -> dict[str, Any]:
+    return set_project_note_status(project_id, note_id=note_id, status="deleted", actor=actor, root=root)
 
 
 def validate_project_id(project_id: str) -> str:

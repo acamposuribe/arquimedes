@@ -652,9 +652,43 @@ def _project_drawing_grid_title(title: str, phase_label: str) -> str:
     return value
 
 
-def _project_notes_context(project_id: str) -> list[dict]:
-    notes = project_state_mod.load_project_notes(project_id, root=read_mod.get_project_root())
-    return sorted(notes, key=lambda row: (str(row.get("timestamp") or ""), str(row.get("note_id") or "")), reverse=True)
+def _project_notes_context(project_id: str) -> dict:
+    notes = sorted(
+        project_state_mod.load_project_notes(project_id, root=read_mod.get_project_root(), include_deleted=True),
+        key=lambda row: (str(row.get("timestamp") or ""), str(row.get("note_id") or "")),
+        reverse=True,
+    )
+    open_notes = [note for note in notes if str(note.get("status") or "open") == "open"]
+    archived_notes = [note for note in notes if str(note.get("status") or "open") != "open"]
+    return {"open": open_notes, "archived": archived_notes}
+
+
+def _project_state_panel_context(project_id: str) -> list[dict]:
+    state = project_state_mod.load_project_state(project_id, root=read_mod.get_project_root())
+    specs = [
+        ("main_objectives", "Objetivos principales"),
+        ("current_work_in_progress", "Trabajo en curso"),
+        ("next_focus", "Próximo foco"),
+        ("known_conditions", "Condiciones y restricciones"),
+        ("decisions", "Decisiones"),
+        ("requirements", "Requisitos"),
+        ("risks_or_blockers", "Problemas, riesgos y bloqueos"),
+        ("missing_information", "Información pendiente"),
+        ("positive_learnings", "Aprendizajes positivos"),
+        ("mistakes_or_regrets", "Errores"),
+        ("repair_actions", "Acciones de reparación"),
+        ("important_material_ids", "Materiales importantes"),
+    ]
+    groups = []
+    for field, label in specs:
+        values = [str(value).strip() for value in (state.get(field) or []) if str(value).strip()]
+        if values:
+            groups.append({
+                "field": field,
+                "label": label,
+                "items": [{"index": idx, "text": value} for idx, value in enumerate(values)],
+            })
+    return groups
 
 
 def _project_phase_timeline(stage: str) -> dict:
@@ -1047,6 +1081,16 @@ def create_app(config: dict | None = None) -> FastAPI:
         project_state_mod.delete_project_note(project_id, note_id=note_id, actor=actor, root=read_mod.get_project_root())
         return RedirectResponse(url=return_to or "/", status_code=303)
 
+    @app.post("/projects/{project_id}/state/{field}/{index}/edit")
+    def edit_project_state_item(project_id: str, field: str, index: int, text: str = Form(...), actor: str = Form("human"), return_to: str = Form("/")):
+        project_state_mod.update_project_state_list_item(project_id, field=field, index=index, text=text, actor=actor, root=read_mod.get_project_root())
+        return RedirectResponse(url=return_to or "/", status_code=303)
+
+    @app.post("/projects/{project_id}/state/{field}/{index}/delete")
+    def delete_project_state_item(project_id: str, field: str, index: int, actor: str = Form("human"), return_to: str = Form("/")):
+        project_state_mod.delete_project_state_list_item(project_id, field=field, index=index, actor=actor, root=read_mod.get_project_root())
+        return RedirectResponse(url=return_to or "/", status_code=303)
+
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request, domain: str = ""):
         active_domain = _active_domain(request, domain)
@@ -1278,7 +1322,7 @@ def create_app(config: dict | None = None) -> FastAPI:
         project_collection = False
         project_recent_html = ""
         project_notes = None
-        project_state_html = ""
+        project_state_panel = None
         project_phase_timeline = None
         project_id = ""
         page_record = read_mod.wiki_page_record(page_path)
@@ -1314,7 +1358,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                         )
                         if structured_state:
                             content_body = "\n\n".join(part for part in [before_state, after_state] if part)
-                            project_state_html = render_wiki_markdown(structured_state, _project_rel_path(page_path))
+                        project_state_panel = _project_state_panel_context(coll_name)
                         project_phase_timeline = _project_phase_timeline(project_state_mod.load_project_state(coll_name).get("stage", "lead"))
                         project_material_groups = _project_material_groups(coll_domain, coll_name) or None
                     else:
@@ -1384,7 +1428,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                 "project_collection": project_collection,
                 "project_recent_html": project_recent_html,
                 "project_notes": project_notes,
-                "project_state_html": project_state_html,
+                "project_state_panel": project_state_panel,
                 "project_phase_timeline": project_phase_timeline,
                 "project_id": project_id,
                 "page_search": page_search,

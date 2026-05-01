@@ -164,9 +164,27 @@
     {{ content_html }}
     {% endif %}
     {% endif %}
-    {% if project_state_html %}
+    {% if project_state_panel %}
     <section class="project-page-block project-state-block">
-      {{ project_state_html }}
+      <h2>Datos estructurados del proyecto</h2>
+      {% for group in project_state_panel %}
+      <details class="project-state-group" open>
+        <summary>{{ group.label }}</summary>
+        <div class="project-state-edit-list">
+          {% for item in group.items %}
+          <form class="project-state-edit-item" method="post" action="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/edit" onsubmit="return confirm('¿Guardar este cambio en los datos estructurados del proyecto?');">
+            <input type="hidden" name="actor" value="human">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <textarea name="text">{{ item.text }}</textarea>
+            <div class="project-state-edit-actions">
+              <button type="submit">Guardar</button>
+              <button type="submit" class="project-note-delete" formaction="/projects/{{ project_id }}/state/{{ group.field }}/{{ item.index }}/delete" formnovalidate onclick="return confirm('¿Eliminar este elemento de los datos estructurados del proyecto?');">Eliminar</button>
+            </div>
+          </form>
+          {% endfor %}
+        </div>
+      </details>
+      {% endfor %}
     </section>
     {% endif %}
     {% if project_material_groups %}
@@ -363,11 +381,12 @@
     </section>
     {% endif %}
 
-    {% if project_notes %}
+    {% if project_notes and (project_notes.open or project_notes.archived) %}
     <section class="panel project-notes-panel">
       <h2>Notas</h2>
+      {% if project_notes.open %}
       <div class="project-sticky-notes">
-        {% for note in project_notes %}
+        {% for note in project_notes.open %}
         <form class="project-sticky-note project-sticky-note--{{ note.kind }}" method="post" action="/projects/{{ project_id }}/notes/{{ note.note_id }}/edit">
           <input type="hidden" name="actor" value="human">
           <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
@@ -383,6 +402,29 @@
         </form>
         {% endfor %}
       </div>
+      {% endif %}
+      {% if project_notes.archived %}
+      <details class="project-archived-notes">
+        <summary>Notas archivadas ({{ project_notes.archived|length }})</summary>
+        <div class="project-sticky-notes project-sticky-notes--archived">
+          {% for note in project_notes.archived %}
+          <form class="project-sticky-note project-sticky-note--{{ note.kind }} project-sticky-note--archived" method="post" action="/projects/{{ project_id }}/notes/{{ note.note_id }}/edit">
+            <input type="hidden" name="actor" value="human">
+            <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+            <div class="project-sticky-note-meta">
+              <span class="project-sticky-note-kind">{{ note.kind }} · {{ note.status }}</span>
+              <span class="project-sticky-note-date">{{ note.timestamp[:10] }}</span>
+            </div>
+            <textarea name="text">{{ note.text }}</textarea>
+            <div class="project-sticky-note-actions">
+              <button type="submit">Guardar</button>
+              <button type="submit" class="project-note-delete" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>Eliminar</button>
+            </div>
+          </form>
+          {% endfor %}
+        </div>
+      </details>
+      {% endif %}
     </section>
     {% endif %}
 

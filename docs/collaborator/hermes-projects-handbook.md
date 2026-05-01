@@ -69,15 +69,12 @@ Record a note:
 arq project note <project-id> --kind decision --text "..." --source-ref "discord://channel/message"
 ```
 
-Replace a state field:
+Avoid direct state mutation in normal Hermes workflows. Prefer notes first, then optional section edits, and let project reflection/lint reconcile canonical `project_state` on the next pass.
+
+Direct state commands are maintainer/admin escape hatches, not the default Hermes path:
 
 ```bash
 arq project update <project-id> --field next_focus --text "..."
-```
-
-Append to a list-valued state field:
-
-```bash
 arq project append <project-id> --field risks_or_blockers --text "..."
 ```
 
@@ -125,14 +122,18 @@ Use `--confidence` only when uncertainty matters.
 
 ## State Versus Sections
 
-Use notes for atomic facts and decisions.
-
-Use `update` or `append` when a structured state field changes, such as `next_focus`, `missing_information`, or `risks_or_blockers`.
+Use notes for atomic facts, decisions, corrections, contradictions, and new evidence.
 
 Use `section set` when the project page needs a better synthesized paragraph or section, not just another bullet.
+
+Treat `project_state.json` as canonical structured memory maintained mostly by reflection/lint. Hermes should usually influence it indirectly through notes and curated sections, not by replacing fields directly.
+
+If a human needs a narrow manual correction in the structured data, prefer editing or deleting a single item from the web UI structured-data block rather than rewriting whole fields.
 
 Never edit compiled markdown directly. Project pages are generated from state, notes, sections, and materials.
 
 ## Reflection
 
 Human and Hermes notes are high-priority evidence for later project reflection. Reflection may refine project sections, but it must do so through the section replacement protocol with provenance. It should preserve, resolve, or explicitly challenge Hermes warnings with evidence.
+
+Open notes have the highest weight when they contradict older inferred conclusions. When notes add non-overlapping information, reflection should merge them additively instead of deleting unrelated prior state. After successful incorporation, notes move out of the open queue into archived statuses such as `incorporated` or `superseded`.

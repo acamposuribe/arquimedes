@@ -54,6 +54,40 @@ def test_home_handles_missing_index(tmp_path, monkeypatch):
     assert "Alpha" in response.text
 
 
+def test_home_defaults_to_only_enabled_proyectos_domain(tmp_path, monkeypatch):
+    _repo(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "list_domains_and_collections",
+        lambda domain=None: [{"domain": "proyectos", "collection": "2407-casa-rio"}] if domain == "proyectos" else [],
+    )
+    monkeypatch.setattr(
+        serve_mod.read_mod,
+        "materials_for_collection",
+        lambda domain, collection: [{"material_id": "mat_001", "title": "Acta"}] if domain == "proyectos" else [],
+    )
+
+    client = TestClient(serve_mod.create_app({"domains": {"enabled": ["proyectos"]}}))
+    response = client.get("/")
+
+    assert response.status_code == 200
+    assert 'href="/?domain=proyectos" class="active"' in response.text
+    assert "2407-casa-rio" in response.text
+    assert "No indexed collections yet" not in response.text
+
+
+def test_wiki_root_defaults_to_only_enabled_proyectos_domain(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "proyectos").mkdir(parents=True, exist_ok=True)
+    (root / "wiki" / "proyectos" / "_index.md").write_text("# Proyectos\n", encoding="utf-8")
+
+    client = TestClient(serve_mod.create_app({"domains": {"enabled": ["proyectos"]}}))
+    response = client.get("/wiki")
+
+    assert response.status_code == 200
+    assert "Proyectos" in response.text
+
+
 def test_home_page_only_shows_enabled_domain_tabs(tmp_path, monkeypatch):
     _repo(tmp_path, monkeypatch)
     monkeypatch.setattr(

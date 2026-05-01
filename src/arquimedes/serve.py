@@ -217,12 +217,14 @@ def _wiki_rel_parts(path: Path) -> tuple[str, ...]:
 
 
 def _active_domain(request: Request, explicit_domain: str | None = None, page_domain: str | None = None) -> str:
-    return (
+    candidate = (
         _normalized_domain(page_domain)
         or _normalized_domain(explicit_domain)
         or _path_domain(request.url.path)
         or "research"
     )
+    enabled = _enabled_ui_domains(request)
+    return candidate if candidate in enabled else enabled[0]
 
 
 def _domain_home_url(domain: str) -> str:

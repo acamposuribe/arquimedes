@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ page_title }} · Arquimedes</title>
-  <link rel="stylesheet" href="/static/style.css?v=20260501-figures">
+  <link rel="stylesheet" href="/static/style.css?v=20260501-compact-wiki">
 </head>
 <body>
   <header class="site-header">
@@ -32,7 +32,7 @@
       </section>
       {% if nav_collections %}
       <section class="rail-section">
-        <h2>{{ active_domain_label }} {{ ui_label('collections_summary', active_domain, 'Collections')|capitalize }}</h2>
+        <h2>{% if active_domain == 'proyectos' %}Proyectos{% elif active_domain == 'practice' %}Colecciones{% else %}Collections{% endif %}</h2>
         {% for item in nav_collections %}
         {% set _coll_url = wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/_index.md') %}
         {% set _concepts_url = wiki_url('wiki/' ~ item.domain ~ '/' ~ item.collection ~ '/concepts/_index.md') %}

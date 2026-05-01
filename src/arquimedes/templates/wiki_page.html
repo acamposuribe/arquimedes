@@ -2,7 +2,7 @@
 {% block content %}
 {% include "partials/breadcrumbs.html" %}
 <section class="wiki-layout">
-  <article class="wiki-body{% if project_extraction %} wiki-body--project-material{% endif %}">
+  <article class="wiki-body{% if project_extraction or project_collection %} wiki-body--project-material{% endif %}">
     {% if page_search and page_search.kind == 'material' and search_query %}
     <section class="material-search-context">
       <p class="eyebrow">{{ ui_label('within_this_material', active_domain, 'Within This Material') }}</p>

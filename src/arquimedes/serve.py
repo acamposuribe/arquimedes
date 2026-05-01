@@ -437,11 +437,14 @@ def _project_extraction_context(meta: dict) -> dict | None:
         author_text = ", ".join(str(author).strip() for author in authors if str(author).strip())
     else:
         author_text = str(authors or "").strip()
+    collection = str(meta.get("collection") or "").strip()
+    domain = str(meta.get("domain") or "").strip()
+    project_url = wiki_url(f"wiki/{domain}/{collection}/_index.md") if domain and collection else ""
     metadata = [
-        {"label": "Autor", "value": author_text},
-        {"label": "Año", "value": str(meta.get("year") or "").strip()},
+        {"label": "Proyecto", "value": collection, "url": project_url},
         {"label": "Tipo", "value": material_type_label},
-        {"label": "Proyecto", "value": str(meta.get("collection") or "").strip()},
+        {"label": "Año", "value": str(meta.get("year") or "").strip()},
+        {"label": "Autores", "value": author_text},
     ]
     metadata = [item for item in metadata if item["value"]]
     if not (relevance or material_type or groups):
@@ -1187,6 +1190,9 @@ def create_app(config: dict | None = None) -> FastAPI:
         collection_after_html = ""
         concept_material_thumbs = None
         project_material_groups = None
+        project_collection = False
+        project_recent_html = ""
+        project_notes_html = ""
         page_record = read_mod.wiki_page_record(page_path)
         if page_path.name == "_index.md" and not material_id:
             try:
@@ -1197,14 +1203,22 @@ def create_app(config: dict | None = None) -> FastAPI:
                     content_body = before_materials
                     collection_after_html = render_wiki_markdown(after_materials, _project_rel_path(page_path)) if after_materials else ""
                     if is_proyectos_domain(coll_domain, default="research"):
+                        project_collection = True
+                        before_notes, notes_section, after_notes = _split_markdown_section(
+                            content_body,
+                            _heading_candidates("notas_recientes", "Notas recientes"),
+                        )
+                        if notes_section:
+                            content_body = "\n\n".join(part for part in [before_notes, after_notes] if part)
+                            project_notes_html = render_wiki_markdown(notes_section, _project_rel_path(page_path))
                         before_recent, recent_history, after_recent = _split_markdown_section(
                             content_body,
                             _heading_candidates("recent_additions", "Recent Additions"),
                         )
                         if recent_history:
-                            content_body = before_recent
-                            recent_tail = "\n\n".join(part for part in [recent_history, after_recent] if part)
-                            collection_after_html = render_wiki_markdown(recent_tail, _project_rel_path(page_path))
+                            content_body = "\n\n".join(part for part in [before_recent, after_recent] if part)
+                            project_recent_html = render_wiki_markdown(recent_history, _project_rel_path(page_path))
+                            collection_after_html = ""
                         project_material_groups = _project_material_groups(coll_domain, coll_name) or None
                     else:
                         collection_material_thumbs = _collection_sidebar_context(coll_domain, coll_name) or None
@@ -1270,6 +1284,9 @@ def create_app(config: dict | None = None) -> FastAPI:
                 "collection_material_thumbs": collection_material_thumbs,
                 "concept_material_thumbs": concept_material_thumbs,
                 "project_material_groups": project_material_groups,
+                "project_collection": project_collection,
+                "project_recent_html": project_recent_html,
+                "project_notes_html": project_notes_html,
                 "page_search": page_search,
             },
         )

@@ -533,6 +533,20 @@ img { max-width: 100%; display: block; }
 
 /* ── Wiki layout ─────────────────────────────────── */
 
+.wiki-page-title-block {
+  margin-bottom: 1.15rem;
+  padding: 1.1rem 1.35rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.wiki-page-title-block h1 {
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
 .wiki-layout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 15.5rem;
@@ -1198,11 +1212,26 @@ img { max-width: 100%; display: block; }
 
 .project-extraction-panel {
   margin-bottom: 1.4rem;
-  padding: 1.25rem 1.5rem;
+  padding: 1.1rem 1.35rem;
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
   border-radius: 4px;
   background: var(--panel);
+}
+
+.project-extraction-panel summary {
+  list-style: none;
+  cursor: pointer;
+}
+.project-extraction-panel summary::-webkit-details-marker {
+  display: none;
+}
+.project-extraction-panel summary .eyebrow {
+  display: inline-block;
+  margin: 0;
+}
+.project-extraction-body {
+  margin-top: 0.8rem;
 }
 
 .project-extraction-header {

@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
 {% include "partials/breadcrumbs.html" %}
+<section class="wiki-page-title-block">
+  <h1>{{ page_title }}</h1>
+</section>
 <section class="wiki-layout">
   <article class="wiki-body{% if project_extraction or project_collection %} wiki-body--project-material{% endif %}">
     {% if page_search and page_search.kind == 'material' and search_query %}
@@ -161,32 +164,36 @@
     </section>
     {% endif %}
     {% if project_extraction %}
-    <section class="project-extraction-panel">
-      <p class="eyebrow">Resumen operativo</p>
-      <div class="project-extraction-header">
-        <h2>{{ project_extraction.title or page_title }}</h2>
-        {% if project_extraction.material_type %}
-        <span class="project-card-count">{{ project_extraction.material_type }}</span>
+    <details class="project-extraction-panel">
+      <summary>
+        <span class="eyebrow">Resumen operativo</span>
+      </summary>
+      <div class="project-extraction-body">
+        <div class="project-extraction-header">
+          <h2>{{ project_extraction.title or page_title }}</h2>
+          {% if project_extraction.material_type %}
+          <span class="project-card-count">{{ project_extraction.material_type }}</span>
+          {% endif %}
+        </div>
+        {% if project_extraction.relevance %}
+        <p class="project-extraction-relevance">{{ project_extraction.relevance }}</p>
+        {% endif %}
+        {% if project_extraction.groups %}
+        <div class="project-extraction-grid">
+          {% for group in project_extraction.groups %}
+          <section class="project-extraction-group project-extraction-group--{{ group.key }}">
+            <h3>{{ group.label }}</h3>
+            <ul>
+              {% for item in group['items'] %}
+              <li>{{ item }}</li>
+              {% endfor %}
+            </ul>
+          </section>
+          {% endfor %}
+        </div>
         {% endif %}
       </div>
-      {% if project_extraction.relevance %}
-      <p class="project-extraction-relevance">{{ project_extraction.relevance }}</p>
-      {% endif %}
-      {% if project_extraction.groups %}
-      <div class="project-extraction-grid">
-        {% for group in project_extraction.groups %}
-        <section class="project-extraction-group project-extraction-group--{{ group.key }}">
-          <h3>{{ group.label }}</h3>
-          <ul>
-            {% for item in group['items'] %}
-            <li>{{ item }}</li>
-            {% endfor %}
-          </ul>
-        </section>
-        {% endfor %}
-      </div>
-      {% endif %}
-    </section>
+    </details>
     {% endif %}
     {% if not project_extraction %}
     {% if project_collection %}

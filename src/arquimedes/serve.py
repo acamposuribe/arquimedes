@@ -1022,9 +1022,11 @@ def _delete_material_figures(material_id: str, selected_sidecars: list[str]) -> 
 
 def _wiki_context(path: Path, body: str, *, material_id: str | None = None, title: str | None = None, **extra) -> dict:
     rel = _project_rel_path(path)
+    rendered = str(render_wiki_markdown(body, rel, material_id))
+    rendered = re.sub(r"(?is)^\s*<h1[^>]*>.*?</h1>\s*", "", rendered, count=1)
     return {
         "breadcrumbs": breadcrumbs(rel),
-        "content_html": render_wiki_markdown(body, rel, material_id),
+        "content_html": Markup(rendered),
         "page_title": title or _label(path.stem if path.name != "_index.md" else path.parent.name),
         "wiki_path": rel,
         **extra,

@@ -8,7 +8,7 @@ from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode, urlsplit
 
 import mistune
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -652,6 +652,11 @@ def _project_drawing_grid_title(title: str, phase_label: str) -> str:
     return value
 
 
+def _project_notes_context(project_id: str) -> list[dict]:
+    notes = project_state_mod.load_project_notes(project_id, root=read_mod.get_project_root())
+    return sorted(notes, key=lambda row: (str(row.get("timestamp") or ""), str(row.get("note_id") or "")), reverse=True)
+
+
 def _project_phase_timeline(stage: str) -> dict:
     steps = [
         ("lead", "Encargo"),
@@ -1032,6 +1037,16 @@ def create_app(config: dict | None = None) -> FastAPI:
         def update():
             return JSONResponse(freshness_mod.update_workspace())
 
+    @app.post("/projects/{project_id}/notes/{note_id}/edit")
+    def edit_project_note(project_id: str, note_id: str, text: str = Form(...), actor: str = Form("human"), return_to: str = Form("/")):
+        project_state_mod.update_project_note(project_id, note_id=note_id, text=text, actor=actor, root=read_mod.get_project_root())
+        return RedirectResponse(url=return_to or "/", status_code=303)
+
+    @app.post("/projects/{project_id}/notes/{note_id}/delete")
+    def delete_project_note(project_id: str, note_id: str, actor: str = Form("human"), return_to: str = Form("/")):
+        project_state_mod.delete_project_note(project_id, note_id=note_id, actor=actor, root=read_mod.get_project_root())
+        return RedirectResponse(url=return_to or "/", status_code=303)
+
     @app.get("/", response_class=HTMLResponse)
     def home(request: Request, domain: str = ""):
         active_domain = _active_domain(request, domain)
@@ -1262,9 +1277,10 @@ def create_app(config: dict | None = None) -> FastAPI:
         project_material_groups = None
         project_collection = False
         project_recent_html = ""
-        project_notes_html = ""
+        project_notes = None
         project_state_html = ""
         project_phase_timeline = None
+        project_id = ""
         page_record = read_mod.wiki_page_record(page_path)
         if page_path.name == "_index.md" and not material_id:
             try:
@@ -1276,13 +1292,14 @@ def create_app(config: dict | None = None) -> FastAPI:
                     collection_after_html = render_wiki_markdown(after_materials, _project_rel_path(page_path)) if after_materials else ""
                     if is_proyectos_domain(coll_domain, default="research"):
                         project_collection = True
+                        project_id = coll_name
                         before_notes, notes_section, after_notes = _split_markdown_section(
                             content_body,
                             _heading_candidates("notas_recientes", "Notas recientes"),
                         )
                         if notes_section:
                             content_body = "\n\n".join(part for part in [before_notes, after_notes] if part)
-                            project_notes_html = render_wiki_markdown(notes_section, _project_rel_path(page_path))
+                        project_notes = _project_notes_context(coll_name)
                         before_recent, recent_history, after_recent = _split_markdown_section(
                             content_body,
                             _heading_candidates("recent_additions", "Recent Additions"),
@@ -1366,9 +1383,10 @@ def create_app(config: dict | None = None) -> FastAPI:
                 "project_material_groups": project_material_groups,
                 "project_collection": project_collection,
                 "project_recent_html": project_recent_html,
-                "project_notes_html": project_notes_html,
+                "project_notes": project_notes,
                 "project_state_html": project_state_html,
                 "project_phase_timeline": project_phase_timeline,
+                "project_id": project_id,
                 "page_search": page_search,
             },
         )

@@ -716,9 +716,80 @@ img { max-width: 100%; display: block; }
   margin-top: 0;
 }
 
-.project-notes-panel ul {
-  margin-bottom: 0;
+.project-sticky-notes {
+  display: grid;
+  gap: 0.75rem;
 }
+
+.project-sticky-note {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.8rem 0.85rem;
+  background: #fff8bf;
+  border: 1px solid #eadf8b;
+  border-radius: 6px;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.06);
+}
+
+.project-sticky-note--decision { background: #fff8bf; border-color: #eadf8b; }
+.project-sticky-note--requirement { background: #ffe9c7; border-color: #efc98b; }
+.project-sticky-note--risk,
+.project-sticky-note--mistake,
+.project-sticky-note--repair { background: #ffd9d1; border-color: #ecae9f; }
+.project-sticky-note--deadline,
+.project-sticky-note--coordination { background: #dff0ff; border-color: #aacdeb; }
+.project-sticky-note--learning { background: #e3f6d8; border-color: #b8d7a7; }
+
+.project-sticky-note-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: rgba(0, 0, 0, 0.62);
+}
+
+.project-sticky-note-kind { font-weight: 700; }
+
+.project-sticky-note textarea {
+  width: 100%;
+  min-height: 6.5rem;
+  resize: vertical;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+.project-sticky-note textarea:focus {
+  outline: none;
+}
+
+.project-sticky-note-actions {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.project-sticky-note-actions button {
+  padding: 0.32rem 0.6rem;
+  border: 1px solid rgba(0, 0, 0, 0.16);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.65);
+  color: var(--ink);
+  font: inherit;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.project-sticky-note-actions button:hover { background: rgba(255, 255, 255, 0.92); }
+.project-note-delete { color: #8a2b1c; }
 
 .wiki-body h1 { font-size: 1.6rem; font-weight: 400; border-bottom: 1px solid var(--line-dark); padding-bottom: 0.28rem; margin: 0 0 0.55rem; }
 .wiki-body h2 { font-size: 1.16rem; font-weight: 600; margin: 1.15rem 0 0.45rem; }

@@ -296,6 +296,43 @@ def resolve_project_item(
     }
 
 
+def _normalize_note(note: dict[str, Any], index: int) -> dict[str, Any]:
+    if not isinstance(note, dict):
+        raise ProjectStateError("project note must be an object")
+    actor = str(note.get("actor", "")).strip()
+    if actor not in UPDATED_BY:
+        raise ProjectStateError(f"note actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    kind = str(note.get("kind", "")).strip()
+    if kind not in NOTE_KINDS:
+        raise ProjectStateError(f"note kind must be one of: {', '.join(sorted(NOTE_KINDS))}")
+    text = str(note.get("text", "")).strip()
+    normalized = {
+        "note_id": str(note.get("note_id") or f"note-{index + 1:04d}"),
+        "actor": actor,
+        "timestamp": str(note.get("timestamp") or ""),
+        "kind": kind,
+        "text": text,
+        "source_refs": _as_list(note.get("source_refs"), "note.source_refs"),
+        "deleted": bool(note.get("deleted", False)),
+    }
+    if note.get("material_id"):
+        normalized["material_id"] = str(note.get("material_id"))
+    if note.get("confidence") is not None:
+        normalized["confidence"] = float(note.get("confidence"))
+    for key in ("updated_at", "updated_by", "deleted_at", "deleted_by"):
+        if note.get(key):
+            normalized[key] = str(note.get(key))
+    return normalized
+
+
+def _save_project_notes(project_id: str, notes: list[dict[str, Any]], *, root: Path | None = None) -> None:
+    root = root or get_project_root()
+    path = project_notes_path(root, project_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    normalized = [_normalize_note(note, idx) for idx, note in enumerate(notes)]
+    path.write_text("\n".join(json.dumps(note, ensure_ascii=False, separators=(",", ":")) for note in normalized) + ("\n" if normalized else ""), encoding="utf-8")
+
+
 def append_project_note(
     project_id: str,
     *,
@@ -314,35 +351,72 @@ def append_project_note(
         raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
     if not text.strip():
         raise ProjectStateError("note text is required")
+    root = root or get_project_root()
+    notes = load_project_notes(project_id, root=root, include_deleted=True)
     note: dict[str, Any] = {
+        "note_id": f"note-{len(notes) + 1:04d}",
         "actor": actor,
         "timestamp": timestamp or now_iso(),
         "kind": kind,
         "text": text.strip(),
         "source_refs": source_refs or [],
+        "deleted": False,
     }
     if material_id:
         note["material_id"] = material_id
     if confidence is not None:
         note["confidence"] = float(confidence)
-    root = root or get_project_root()
-    path = project_notes_path(root, project_id)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with open(path, "a", encoding="utf-8") as f:
-        f.write(json.dumps(note, ensure_ascii=False, separators=(",", ":")) + "\n")
+    notes.append(note)
+    _save_project_notes(project_id, notes, root=root)
     return note
 
 
-def load_project_notes(project_id: str, *, root: Path | None = None) -> list[dict[str, Any]]:
+def load_project_notes(project_id: str, *, root: Path | None = None, include_deleted: bool = False) -> list[dict[str, Any]]:
     root = root or get_project_root()
     path = project_notes_path(root, project_id)
     if not path.exists():
         return []
     notes = []
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for index, line in enumerate(path.read_text(encoding="utf-8").splitlines()):
         if line.strip():
-            notes.append(json.loads(line))
+            note = _normalize_note(json.loads(line), index)
+            if include_deleted or not note.get("deleted"):
+                notes.append(note)
     return notes
+
+
+def update_project_note(project_id: str, *, note_id: str, text: str, actor: str, root: Path | None = None) -> dict[str, Any]:
+    if actor not in UPDATED_BY:
+        raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    if not text.strip():
+        raise ProjectStateError("note text is required")
+    root = root or get_project_root()
+    notes = load_project_notes(project_id, root=root, include_deleted=True)
+    for note in notes:
+        if note.get("note_id") == note_id:
+            if note.get("deleted"):
+                raise ProjectStateError("cannot edit a deleted note")
+            note["text"] = text.strip()
+            note["updated_at"] = now_iso()
+            note["updated_by"] = actor
+            _save_project_notes(project_id, notes, root=root)
+            return note
+    raise ProjectStateError(f"unknown note_id: {note_id}")
+
+
+def delete_project_note(project_id: str, *, note_id: str, actor: str, root: Path | None = None) -> dict[str, Any]:
+    if actor not in UPDATED_BY:
+        raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    root = root or get_project_root()
+    notes = load_project_notes(project_id, root=root, include_deleted=True)
+    for note in notes:
+        if note.get("note_id") == note_id:
+            note["deleted"] = True
+            note["deleted_at"] = now_iso()
+            note["deleted_by"] = actor
+            _save_project_notes(project_id, notes, root=root)
+            return note
+    raise ProjectStateError(f"unknown note_id: {note_id}")
 
 
 def validate_project_id(project_id: str) -> str:

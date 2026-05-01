@@ -349,12 +349,6 @@
     </section>
     {% endif %}
 
-    {% if project_notes_html %}
-    <section class="panel project-notes-panel">
-      {{ project_notes_html }}
-    </section>
-    {% endif %}
-
     {% if project_phase_timeline %}
     <section class="panel project-phase-panel">
       <h2>Fase del proyecto</h2>
@@ -364,6 +358,29 @@
           <span class="project-phase-dot"></span>
           <span class="project-phase-label">{{ step.label }}</span>
         </div>
+        {% endfor %}
+      </div>
+    </section>
+    {% endif %}
+
+    {% if project_notes %}
+    <section class="panel project-notes-panel">
+      <h2>Notas</h2>
+      <div class="project-sticky-notes">
+        {% for note in project_notes %}
+        <form class="project-sticky-note project-sticky-note--{{ note.kind }}" method="post" action="/projects/{{ project_id }}/notes/{{ note.note_id }}/edit">
+          <input type="hidden" name="actor" value="human">
+          <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
+          <div class="project-sticky-note-meta">
+            <span class="project-sticky-note-kind">{{ note.kind }}</span>
+            <span class="project-sticky-note-date">{{ note.timestamp[:10] }}</span>
+          </div>
+          <textarea name="text">{{ note.text }}</textarea>
+          <div class="project-sticky-note-actions">
+            <button type="submit">Guardar</button>
+            <button type="submit" class="project-note-delete" formaction="/projects/{{ project_id }}/notes/{{ note.note_id }}/delete" formnovalidate>Eliminar</button>
+          </div>
+        </form>
         {% endfor %}
       </div>
     </section>

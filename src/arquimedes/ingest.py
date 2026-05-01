@@ -13,13 +13,27 @@ from arquimedes.models import MaterialManifest, compute_file_hash, compute_mater
 # File extensions we can process
 PDF_EXTENSIONS = {".pdf"}
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".tiff", ".tif", ".bmp", ".webp"}
-SUPPORTED_EXTENSIONS = PDF_EXTENSIONS | IMAGE_EXTENSIONS
+TEXT_EXTENSIONS = {".txt"}
+MARKDOWN_EXTENSIONS = {".md", ".markdown"}
+DOCX_EXTENSIONS = {".docx"}
+PPTX_EXTENSIONS = {".pptx"}
+XLSX_EXTENSIONS = {".xlsx"}
+SUPPORTED_EXTENSIONS = (
+    PDF_EXTENSIONS
+    | IMAGE_EXTENSIONS
+    | TEXT_EXTENSIONS
+    | MARKDOWN_EXTENSIONS
+    | DOCX_EXTENSIONS
+    | PPTX_EXTENSIONS
+    | XLSX_EXTENSIONS
+)
 
 
 def _detect_file_type(path: Path) -> str:
     """Detect file type from extension and content heuristics.
 
-    Returns: 'pdf', 'scanned_document', 'image', or 'unknown'.
+    Returns: 'pdf', 'scanned_document', 'image', 'text', 'markdown', 'docx',
+    'pptx', 'xlsx', or 'unknown'.
     """
     ext = path.suffix.lower()
     if ext in PDF_EXTENSIONS:
@@ -28,6 +42,16 @@ def _detect_file_type(path: Path) -> str:
         if _is_likely_scanned_document(path):
             return "scanned_document"
         return "image"
+    if ext in TEXT_EXTENSIONS:
+        return "text"
+    if ext in MARKDOWN_EXTENSIONS:
+        return "markdown"
+    if ext in DOCX_EXTENSIONS:
+        return "docx"
+    if ext in PPTX_EXTENSIONS:
+        return "pptx"
+    if ext in XLSX_EXTENSIONS:
+        return "xlsx"
     return "unknown"
 
 
@@ -85,22 +109,13 @@ def save_manifest(project_root: Path, materials: dict[str, MaterialManifest]) ->
 
 
 def scan_library(library_root: Path) -> list[Path]:
-    """Find all supported files in the library, recursively."""
-    files = []
-    for ext in SUPPORTED_EXTENSIONS:
-        files.extend(library_root.rglob(f"*{ext}"))
-    # Also catch uppercase extensions
-    for ext in SUPPORTED_EXTENSIONS:
-        files.extend(library_root.rglob(f"*{ext.upper()}"))
-    # Deduplicate (case-insensitive filesystems may double-count)
-    seen = set()
-    unique = []
-    for f in files:
-        resolved = f.resolve()
-        if resolved not in seen:
-            seen.add(resolved)
-            unique.append(f)
-    return sorted(unique)
+    """Find all supported files in the library, recursively.
+
+    Match extensions case-insensitively so mixed-case names like ``Draft.Docx``
+    are treated the same as ``Draft.docx``.
+    """
+    files = [p for p in library_root.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
+    return sorted(files)
 
 
 def _refresh_extracted_scope(project_root: Path, entry: MaterialManifest) -> None:

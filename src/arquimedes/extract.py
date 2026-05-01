@@ -13,6 +13,7 @@ from arquimedes.domain_profiles import normalize_domain
 from arquimedes.extract_figures import extract_all_figures
 from arquimedes.extract_image import extract_raw_image
 from arquimedes.extract_pdf import _sanitize_strings, extract_raw_pdf
+from arquimedes.extract_text import extract_raw_markdown_file, extract_raw_text_file
 from arquimedes.ingest import load_manifest
 from arquimedes.models import Annotation, Page
 from arquimedes.thumbnails import generate_thumbnails
@@ -106,6 +107,32 @@ def extract_raw(
                 chunk_size=chunk_size,
                 ocr_fallback=ocr_fallback,
             )
+        elif entry.file_type == "text":
+            extract_raw_text_file(
+                source_path, output_dir, mid, entry_dict, chunk_size=chunk_size,
+            )
+        elif entry.file_type == "markdown":
+            extract_raw_markdown_file(
+                source_path, output_dir, mid, entry_dict, chunk_size=chunk_size,
+            )
+        elif entry.file_type == "docx":
+            from arquimedes.extract_office import extract_raw_docx
+            extract_raw_docx(
+                source_path, output_dir, mid, entry_dict, chunk_size=chunk_size,
+            )
+        elif entry.file_type == "pptx":
+            from arquimedes.extract_office import extract_raw_pptx
+            extract_raw_pptx(
+                source_path, output_dir, mid, entry_dict, chunk_size=chunk_size,
+            )
+        elif entry.file_type == "xlsx":
+            from arquimedes.extract_office import extract_raw_xlsx
+            extract_raw_xlsx(
+                source_path, output_dir, mid, entry_dict, chunk_size=chunk_size,
+            )
+        else:
+            print(f"  Warning: unsupported file_type {entry.file_type!r} for {entry.relative_path}; skipping")
+            continue
 
         extracted_ids.append(mid)
 

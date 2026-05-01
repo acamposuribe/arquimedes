@@ -48,6 +48,49 @@ def test_extract_raw_domain_filter_and_force_recreate(monkeypatch, tmp_path):
     assert not (project_root / "extracted" / "research1").exists()
 
 
+def test_extract_raw_dispatches_textlike_formats(monkeypatch, tmp_path):
+    project_root = tmp_path / "vault"
+    library_root = tmp_path / "library"
+    (library_root / "Research" / "notes").mkdir(parents=True)
+    md_path = library_root / "Research" / "notes" / "spec.md"
+    md_path.write_text("# Title\n\nbody line\n", encoding="utf-8")
+    txt_path = library_root / "Research" / "notes" / "log.txt"
+    txt_path.write_text("plain text body\n", encoding="utf-8")
+
+    _write_manifest(project_root, [
+        MaterialManifest("md1", "h-md", "Research/notes/spec.md", "markdown", "research", "notes", "now"),
+        MaterialManifest("tx1", "h-tx", "Research/notes/log.txt", "text", "research", "notes", "now"),
+    ])
+
+    monkeypatch.setattr("arquimedes.extract.get_project_root", lambda: project_root)
+
+    extracted = extract_raw(config={"library_root": str(library_root)})
+    assert set(extracted) == {"md1", "tx1"}
+    for mid in ("md1", "tx1"):
+        out = project_root / "extracted" / mid
+        assert (out / "meta.json").exists()
+        assert (out / "pages.jsonl").exists()
+        assert (out / "chunks.jsonl").exists()
+
+
+def test_extract_raw_warns_on_unknown_file_type(monkeypatch, tmp_path, capsys):
+    project_root = tmp_path / "vault"
+    library_root = tmp_path / "library"
+    (library_root / "Research" / "x").mkdir(parents=True)
+    weird = library_root / "Research" / "x" / "weird.bin"
+    weird.write_bytes(b"x")
+
+    _write_manifest(project_root, [
+        MaterialManifest("w1", "h-w", "Research/x/weird.bin", "weirdtype", "research", "x", "now"),
+    ])
+    monkeypatch.setattr("arquimedes.extract.get_project_root", lambda: project_root)
+
+    extracted = extract_raw(config={"library_root": str(library_root)})
+    assert extracted == []
+    out = capsys.readouterr().out
+    assert "unsupported file_type" in out
+
+
 def test_extract_pdf_material_forwards_ocr_fallback(monkeypatch, tmp_path):
     output_dir = tmp_path / "out"
     output_dir.mkdir()

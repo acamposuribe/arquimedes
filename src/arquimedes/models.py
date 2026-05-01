@@ -162,7 +162,7 @@ class MaterialManifest:
     file_hash: str
     relative_path: str
     file_type: str
-    domain: str  # practice | research — derived from top-level LIBRARY_ROOT folder
+    domain: str  # research | practice | proyectos — derived from top-level LIBRARY_ROOT folder
     collection: str  # derived from second-level subfolder within domain folder
     ingested_at: str
     ingested_by: str = ""
@@ -192,12 +192,12 @@ class MaterialMeta:
     language: str = ""
     source_url: str = ""
     page_count: int = 0
-    file_type: str = ""  # pdf | image | scanned_document
+    file_type: str = ""  # pdf | image | scanned_document | text | markdown | docx | pptx | xlsx
     collection: str = ""
     ingested_at: str = ""  # ISO 8601 timestamp
 
-    # Domain — derived from top-level LIBRARY_ROOT folder (Research/ or Practice/)
-    domain: str = ""  # practice | research
+    # Domain — derived from top-level LIBRARY_ROOT folder (Research/, Practice/, or Proyectos/)
+    domain: str = ""  # research | practice | proyectos
 
     # Deterministic classification (set by extract-raw, no provenance needed)
     raw_keywords: list[str] = field(default_factory=list)

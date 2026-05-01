@@ -62,6 +62,7 @@ When a collaborator adds a file to the shared library root:
 2. **`arq ingest`**
 - Registers the file in `manifests/materials.jsonl`
 - Assigns `material_id`, hashes the file, records source path, domain, collection
+- Recognized source types: `.pdf`, image formats (`.jpg`/`.jpeg`/`.png`/`.tiff`/`.tif`/`.bmp`/`.webp`), plain text (`.txt`), Markdown (`.md`/`.markdown`), and OOXML Office (`.docx`/`.pptx`/`.xlsx`). Legacy binary Office formats (`.doc`/`.ppt`/`.xls`) are skipped — convert to OOXML or PDF first.
 - No LLM
 
 3. **`arq extract`**

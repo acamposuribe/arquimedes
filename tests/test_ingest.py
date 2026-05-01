@@ -104,6 +104,61 @@ def test_ingest_skips_disabled_domains(tmp_path, monkeypatch):
     assert [item.relative_path for item in result] == ["Proyectos/2407-casa-rio/acta.pdf"]
 
 
+def test_detect_file_type_for_new_extensions(tmp_path):
+    samples = {
+        "note.txt": "text",
+        "readme.md": "markdown",
+        "guide.markdown": "markdown",
+        "report.docx": "docx",
+        "deck.pptx": "pptx",
+        "budget.xlsx": "xlsx",
+        "MixedCase.Docx": "docx",
+        "legacy.doc": "unknown",
+        "legacy.ppt": "unknown",
+        "legacy.xls": "unknown",
+    }
+    for name, expected in samples.items():
+        p = tmp_path / name
+        p.write_bytes(b"x")
+        assert ingest_mod._detect_file_type(p) == expected, name
+
+
+def test_ingest_registers_new_file_types(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    (project_root / "manifests").mkdir(parents=True, exist_ok=True)
+
+    files = {
+        "Research/notes/log.txt": b"hello",
+        "Research/notes/spec.md": b"# spec md",
+        "Practice/codes/spec.markdown": b"# spec markdown",
+        "Research/papers/draft.docx": b"docx-bytes",
+        "Practice/decks/deck.pptx": b"pptx-bytes",
+        "Practice/sheets/budget.xlsx": b"xlsx-bytes",
+        "Research/notes/MixedCase.Docx": b"mixed-docx-bytes",
+        "Research/legacy/old.doc": b"legacy",
+    }
+    for rel, data in files.items():
+        p = library_root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(config={})
+    by_path = {item.relative_path: item.file_type for item in result}
+
+    assert by_path["Research/notes/log.txt"] == "text"
+    assert by_path["Research/notes/spec.md"] == "markdown"
+    assert by_path["Practice/codes/spec.markdown"] == "markdown"
+    assert by_path["Research/papers/draft.docx"] == "docx"
+    assert by_path["Practice/decks/deck.pptx"] == "pptx"
+    assert by_path["Practice/sheets/budget.xlsx"] == "xlsx"
+    assert by_path["Research/notes/MixedCase.Docx"] == "docx"
+    assert "Research/legacy/old.doc" not in by_path
+
+
 def test_ingest_recognizes_proyectos_domain_and_general_bucket(tmp_path, monkeypatch):
     library_root = tmp_path / "library"
     project_root = tmp_path / "project"

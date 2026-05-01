@@ -547,6 +547,21 @@ img { max-width: 100%; display: block; }
   line-height: 1.7;
 }
 
+.wiki-body--project-material {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+}
+
+.project-page-block {
+  margin-bottom: 1.4rem;
+  padding: 1.25rem 1.5rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
 .wiki-body h1 { font-size: 1.7rem; font-weight: 400; border-bottom: 1px solid var(--line-dark); padding-bottom: 0.3rem; margin-bottom: 0.6rem; }
 .wiki-body h2 { font-size: 1.25rem; font-weight: 600; margin: 1.4rem 0 0.5rem; }
 .wiki-body h3 { font-size: 1.05rem; font-weight: 600; margin: 1.1rem 0 0.4rem; }
@@ -774,11 +789,11 @@ img { max-width: 100%; display: block; }
 
 .project-extraction-panel {
   margin-bottom: 1.4rem;
-  padding: 1rem 1.1rem;
+  padding: 1.25rem 1.5rem;
   border: 1px solid var(--line);
   border-left: 3px solid var(--accent);
   border-radius: 4px;
-  background: #fafbfc;
+  background: var(--panel);
 }
 
 .project-extraction-header {
@@ -800,6 +815,36 @@ img { max-width: 100%; display: block; }
   color: var(--ink);
   font-size: 0.96rem;
   line-height: 1.55;
+}
+
+.project-extraction-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem 1rem;
+  margin: 0 0 0.9rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--line);
+}
+
+.project-extraction-meta div {
+  display: flex;
+  gap: 0.35rem;
+  align-items: baseline;
+}
+
+.project-extraction-meta dt {
+  color: var(--muted);
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.project-extraction-meta dd {
+  margin: 0;
+  color: var(--ink);
+  font-size: 0.9rem;
 }
 
 .project-extraction-grid {

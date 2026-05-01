@@ -251,6 +251,20 @@ def test_practice_material_page_sections_are_spanish():
     assert "## Fuente" in page
 
 
+def test_proyectos_material_page_omits_standard_metadata_summary_and_source():
+    meta = _make_meta("mat_project", "Acta de seguimiento")
+    meta["domain"] = "proyectos"
+    meta["collection"] = "2511-gandia"
+    meta["summary"] = {"value": "Resumen duplicado.", "provenance": {}}
+    page = render_material_page(meta, [], [], [], [], [])
+    assert "## Metadata" not in page
+    assert "## Metadatos" not in page
+    assert "## Summary" not in page
+    assert "## Resumen" not in page
+    assert "## Source" not in page
+    assert "## Fuente" not in page
+
+
 # ---------------------------------------------------------------------------
 # Test 4: concept page evidence
 # ---------------------------------------------------------------------------

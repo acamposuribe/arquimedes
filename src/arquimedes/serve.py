@@ -353,24 +353,38 @@ def _split_markdown_section(md_text: str, heading: str | list[str]) -> tuple[str
     return before, section, after
 
 
-def _split_material_sections(md_text: str) -> tuple[str, str]:
+def _split_material_sections(md_text: str) -> tuple[str, str, str]:
     body = re.sub(_section_regex(_heading_candidates("figures", "Figures")), "", md_text)
     body = re.sub(r"(?m)^\[(?:Open original file|Full extracted text|Abrir archivo original|Texto extraído completo)\]\(.*\)\s*$\n?", "", body)
+    annotations_block = ""
+    annotations = re.search(_section_regex(_heading_candidates("reader_annotations", "Reader Annotations")), body)
+    if annotations:
+        annotations_block = annotations.group(0).strip()
+        body = body[:annotations.start()] + body[annotations.end():]
     related_block = ""
     related = re.search(_section_regex(_heading_candidates("related_materials", "Related Materials")), body)
     if related:
         related_block = related.group(0).strip()
         body = body[:related.start()] + body[related.end():]
-    return body.strip(), related_block
+    return body.strip(), annotations_block, related_block
+
+
+def _strip_project_material_chrome(md_text: str) -> str:
+    for key, default in (
+        ("metadata", "Metadata"),
+        ("summary", "Summary"),
+        ("source", "Source"),
+    ):
+        md_text = re.sub(_section_regex(_heading_candidates(key, default)), "", md_text)
+    return md_text.strip()
 
 
 def _strip_material_sections(md_text: str) -> str:
-    body, related_block = _split_material_sections(md_text)
+    body, annotations_block, related_block = _split_material_sections(md_text)
     md_text = body
-    related = re.search(_section_regex(_heading_candidates("related_materials", "Related Materials")), md_text)
-    if related:
-        related_block = related.group(0).strip()
-        md_text = md_text[:related.start()] + md_text[related.end():]
+    if annotations_block:
+        md_text = md_text.rstrip() + "\n\n" + annotations_block + "\n"
+    if related_block:
         md_text = md_text.rstrip() + "\n\n" + related_block + "\n"
     return md_text.strip()
 
@@ -417,10 +431,19 @@ def _project_extraction_context(meta: dict) -> dict | None:
     ]
     relevance = _plain(project_extraction.get("project_relevance"))
     material_type = _plain(project_extraction.get("project_material_type"))
+    material_type_label = _PROJECT_MATERIAL_TYPE_LABELS.get(material_type, material_type.replace("_", " ") if material_type else "")
+    metadata = [
+        {"label": "Año", "value": str(meta.get("year") or "").strip()},
+        {"label": "Tipo", "value": material_type_label},
+        {"label": "Proyecto", "value": str(meta.get("collection") or "").strip()},
+    ]
+    metadata = [item for item in metadata if item["value"]]
     if not (relevance or material_type or groups):
         return None
     return {
-        "material_type": _PROJECT_MATERIAL_TYPE_LABELS.get(material_type, material_type.replace("_", " ") if material_type else ""),
+        "title": str(meta.get("title") or meta.get("material_id") or "").strip(),
+        "material_type": material_type_label,
+        "metadata": metadata,
         "relevance": relevance,
         "groups": groups,
     }
@@ -781,10 +804,14 @@ def _scoped_page_search_context(
 
 
 def _material_page_context(material_id: str, body: str) -> dict:
-    content_body, related_materials_body = _split_material_sections(body)
+    meta = read_mod.load_material_meta(material_id)
+    if is_proyectos_domain(str(meta.get("domain") or ""), default="research"):
+        body = _strip_project_material_chrome(body)
+    content_body, annotations_body, related_materials_body = _split_material_sections(body)
     return {
         **_material_sidebar_context(material_id),
         "content_body": content_body,
+        "annotations_body": annotations_body,
         "related_materials_body": related_materials_body,
         "material_figures": _figure_view_models(material_id, read_mod.load_material_figures(material_id)),
     }
@@ -1005,6 +1032,7 @@ def create_app(config: dict | None = None) -> FastAPI:
                     path,
                     material["content_body"],
                     **material,
+                    annotations_html=render_wiki_markdown(material["annotations_body"], _project_rel_path(path), material_id) if material["annotations_body"] else "",
                     related_materials_html=render_wiki_markdown(material["related_materials_body"], _project_rel_path(path), material_id) if material["related_materials_body"] else "",
                     **search_context,
                 ),
@@ -1131,6 +1159,7 @@ def create_app(config: dict | None = None) -> FastAPI:
             material = _material_page_context(material_id, body)
             content_body = material["content_body"]
             extra = material
+            extra["annotations_html"] = render_wiki_markdown(material["annotations_body"], _project_rel_path(page_path), material_id) if material["annotations_body"] else ""
             extra["related_materials_html"] = render_wiki_markdown(material["related_materials_body"], _project_rel_path(page_path), material_id) if material["related_materials_body"] else ""
             search_query = q.strip()
             page_search = {"kind": "material", "label": _ui_label("search_this_material", str(extra.get("domain") or page_domain or ""), "Search This Material"), "query": search_query, "results": None}

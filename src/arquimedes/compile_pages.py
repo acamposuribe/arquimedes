@@ -373,38 +373,40 @@ def render_material_page(
     # --- Title ---
     title = meta.get("title") or mid
     domain = meta.get("domain") or ""
+    is_project_material = domain == "proyectos"
     lines.append(f"# {title}\n")
 
     # --- Metadata block ---
-    lines.append(f"## {_label(domain, 'metadata', 'Metadata')}\n")
-    lines.append(f"| {_label(domain, 'field', 'Field')} | {_label(domain, 'value', 'Value')} |")
-    lines.append("| --- | --- |")
     authors = meta.get("authors") or []
     if isinstance(authors, list):
         author_str = ", ".join(authors)
     else:
         author_str = str(authors)
-    if author_str:
-        lines.append(f"| {_label(domain, 'authors', 'Authors')} | {author_str} |")
     year = meta.get("year") or ""
-    if year:
-        lines.append(f"| {_label(domain, 'year', 'Year')} | {year} |")
     doc_type = _meta_val(meta.get("document_type")) or meta.get("raw_document_type") or ""
-    if doc_type:
-        lines.append(f"| {_label(domain, 'type', 'Type')} | {doc_type} |")
-    if domain:
-        lines.append(f"| {_label(domain, 'domain', 'Domain')} | {domain} |")
     collection = meta.get("collection") or ""
-    if collection:
-        lines.append(f"| {_label(domain, 'collection', 'Collection')} | {collection} |")
     page_count = meta.get("page_count") or 0
-    if page_count:
-        lines.append(f"| {_label(domain, 'pages', 'Pages')} | {page_count} |")
-    lines.append("")
+    if not is_project_material:
+        lines.append(f"## {_label(domain, 'metadata', 'Metadata')}\n")
+        lines.append(f"| {_label(domain, 'field', 'Field')} | {_label(domain, 'value', 'Value')} |")
+        lines.append("| --- | --- |")
+        if author_str:
+            lines.append(f"| {_label(domain, 'authors', 'Authors')} | {author_str} |")
+        if year:
+            lines.append(f"| {_label(domain, 'year', 'Year')} | {year} |")
+        if doc_type:
+            lines.append(f"| {_label(domain, 'type', 'Type')} | {doc_type} |")
+        if domain:
+            lines.append(f"| {_label(domain, 'domain', 'Domain')} | {domain} |")
+        if collection:
+            lines.append(f"| {_label(domain, 'collection', 'Collection')} | {collection} |")
+        if page_count:
+            lines.append(f"| {_label(domain, 'pages', 'Pages')} | {page_count} |")
+        lines.append("")
 
     # --- Summary ---
     summary = _meta_val(meta.get("summary"))
-    if summary:
+    if summary and not is_project_material:
         lines.append(f"## {_label(domain, 'summary', 'Summary')}\n")
         lines.append(summary)
         lines.append("")
@@ -518,18 +520,19 @@ def render_material_page(
         lines.append("</details>\n")
 
     # --- Source ---
-    lines.append(f"## {_label(domain, 'source', 'Source')}\n")
-    if page_count:
-        lines.append(f"**{_label(domain, 'pages', 'Pages')}:** {page_count}  ")
-    citation = _chicago_citation(meta)
-    if citation:
-        lines.append(f"**{_label(domain, 'citation', 'Citation')}:** {citation}")
-    lines.append("")
-    if raw_file_link:
-        lines.append(f"[{_label(domain, 'open_original_file', 'Open original file')}]({raw_file_link})  ")
-    if extracted_text_link:
-        lines.append(f"[{_label(domain, 'full_extracted_text', 'Full extracted text')}]({extracted_text_link})  ")
-    lines.append("")
+    if not is_project_material:
+        lines.append(f"## {_label(domain, 'source', 'Source')}\n")
+        if page_count:
+            lines.append(f"**{_label(domain, 'pages', 'Pages')}:** {page_count}  ")
+        citation = _chicago_citation(meta)
+        if citation:
+            lines.append(f"**{_label(domain, 'citation', 'Citation')}:** {citation}")
+        lines.append("")
+        if raw_file_link:
+            lines.append(f"[{_label(domain, 'open_original_file', 'Open original file')}]({raw_file_link})  ")
+        if extracted_text_link:
+            lines.append(f"[{_label(domain, 'full_extracted_text', 'Full extracted text')}]({extracted_text_link})  ")
+        lines.append("")
 
     # --- Related materials ---
     if related:

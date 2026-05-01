@@ -2,7 +2,7 @@
 {% block content %}
 {% include "partials/breadcrumbs.html" %}
 <section class="wiki-layout">
-  <article class="wiki-body">
+  <article class="wiki-body{% if project_extraction %} wiki-body--project-material{% endif %}">
     {% if page_search and page_search.kind == 'material' and search_query %}
     <section class="material-search-context">
       <p class="eyebrow">{{ ui_label('within_this_material', active_domain, 'Within This Material') }}</p>
@@ -101,13 +101,23 @@
     <section class="project-extraction-panel">
       <p class="eyebrow">Resumen operativo</p>
       <div class="project-extraction-header">
-        <h2>Lectura de proyecto</h2>
+        <h2>{{ project_extraction.title or page_title }}</h2>
         {% if project_extraction.material_type %}
         <span class="project-card-count">{{ project_extraction.material_type }}</span>
         {% endif %}
       </div>
       {% if project_extraction.relevance %}
       <p class="project-extraction-relevance">{{ project_extraction.relevance }}</p>
+      {% endif %}
+      {% if project_extraction.metadata %}
+      <dl class="project-extraction-meta">
+        {% for item in project_extraction.metadata %}
+        <div>
+          <dt>{{ item.label }}</dt>
+          <dd>{{ item.value }}</dd>
+        </div>
+        {% endfor %}
+      </dl>
       {% endif %}
       {% if project_extraction.groups %}
       <div class="project-extraction-grid">
@@ -125,7 +135,15 @@
       {% endif %}
     </section>
     {% endif %}
+    {% if project_extraction %}
+    {% if content_html %}
+    <section class="project-page-block">
+      {{ content_html }}
+    </section>
+    {% endif %}
+    {% else %}
     {{ content_html }}
+    {% endif %}
     {% if project_material_groups %}
     <section class="collection-materials-section project-material-section">
       <h2>{{ ui_label('materials', active_domain, 'Materiales') }}</h2>
@@ -211,8 +229,23 @@
       </div>
     </section>
     {% endif %}
+    {% if annotations_html %}
+    {% if project_extraction %}
+    <section class="project-page-block">
+      {{ annotations_html }}
+    </section>
+    {% else %}
+    {{ annotations_html }}
+    {% endif %}
+    {% endif %}
     {% if related_materials_html %}
+    {% if project_extraction %}
+    <section class="project-page-block">
+      {{ related_materials_html }}
+    </section>
+    {% else %}
     {{ related_materials_html }}
+    {% endif %}
     {% endif %}
   </article>
 

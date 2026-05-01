@@ -718,6 +718,7 @@ def test_proyectos_material_page_surfaces_project_extraction(tmp_path, monkeypat
         "title": "Acta de seguimiento",
         "domain": "proyectos",
         "collection": "2511-gandia",
+        "year": "2026",
         "project_extraction": {
             "project_material_type": "meeting_report",
             "project_relevance": "Registra acuerdos y próximos pasos del expediente.",
@@ -734,7 +735,14 @@ def test_proyectos_material_page_surfaces_project_extraction(tmp_path, monkeypat
         },
     })
     (root / "wiki" / "proyectos" / "2511-gandia" / "mat_project.md").write_text(
-        "# Acta de seguimiento\n\nCuerpo del acta.\n",
+        "# Acta de seguimiento\n\n"
+        "## Metadatos\n\n"
+        "| Campo | Valor |\n| --- | --- |\n| Año | 2026 |\n\n"
+        "## Resumen\n\n"
+        "Resumen duplicado.\n\n"
+        "Cuerpo del acta.\n\n"
+        "## Fuente\n\n"
+        "**Páginas:** 2\n",
         encoding="utf-8",
     )
 
@@ -742,7 +750,16 @@ def test_proyectos_material_page_surfaces_project_extraction(tmp_path, monkeypat
     response = client.get("/materials/mat_project")
     assert response.status_code == 200
     assert "Resumen operativo" in response.text
+    assert "Acta de seguimiento" in response.text
     assert "Informes de reunión" in response.text
+    assert "Año" in response.text
+    assert "2026" in response.text
+    assert "Tipo" in response.text
+    assert "Proyecto" in response.text
+    assert "2511-gandia" in response.text
+    assert "Lectura de proyecto" not in response.text
+    assert "Resumen duplicado." not in response.text
+    assert "Páginas" not in response.text
     assert "Registra acuerdos y próximos pasos del expediente." in response.text
     assert "Puntos principales" in response.text
     assert "Se revisa el estado de licencia." in response.text

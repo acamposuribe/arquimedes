@@ -63,6 +63,7 @@ When a collaborator adds a file to the shared library root:
 - Registers the file in `manifests/materials.jsonl`
 - Assigns `material_id`, hashes the file, records source path, domain, collection
 - Recognized source types: `.pdf`, image formats (`.jpg`/`.jpeg`/`.png`/`.tiff`/`.tif`/`.bmp`/`.webp`), plain text (`.txt`), Markdown (`.md`/`.markdown`), and OOXML Office (`.docx`/`.pptx`/`.xlsx`). Legacy binary Office formats (`.doc`/`.ppt`/`.xls`) are skipped — convert to OOXML or PDF first.
+- Symlinked directories inside the library root are traversed. This lets `Proyectos/<project-id>/<link-name> -> /external/server/folder` ingest external server materials without duplicating source files; the symlink path remains the canonical project placement.
 - No LLM
 
 3. **`arq extract`**

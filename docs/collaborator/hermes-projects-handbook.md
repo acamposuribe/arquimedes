@@ -49,6 +49,53 @@ Add a project note when a conversation records one of these:
 
 Prefer short, curated notes over dumping chat history. Do not duplicate a source material unless the conversation changes its interpretation, urgency, or priority.
 
+## Linking External Project Folders For Ingest
+
+When a human asks you to "get", "link", "mount", "alias", or "make an alias" for a folder from the office server/NAS into a Proyectos dossier, interpret that as: **create a Unix symlinked folder inside the library root**, not a Finder alias and not a copy.
+
+The purpose is to let Arquimedes ingest source files that physically live elsewhere without duplicating them.
+
+Use this pattern:
+
+```bash
+ln -s "<real-server-folder>" "<library-root>/Proyectos/<project-id>/<link-name>"
+```
+
+Example:
+
+```bash
+ln -s "/Volumes/Server/Clientes/Casa Rio/Entregas" \
+  "$ARQ_LIBRARY_ROOT/Proyectos/2407-casa-rio/server-entregas"
+```
+
+Rules:
+
+- Create a **symlink** with `ln -s`. Do not create a macOS Finder alias.
+- Do **not** copy the server folder into the library.
+- Put the symlink under the correct project folder: `Proyectos/<project-id>/...`.
+- Use a short, stable link name such as `server-docs`, `server-entregas`, `cliente`, or `consultores`.
+- If the target link path already exists, stop and ask before replacing it.
+- Verify after creating it:
+
+```bash
+ls -la "$ARQ_LIBRARY_ROOT/Proyectos/<project-id>"
+```
+
+You should see a row like:
+
+```text
+server-entregas -> /Volumes/Server/Clientes/Casa Rio/Entregas
+```
+
+Safety checks before creating the symlink:
+
+1. Confirm the project id with `arq project list`.
+2. Confirm the real server folder exists and is readable.
+3. Confirm the symlink will be created inside the library root, under `Proyectos/<project-id>/`.
+4. Confirm the link name does not already exist.
+
+Arquimedes ingest follows symlinked directories. Files inside the linked server folder are picked up as if they lived under `Proyectos/<project-id>/<link-name>/`, while the bytes remain stored in the original server location.
+
 ## Commands
 
 List available projects:

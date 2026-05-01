@@ -19,7 +19,7 @@ from arquimedes.config import (
     load_config,
 )
 from arquimedes.git_publish import git_env, push as git_push
-from arquimedes.ingest import SUPPORTED_EXTENSIONS, load_manifest
+from arquimedes.ingest import SUPPORTED_EXTENSIONS, _relative_to_library, load_manifest, scan_library
 from arquimedes.models import compute_file_hash, compute_material_id
 from arquimedes.removal import RemovalReport, cascade_delete
 
@@ -105,13 +105,10 @@ class LibraryScanner:
         if not self.library_root.exists():
             raise FileNotFoundError(f"Library root does not exist: {self.library_root}")
         entries: list[FileSnapshotEntry] = []
-        for path in sorted(self.library_root.rglob("*")):
+        for path in scan_library(self.library_root):
             if not _is_supported(path):
                 continue
-            try:
-                relative = path.resolve().relative_to(self.library_root.resolve())
-            except ValueError:
-                relative = Path(path.name)
+            relative = _relative_to_library(path, self.library_root)
             entries.append(
                 FileSnapshotEntry(
                     path=path,

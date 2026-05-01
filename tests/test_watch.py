@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
+import os
 import subprocess
 
 import pytest
@@ -64,6 +65,26 @@ def test_watch_planner_detects_add_modify_move_and_delete(tmp_path):
     assert moved_entry.material_id in batch.moved_ids
     assert moved_entry.material_id not in batch.delete
     assert len(batch.delete) == 2
+
+
+def test_watch_scanner_follows_symlinked_directories(tmp_path):
+    if not hasattr(os, "symlink"):
+        pytest.skip("symlinks are not supported on this platform")
+
+    library = tmp_path / "Library"
+    external = tmp_path / "Server" / "Project Docs"
+    project = library / "Proyectos" / "2407-casa-rio"
+    external.mkdir(parents=True)
+    project.mkdir(parents=True)
+    source = external / "Acta.pdf"
+    source.write_text("acta", encoding="utf-8")
+    (project / "server-docs").symlink_to(external, target_is_directory=True)
+
+    snapshot = LibraryScanner(library).scan()
+
+    assert len(snapshot) == 1
+    assert snapshot[0].relative_path == "Proyectos/2407-casa-rio/server-docs/Acta.pdf"
+    assert snapshot[0].file_hash == compute_file_hash(source)
 
 
 def test_watch_planner_empty_when_library_matches_manifest(tmp_path):

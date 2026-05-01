@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+
+import pytest
 
 from arquimedes import ingest as ingest_mod
 from arquimedes.models import MaterialManifest, MaterialMeta, compute_file_hash, compute_material_id
@@ -182,3 +185,34 @@ def test_ingest_recognizes_proyectos_domain_and_general_bucket(tmp_path, monkeyp
     assert by_path["Proyectos/2407-casa-rio/acta.pdf"].collection == "2407-casa-rio"
     assert by_path["Proyectos/loose.pdf"].domain == "proyectos"
     assert by_path["Proyectos/loose.pdf"].collection == "_general"
+
+
+def test_ingest_follows_symlinked_project_directories(tmp_path, monkeypatch):
+    if not hasattr(os, "symlink"):
+        pytest.skip("symlinks are not supported on this platform")
+
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    external_root = tmp_path / "server" / "Casa Rio" / "Entregas"
+    project_dir = library_root / "Proyectos" / "2407-casa-rio"
+    (project_root / "manifests").mkdir(parents=True, exist_ok=True)
+    external_root.mkdir(parents=True, exist_ok=True)
+    project_dir.mkdir(parents=True, exist_ok=True)
+
+    external_file = external_root / "Acta 01.PDF"
+    external_file.write_bytes(b"external pdf bytes")
+    symlink_path = project_dir / "server-entregas"
+    symlink_path.symlink_to(external_root, target_is_directory=True)
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(config={})
+
+    assert len(result) == 1
+    entry = result[0]
+    assert entry.relative_path == "Proyectos/2407-casa-rio/server-entregas/Acta 01.PDF"
+    assert entry.file_type == "pdf"
+    assert entry.domain == "proyectos"
+    assert entry.collection == "2407-casa-rio"
+    assert entry.file_hash == compute_file_hash(external_file)

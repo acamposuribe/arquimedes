@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from pathlib import Path
 
@@ -391,6 +392,31 @@ def test_material_page_collapses_long_page_thumbnail_strip(tmp_path, monkeypatch
     assert "<span>Pages</span>" in response.text
     assert '<span class="meta-line">(21)</span>' in response.text
     assert 'data-zoom-src="/thumbnails/mat_001/page_0021.png"' in response.text
+
+
+def test_source_route_serves_material_inside_symlinked_directory(tmp_path, monkeypatch):
+    if not hasattr(os, "symlink"):
+        return
+    root = _repo(tmp_path, monkeypatch)
+    external = root / "Server" / "Casa Rio" / "Entregas"
+    link_parent = root / "Library" / "Proyectos" / "2407-casa-rio"
+    external.mkdir(parents=True)
+    link_parent.mkdir(parents=True)
+    (external / "Acta.pdf").write_text("pdf", encoding="utf-8")
+    (link_parent / "server-entregas").symlink_to(external, target_is_directory=True)
+    _write_json(root / "extracted" / "mat_001" / "meta.json", {
+        "material_id": "mat_001",
+        "title": "Material One",
+        "domain": "proyectos",
+        "collection": "2407-casa-rio",
+        "source_path": "Proyectos/2407-casa-rio/server-entregas/Acta.pdf",
+    })
+
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/source/mat_001")
+
+    assert response.status_code == 200
+    assert response.text == "pdf"
 
 
 def test_figure_and_source_routes(tmp_path, monkeypatch):

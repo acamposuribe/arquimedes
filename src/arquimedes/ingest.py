@@ -112,10 +112,54 @@ def scan_library(library_root: Path) -> list[Path]:
     """Find all supported files in the library, recursively.
 
     Match extensions case-insensitively so mixed-case names like ``Draft.Docx``
-    are treated the same as ``Draft.docx``.
+    are treated the same as ``Draft.docx``. Follow symlinked directories so a
+    project can link to source folders stored outside the library root without
+    duplicating them. Directory realpaths are tracked to avoid symlink loops.
     """
-    files = [p for p in library_root.rglob("*") if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS]
-    return sorted(files)
+    files: list[Path] = []
+    visited_dirs: set[Path] = set()
+
+    def walk(directory: Path) -> None:
+        try:
+            real_dir = directory.resolve(strict=True)
+        except OSError:
+            return
+        if real_dir in visited_dirs:
+            return
+        visited_dirs.add(real_dir)
+
+        try:
+            children = list(directory.iterdir())
+        except OSError:
+            return
+
+        for child in children:
+            try:
+                if child.is_dir():
+                    walk(child)
+                elif child.is_file() and child.suffix.lower() in SUPPORTED_EXTENSIONS:
+                    files.append(child)
+            except OSError:
+                continue
+
+    walk(library_root)
+    return sorted(files, key=lambda p: str(p))
+
+
+def _relative_to_library(file_path: Path, library_root: Path) -> Path:
+    """Return the lexical path of a material relative to the library root.
+
+    Do not resolve symlinks here: for a file reached through
+    ``Proyectos/<project>/linked-folder``, the symlink path is the canonical
+    project placement even when the bytes live outside ``library_root``.
+    """
+    try:
+        return file_path.relative_to(library_root)
+    except ValueError:
+        try:
+            return file_path.absolute().relative_to(library_root.absolute())
+        except ValueError:
+            return Path(file_path.name)
 
 
 def _refresh_extracted_scope(project_root: Path, entry: MaterialManifest) -> None:
@@ -206,10 +250,7 @@ def ingest(
         # Refresh path-derived scope for already-registered materials.
         if material_id in manifest:
             existing = manifest[material_id]
-            try:
-                relative = file_path.resolve().relative_to(library_root.resolve())
-            except ValueError:
-                relative = Path(file_path.name)
+            relative = _relative_to_library(file_path, library_root)
             domain = _derive_domain(relative, enabled_domains)
             collection = _derive_collection(relative, enabled_domains)
             if domain and (
@@ -234,10 +275,7 @@ def ingest(
         # Also check by hash for safety
         if file_hash in existing_hashes:
             existing = existing_by_hash[file_hash]
-            try:
-                relative = file_path.resolve().relative_to(library_root.resolve())
-            except ValueError:
-                relative = Path(file_path.name)
+            relative = _relative_to_library(file_path, library_root)
             domain = _derive_domain(relative, enabled_domains)
             collection = _derive_collection(relative, enabled_domains)
             if domain and (
@@ -261,10 +299,7 @@ def ingest(
             continue
 
         # Derive collection from subfolder structure
-        try:
-            relative = file_path.resolve().relative_to(library_root.resolve())
-        except ValueError:
-            relative = Path(file_path.name)
+        relative = _relative_to_library(file_path, library_root)
 
         domain = _derive_domain(relative, enabled_domains)
         collection = _derive_collection(relative, enabled_domains)

@@ -105,11 +105,14 @@ def material_source_path(material_id: str) -> Path | None:
     source_path = str(load_material_meta(material_id).get("source_path") or "").strip()
     if not source_path:
         return None
-    try:
-        path = _resolve(get_library_root(), PurePosixPath(source_path))
-    except (FileNotFoundError, ValueError):
+    path = PurePosixPath(source_path)
+    if path.is_absolute() or any(part == ".." for part in path.parts):
         return None
-    return path if path.exists() else None
+    # Keep the library-relative symlink path lexical. Resolving here would reject
+    # valid project links such as Proyectos/<id>/server-docs -> /Volumes/Server/...
+    # because their realpath lives outside the library root.
+    candidate = get_library_root() / Path(*path.parts)
+    return candidate if candidate.exists() else None
 
 
 def material_extracted_text_path(material_id: str) -> Path | None:

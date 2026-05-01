@@ -917,7 +917,6 @@ def render_project_page(
         ("proximo_foco", "Próximo foco", "next_focus"),
         ("aprendizajes", "Aprendizajes positivos", "positive_learnings"),
         ("errores_reparaciones", "Errores y acciones de reparación", "mistakes_or_regrets"),
-        ("acciones_reparacion", "Acciones de reparación", "repair_actions"),
     ]
     for section_id, heading, field in section_specs:
         section = section_records.get(section_id) or {}
@@ -925,17 +924,10 @@ def render_project_page(
         if section.get("body"):
             lines.append(str(section["body"]).strip())
             lines.append("")
+        elif section_id == "errores_reparaciones":
+            _render_bullets(lines, list(state.get("mistakes_or_regrets") or []) + list(state.get("repair_actions") or []))
         else:
             _render_bullets(lines, state.get(field) or [])
-
-    important_ids = set(state.get("important_material_ids") or [])
-    important = [m for m in materials if m.get("material_id") in important_ids]
-    if important:
-        lines.append("## Materiales importantes\n")
-        for item in important:
-            link = f"[{item.get('name', '')}]({item.get('path', '')})" if item.get("path") else item.get("name", "")
-            lines.append(f"- {link}")
-        lines.append("")
 
     if recent_additions:
         lines.append("## Historial reciente\n")

@@ -101,7 +101,7 @@
     {% if project_visual_first and material_figures %}
     <section class="material-gallery project-visual-block" id="project-visual-gallery">
       {% if material_admin_mode %}
-      <form id="figure-delete-form" class="figure-delete-form" method="post" action="/materials/{{ material_id }}/figures/delete" data-confirm-message="¿Eliminar las figuras seleccionadas? Esta acción borrará las imágenes extraídas y sus JSON asociados." data-preserve-scroll="true">
+      <form id="figure-delete-form" class="figure-delete-form" method="post" action="{{ request.url.path.rstrip('/') }}/figures/delete" data-confirm-message="¿Eliminar las figuras seleccionadas? Esta acción borrará las imágenes extraídas y sus JSON asociados." data-preserve-scroll="true">
         <input type="hidden" name="return_to" value="{{ request.url.path }}{% if request.url.query %}?{{ request.url.query }}{% endif %}">
         <div class="figure-delete-controls" hidden data-figure-delete-controls>
           <button class="action-link action-link--danger" type="submit">Eliminar seleccionadas</button>

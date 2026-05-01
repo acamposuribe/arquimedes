@@ -779,6 +779,40 @@ def test_proyectos_material_page_surfaces_project_extraction(tmp_path, monkeypat
     assert "p. 1" in response.text
 
 
+def test_proyectos_standalone_image_renders_before_operational_summary(tmp_path, monkeypatch):
+    root = _repo(tmp_path, monkeypatch)
+    (root / "wiki" / "proyectos" / "2511-gandia").mkdir(parents=True)
+    _write_json(root / "extracted" / "mat_image" / "meta.json", {
+        "material_id": "mat_image",
+        "title": "Foto de fachada",
+        "domain": "proyectos",
+        "collection": "2511-gandia",
+        "file_type": "image",
+        "project_extraction": {
+            "project_material_type": "site_photo",
+            "project_relevance": "Documenta el estado actual de fachada.",
+        },
+    })
+    _write_json(root / "extracted" / "mat_image" / "figures" / "fig_0001.json", {
+        "figure_id": "fig_0001",
+        "image_path": "figures/fig_0001.jpg",
+        "caption": "Fachada principal",
+    })
+    (root / "extracted" / "mat_image" / "figures" / "fig_0001.jpg").write_bytes(b"fake jpg")
+    (root / "wiki" / "proyectos" / "2511-gandia" / "mat_image.md").write_text(
+        "# Foto de fachada\n",
+        encoding="utf-8",
+    )
+
+    client = TestClient(serve_mod.create_app())
+    response = client.get("/materials/mat_image")
+    assert response.status_code == 200
+    assert 'class="project-primary-image-block"' in response.text
+    assert '/figures-low/mat_image/fig_0001.jpg' in response.text
+    assert 'Fachada principal' in response.text
+    assert response.text.index('class="project-primary-image-block"') < response.text.index("Resumen operativo")
+
+
 def test_collection_page_renders_material_cards_with_word_truncation_and_previews(tmp_path, monkeypatch):
     root = _repo(tmp_path, monkeypatch)
     _write_json(root / "extracted" / "mat_001" / "meta.json", {

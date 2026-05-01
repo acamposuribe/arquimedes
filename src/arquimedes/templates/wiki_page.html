@@ -97,6 +97,14 @@
       {% endif %}
     </section>
     {% endif %}
+    {% if project_primary_image %}
+    <section class="project-primary-image-block">
+      <a href="{{ project_primary_image.zoom_url }}">
+        <img alt="{{ project_primary_image.title }}" src="{{ project_primary_image.image_url }}">
+      </a>
+      {% if project_primary_image.caption %}<p>{{ project_primary_image.caption }}</p>{% endif %}
+    </section>
+    {% endif %}
     {% if project_extraction %}
     <section class="project-extraction-panel">
       <p class="eyebrow">Resumen operativo</p>

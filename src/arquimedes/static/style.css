@@ -814,6 +814,28 @@ img { max-width: 100%; display: block; }
   padding: 0 0.1rem;
 }
 
+.project-primary-image-block {
+  margin-bottom: 1.4rem;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--panel);
+}
+
+.project-primary-image-block img {
+  display: block;
+  width: 100%;
+  max-height: 72vh;
+  object-fit: contain;
+  background: #fff;
+}
+
+.project-primary-image-block p {
+  margin: 0.65rem 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
 .project-extraction-panel {
   margin-bottom: 1.4rem;
   padding: 1.25rem 1.5rem;

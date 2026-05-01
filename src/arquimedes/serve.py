@@ -482,6 +482,23 @@ def _material_preview_images(material_id: str, limit: int = 4) -> list[dict]:
     ]
 
 
+def _standalone_project_image_context(meta: dict, material_id: str, figures: list[dict]) -> dict | None:
+    if not is_proyectos_domain(str(meta.get("domain") or ""), default="research"):
+        return None
+    if str(meta.get("file_type") or "").strip() != "image":
+        return None
+    figure_items = _figure_view_models(material_id, figures)
+    if not figure_items:
+        return None
+    figure = figure_items[0]
+    return {
+        "title": str(meta.get("title") or material_id).strip(),
+        "image_url": figure["image_url"],
+        "zoom_url": figure["zoom_url"],
+        "caption": figure.get("caption_text") or figure.get("description_text") or "",
+    }
+
+
 def _thumbnail_view_models(material_id: str) -> list[dict]:
     return [
         {
@@ -502,6 +519,7 @@ def _material_sidebar_context(material_id: str) -> dict:
         "title": str(meta.get("title") or material_id),
         "domain": str(meta.get("domain") or ""),
         "project_extraction": _project_extraction_context(meta),
+        "project_primary_image": _standalone_project_image_context(meta, material_id, figures),
         "collection_url": wiki_url(f"wiki/{meta.get('domain')}/{meta.get('collection')}/_index.md") if meta.get("domain") and meta.get("collection") else "",
         "collection_label": f"{meta.get('domain')}/{meta.get('collection')}" if meta.get("domain") and meta.get("collection") else "",
         "source_url": f"/source/{material_id}" if read_mod.material_source_path(material_id) else "",

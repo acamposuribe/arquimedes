@@ -36,6 +36,10 @@ def _project_reflection_failure_path(root: Path, project_id: str) -> Path:
     return _project_reflection_stage_dir(root) / f"{project_id}.failure.json"
 
 
+def _project_reflection_evidence_part_path(root: Path, project_id: str, index: int) -> Path:
+    return _project_reflection_stage_dir(root) / f"{project_id}.evidence.part-{index:03d}.json"
+
+
 def _write_project_reflection_failure(
     root: Path,
     project_id: str,
@@ -57,6 +61,53 @@ def _write_project_reflection_failure(
         "evidence_path": str(evidence_path),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2, default=str) + "\n", encoding="utf-8")
+
+
+def _json_size(payload: Any) -> int:
+    return len(json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+
+
+def _write_project_reflection_evidence(root: Path, project_id: str, payload: dict, *, max_bytes: int = 45_000) -> list[Path]:
+    """Write evidence in tool-readable chunks and return paths for the prompt."""
+    evidence_path = _project_reflection_evidence_path(root, project_id)
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    for old_part in evidence_path.parent.glob(f"{project_id}.evidence.part-*.json"):
+        try:
+            old_part.unlink()
+        except OSError:
+            pass
+    if _json_size(payload) <= max_bytes:
+        return [evidence_path]
+
+    materials = payload.get("materials") if isinstance(payload.get("materials"), list) else []
+    common = {key: value for key, value in payload.items() if key != "materials"}
+    paths: list[Path] = []
+    chunk: list[dict] = []
+    for material in materials:
+        candidate = chunk + [material]
+        candidate_payload = {**common, "materials": candidate}
+        if chunk and _json_size(candidate_payload) > max_bytes:
+            part_path = _project_reflection_evidence_part_path(root, project_id, len(paths) + 1)
+            part_path.write_text(json.dumps({**common, "materials": chunk}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            paths.append(part_path)
+            chunk = [material]
+        else:
+            chunk = candidate
+    if chunk or not paths:
+        part_path = _project_reflection_evidence_part_path(root, project_id, len(paths) + 1)
+        part_path.write_text(json.dumps({**common, "materials": chunk}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        paths.append(part_path)
+
+    index_payload = {
+        "kind": "project_reflection_evidence_index",
+        "project_id": project_id,
+        "part_paths": [str(path) for path in paths],
+        "full_evidence_path": str(evidence_path),
+        "note": "Use the part_paths; the full evidence file may exceed tool read limits.",
+    }
+    evidence_path.write_text(json.dumps(index_payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return [evidence_path, *paths]
 
 
 def _project_material_packet(meta: dict) -> dict:
@@ -175,7 +226,7 @@ def _has_new_human_evidence(root: Path, project_id: str, existing_record: dict |
     return any(existing_record.get(key) != value for key, value in signatures.items())
 
 
-def _project_reflection_prompt(evidence_path: Path) -> tuple[str, str]:
+def _project_reflection_prompt(evidence_paths: list[Path]) -> tuple[str, str]:
     system = """\
 Eres la reflexión operativa de un estudio de arquitectura. Mantienes memoria viva de un proyecto Proyectos.
 
@@ -191,13 +242,15 @@ Tareas:
   - next_focus: foco de las próximas 1-2 semanas, no lo que ya está en curso.
 - Trata notas y secciones Hermes/humanas como evidencia de alta prioridad.
 - Propón section_deltas solo cuando mejoren una sección de página.
+- stage solo puede ser uno de: lead, feasibility, schematic_design, basic_project, execution_project, tender, construction, handover, archived. Si no puedes inferirlo, omite stage y deja stage_confidence en 0.0; nunca uses unknown.
 - Nunca borres texto protegido: si reemplazas una sección protegida como reflection, incluye justification no vacía y references_prior_body=true.
 - Copia revision como prior.revision + 1 y replaces_updated_at como el updated_at exacto de la sección previa.
 - Usa updated_by=reflection implícitamente; no lo incluyas salvo que el esquema lo pida.
 """
+    path_list = "\n".join(f"- {path}" for path in evidence_paths)
     user = f"""\
-Lee el paquete de evidencia del proyecto en:
-{evidence_path}
+Lee el paquete de evidencia del proyecto en estas rutas. Si hay partes, lee todas las partes antes de responder; el archivo índice explica las rutas y evita límites de lectura:
+{path_list}
 
 Responde con este esquema exacto:
 {PROJECT_REFLECTION_SCHEMA}
@@ -210,6 +263,9 @@ def _normalize_state_delta(parsed: dict) -> dict:
     if not isinstance(delta, dict):
         delta = {}
     delta = dict(delta)
+    if str(delta.get("stage", "")).strip() == "unknown":
+        delta.pop("stage", None)
+        delta["stage_confidence"] = 0.0
     delta["updated_by"] = "reflection"
     return delta
 
@@ -268,8 +324,8 @@ def _run_project_reflections_impl(
 
         evidence_path = _project_reflection_evidence_path(root, project_id)
         fingerprint = _project_reflection_fingerprint(root, project_id, new_metas)
-        deps._write_json(evidence_path, _project_reflection_payload(root, project_id, new_metas))
-        system, user = _project_reflection_prompt(evidence_path)
+        evidence_paths = _write_project_reflection_evidence(root, project_id, _project_reflection_payload(root, project_id, new_metas))
+        system, user = _project_reflection_prompt(evidence_paths)
         raw = ""
         parsed: Any = None
         try:

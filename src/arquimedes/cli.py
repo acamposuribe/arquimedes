@@ -1969,7 +1969,7 @@ def project_status_cmd(project_id: str):
         _echo_json({
             "project_id": project_id,
             "state": load_project_state(project_id),
-            "notes": load_project_notes(project_id),
+            "notes": load_project_notes(project_id, include_metadata=True),
         })
     except ProjectStateError as exc:
         raise click.ClickException(str(exc))
@@ -1994,7 +1994,7 @@ def project_note_cmd(
     actor: str,
     no_recompile: bool,
 ):
-    """Append an immutable project note."""
+    """Append a project note."""
     from arquimedes.project_state import ProjectStateError, append_project_note, validate_project_id
 
     try:
@@ -2008,6 +2008,41 @@ def project_note_cmd(
             material_id=material_id,
             confidence=confidence,
         )
+        _echo_json({"project_id": project_id, "note": note, "compile": _compile_after_project_write(no_recompile)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
+@project_group.command("note-edit")
+@click.argument("project_id")
+@click.argument("note_id")
+@click.option("--text", required=True, help="Replacement note text.")
+@click.option("--actor", default="hermes", show_default=True, help="hermes|human|cli")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately.")
+def project_note_edit_cmd(project_id: str, note_id: str, text: str, actor: str, no_recompile: bool):
+    """Edit an existing project note by note_id."""
+    from arquimedes.project_state import ProjectStateError, update_project_note, validate_project_id
+
+    try:
+        project_id = validate_project_id(project_id)
+        note = update_project_note(project_id, note_id=note_id, text=text, actor=actor)
+        _echo_json({"project_id": project_id, "note": note, "compile": _compile_after_project_write(no_recompile)})
+    except (ProjectStateError, FileNotFoundError) as exc:
+        raise click.ClickException(str(exc))
+
+
+@project_group.command("note-delete")
+@click.argument("project_id")
+@click.argument("note_id")
+@click.option("--actor", default="hermes", show_default=True, help="hermes|human|cli")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately.")
+def project_note_delete_cmd(project_id: str, note_id: str, actor: str, no_recompile: bool):
+    """Soft-delete an existing project note by note_id."""
+    from arquimedes.project_state import ProjectStateError, delete_project_note, validate_project_id
+
+    try:
+        project_id = validate_project_id(project_id)
+        note = delete_project_note(project_id, note_id=note_id, actor=actor)
         _echo_json({"project_id": project_id, "note": note, "compile": _compile_after_project_write(no_recompile)})
     except (ProjectStateError, FileNotFoundError) as exc:
         raise click.ClickException(str(exc))

@@ -31,74 +31,27 @@ Open notes are high-priority unresolved evidence. If they contradict older concl
 1. **Identify the project.** Infer it from Discord channel/context only when clear; otherwise ask the human. Confirm against `arq project list`.
 2. **Find and review the dossier.** Use `arq project status <project-id>` and read open notes first.
 3. **Add notes for new facts.** Record decisions, requirements, risks, deadlines, coordination issues, lessons, mistakes, repair actions, or useful meeting/file summaries.
-4. **Update sections only when necessary.** Use section edits for curated prose that should appear directly in the generated project page.
-5. **Update structured state only when explicitly requested.** Direct state commands are admin escape hatches; prefer notes and sections.
-6. **Force reflection only when requested.** If the human asks to re-run/refresh/force synthesis, run project reflection.
+4. **Update sections when necessary.** Use section edits for curated prose that should appear directly in the generated project page.
+5. **Force reflection only when requested.** If the human asks to re-run/refresh/force synthesis, run project reflection.
 
 ## Core Project Commands
 
-List projects:
+| Task | Command |
+| --- | --- |
+| List projects | `arq project list` |
+| Overview with material counts | `arq overview --domain proyectos --human` |
+| Read state, sections, and open notes | `arq project status <project-id>` |
+| Search one project dossier | `arq project search <project-id> "licencia"` |
+| Add a note | `arq project note <project-id> --kind decision --text "..." --source-ref "discord://channel/message"` |
+| Edit a note by `note_id` | `arq project note-edit <project-id> note-0001 --text "..."` |
+| Delete a note by `note_id` | `arq project note-delete <project-id> note-0001` |
+| Resolve an open item | `arq project resolve <project-id> --item missing_information:1 --note "..."` |
+| Replace a page section | `arq project section set <project-id> proximo_foco --text "..."` |
+| Force reflection when requested | `arq project reflect <project-id>` |
 
-```bash
-arq project list
-```
+Batch writes with `--no-recompile`, then run `arq project recompile <project-id>` once.
 
-Overview with material counts:
-
-```bash
-arq overview --domain proyectos --human
-```
-
-Read current state, sections, and open notes:
-
-```bash
-arq project status <project-id>
-```
-
-Search within one project dossier:
-
-```bash
-arq project search <project-id> "licencia"
-```
-
-Add a note with one of the allowed kinds (`decision`, `requirement`, `risk`, `deadline`, `coordination`, `learning`, `mistake`, `repair`):
-
-```bash
-arq project note <project-id> --kind decision --text "..." --source-ref "discord://channel/message"
-```
-
-Resolve an open item:
-
-```bash
-arq project resolve <project-id> --item missing_information:1 --note "..."
-```
-
-Replace a generated-page section:
-
-```bash
-arq project section set <project-id> proximo_foco --text "..."
-```
-
-Force reflection when explicitly requested:
-
-```bash
-arq project reflect <project-id>
-```
-
-Batch writes without recompiling every time:
-
-```bash
-arq project note <project-id> --kind risk --text "..." --no-recompile
-arq project section set <project-id> riesgos --text "..." --no-recompile
-arq project recompile <project-id>
-```
-
-Direct structured-state commands: use only if the human directly asks for this kind of change.
-
-```bash
-arq project update <project-id> --field next_focus --text "..."
-arq project append <project-id> --field risks_or_blockers --text "..."
-```
+Direct structured-state commands are admin escape hatches; use only when the human directly asks: `arq project update ...`, `arq project append ...`.
 
 ## Corpus Tools for Project Materials
 
@@ -142,20 +95,63 @@ Include provenance whenever possible:
 - `--material-id` when the note is tied to one ingested material.
 - `--confidence` only when uncertainty matters.
 
+## Notes vs Sections vs State
+
+- **Notes**: atomic facts, decisions, requests, corrections, contradictions, and new evidence. This is Hermes' default write path.
+- **Sections**: curated prose for generated project pages when a note is not enough.
+- **Structured state**: canonical fields maintained mostly by reflection/lint. Change directly only when explicitly requested by the human.
+
+Never edit compiled markdown directly. Project pages are generated from state, notes, sections, and materials.
+
+## Reflection
+
+Reflection may synthesize open notes into sections/state. It should preserve, resolve, or explicitly challenge Hermes warnings with evidence.
+
+Run reflection only when explicitly requested:
+
+```bash
+arq project reflect <project-id>
+```
+
+After successful incorporation, notes move automatically out of the open queue into archived statuses such as `incorporated` or `superseded`.
+
+
+## Vault Root vs Library Root
+
+Arquimedes uses two different roots. Do not confuse them.
+
+- **Vault root**: the local Git checkout that contains Arquimedes' generated/indexed knowledge files and config, such as `config/`, `wiki/`, `derived/`, `extracted/`, and docs. This is where `arq` commands normally run. Do not drop source PDFs or project files here.
+- **Library root**: the shared source-material folder that Arquimedes scans for ingest. This is where humans' PDFs, images, notes, meeting reports, and project source files belong. Project files usually go under `Proyectos/<project-id>/...` inside this root.
+
+To find the active roots, run:
+
+```bash
+arq vault info
+```
+
+Use the `library_root:` line for file placement and symlink targets inside Arquimedes. Use the `vault_root:` line only for running `arq` commands or understanding which vault checkout is active.
+
+**Non-negotiable boundary:** Hermes must never directly create, edit, move, delete, or overwrite files under the **vault root**. Vault-root files include configuration, generated wiki/derived/extracted data, indexes, docs, and any other files in the Git checkout. Direct filesystem edits in the vault root are prohibited and out of bounds. If vault state or vault info must change, use the appropriate `arq` command only, or ask the human/maintainer.
+
+Safety rules:
+
+- Before writing or linking files, always resolve the current `library_root` with `arq vault info --human`.
+- Do not infer the library root from the current working directory.
+- Never write to `vault_root` directly. This remains prohibited even for small fixes, config tweaks, markdown edits, or cleanup.
+- Vault info/config/state may only be changed through `arq` commands. If no command exists, ask the human/maintainer instead of editing files.
+
 ## Files From Humans
 
 If a human wants Hermes to add meeting reports, PDFs, images, notes, or other project files to Arquimedes:
 
-- Put the files under the **Arquimedes library root**, normally inside `Proyectos/<project-id>/...`.
-- Do **not** put new files in the office server/NAS folder.
-- Treat server/NAS folders as read-only sources.
-- If the human wants Arquimedes to ingest a server folder, create a symlink from the library project folder to that server folder instead of copying it.
+- Resolve `library_root` with `arq vault info --human`.
+- Put files under `library_root/Proyectos/<project-id>/...`.
+- Never put source files in `vault_root` or in the office server/NAS folder.
+- Treat server/NAS folders as read-only. If they must be ingested, symlink them from the library project folder instead of copying.
 
 ## Linking Server/NAS Folders for Ingest
 
-When the human asks to "get", "link", "mount", "alias", or "make an alias" for an office server/NAS folder, interpret it as: create a Unix symlinked folder inside the Arquimedes library root.
-
-Pattern:
+When the human asks to "get", "link", "mount", "alias", or "make an alias" for an office server/NAS folder, create a Unix symlinked folder inside the Arquimedes library root. First resolve `ARQ_LIBRARY_ROOT` from `arq vault info --human` (`library_root:`), then use:
 
 ```bash
 ln -s "<real-server-folder>" "$ARQ_LIBRARY_ROOT/Proyectos/<project-id>/<link-name>"
@@ -180,8 +176,8 @@ Rules:
 Safety checks:
 
 1. Confirm project id with `arq project list`.
-2. Confirm the real server folder exists and is readable.
-3. Confirm the symlink will be created inside `$ARQ_LIBRARY_ROOT/Proyectos/<project-id>/`.
+2. Resolve `library_root` with `arq vault info --human`; never use `vault_root`.
+3. Confirm the server folder is readable and the link path is inside `$ARQ_LIBRARY_ROOT/Proyectos/<project-id>/`.
 4. Confirm the link name does not already exist.
 5. Verify with:
 
@@ -194,23 +190,3 @@ You should see:
 ```text
 server-entregas -> /Volumes/Server/Clientes/Casa Rio/Entregas
 ```
-
-## Notes vs Sections vs State
-
-- **Notes**: atomic facts, decisions, requests, corrections, contradictions, and new evidence. This is Hermes' default write path.
-- **Sections**: curated prose for generated project pages when a note is not enough.
-- **Structured state**: canonical fields maintained mostly by reflection/lint. Change directly only when explicitly requested by the human.
-
-Never edit compiled markdown directly. Project pages are generated from state, notes, sections, and materials.
-
-## Reflection
-
-Reflection may synthesize open notes into sections/state. It should preserve, resolve, or explicitly challenge Hermes warnings with evidence.
-
-Run reflection only when explicitly requested:
-
-```bash
-arq project reflect <project-id>
-```
-
-After successful incorporation, notes move automatically out of the open queue into archived statuses such as `incorporated` or `superseded`.

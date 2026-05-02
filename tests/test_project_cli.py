@@ -26,6 +26,7 @@ def test_project_status_reads_state_and_notes(tmp_path, monkeypatch):
     payload = json.loads(result.output)
     assert payload["project_id"] == "2407-casa-rio"
     assert payload["state"]["stage"] == "lead"
+    assert payload["notes"][0]["note_id"] == "note-0001"
     assert payload["notes"][0]["text"] == "Se mantiene la escalera."
 
 
@@ -55,6 +56,52 @@ def test_project_note_writes_provenance_without_recompile(tmp_path, monkeypatch)
     assert payload["compile"] is None
     assert payload["note"]["actor"] == "hermes"
     assert project_state_mod.load_project_notes("2407-casa-rio", root=tmp_path)[0]["kind"] == "risk"
+
+
+def test_project_note_edit_and_delete_by_id(tmp_path, monkeypatch):
+    import arquimedes.project_state as project_state_mod
+
+    monkeypatch.setattr(project_state_mod, "get_project_root", lambda: tmp_path)
+    project_state_mod.append_project_note(
+        "2407-casa-rio",
+        kind="decision",
+        text="Texto original.",
+        actor="hermes",
+        root=tmp_path,
+    )
+
+    edit_result = CliRunner().invoke(
+        cli,
+        [
+            "project",
+            "note-edit",
+            "2407-casa-rio",
+            "note-0001",
+            "--text",
+            "Texto corregido.",
+            "--actor",
+            "human",
+            "--no-recompile",
+        ],
+    )
+    delete_result = CliRunner().invoke(
+        cli,
+        ["project", "note-delete", "2407-casa-rio", "note-0001", "--actor", "human", "--no-recompile"],
+    )
+
+    assert edit_result.exit_code == 0
+    edited = json.loads(edit_result.output)
+    assert edited["compile"] is None
+    assert edited["note"]["text"] == "Texto corregido."
+    assert edited["note"]["updated_by"] == "human"
+    assert delete_result.exit_code == 0
+    deleted = json.loads(delete_result.output)
+    assert deleted["compile"] is None
+    assert deleted["note"]["status"] == "deleted"
+    assert project_state_mod.load_project_notes("2407-casa-rio", root=tmp_path) == []
+    assert project_state_mod.load_project_notes(
+        "2407-casa-rio", root=tmp_path, include_deleted=True, include_metadata=True
+    )[0]["deleted_by"] == "human"
 
 
 def test_project_update_and_append_state_fields(tmp_path, monkeypatch):

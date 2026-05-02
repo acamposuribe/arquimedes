@@ -1698,6 +1698,11 @@ def memory_rebuild_cmd():
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
 
+    if counts.get("skipped"):
+        reason = counts.get("reason", "nothing to rebuild")
+        click.echo(f"Memory bridge skipped: {reason}.")
+        return
+
     click.echo(f"  clusters:              {counts['clusters']}")
     click.echo(f"  aliases:               {counts['aliases']}")
     click.echo(f"  cluster-material links:{counts['cluster_material_links']}")

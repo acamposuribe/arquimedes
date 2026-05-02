@@ -7,7 +7,9 @@ import sqlite3
 from pathlib import Path
 
 import pytest
+from click.testing import CliRunner
 
+from arquimedes.cli import cli
 from arquimedes.index import rebuild_index
 from arquimedes.memory import memory_rebuild, memory_ensure
 
@@ -210,6 +212,21 @@ def test_memory_ensure_skips_when_no_concepts_or_clusters(repo, monkeypatch):
 
     assert rebuilt is False
     assert counts == {"skipped": True, "reason": "no concepts or clusters to project"}
+
+
+def test_memory_rebuild_cli_reports_skip_without_key_error(monkeypatch):
+    import arquimedes.memory as memory_mod
+
+    monkeypatch.setattr(
+        memory_mod,
+        "memory_rebuild",
+        lambda: {"skipped": True, "reason": "no concepts or clusters to project"},
+    )
+
+    result = CliRunner().invoke(cli, ["memory", "rebuild"])
+
+    assert result.exit_code == 0
+    assert "Memory bridge skipped: no concepts or clusters to project." in result.output
 
 
 @pytest.mark.skip(reason="legacy raw-material bridge memory fixtures retired")

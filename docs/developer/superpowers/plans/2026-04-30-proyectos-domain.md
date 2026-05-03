@@ -265,7 +265,7 @@ Files:
 
 - `src/arquimedes/cli.py`
 - `src/arquimedes/project_state.py`
-- `docs/collaborator/hermes-projects-handbook.md` or another short Hermes-facing handbook path
+- `docs/collaborator/skill hermes/SKILL.md` plus its Hermes-facing references
 - CLI tests
 
 Commands (deterministic, no LLM, ship in Phase 6):
@@ -357,7 +357,7 @@ Tests:
 | `src/arquimedes/lint_project_reflection.py` | Create | Nightly project reflection stage |
 | `src/arquimedes/compile_pages.py` | Modify | Render project dashboard pages |
 | `src/arquimedes/cli.py` | Modify | Add `arq project ...` commands |
-| Hermes handbook | Create | Short local CLI instructions for Hermes |
+| Hermes skill docs | Create | Short local CLI instructions for Hermes via skill + references |
 | `src/arquimedes/lint_global_bridge.py` | Modify | Dispatch on `publication_mode`; route project_dossier to office-learning synthesis |
 
 ## Dependency Order
@@ -422,5 +422,5 @@ pytest tests/test_cli.py
 - Project state is structured, versionable, and provenance-aware.
 - Hermes has a safe, narrow CLI write API for project memory.
 - Hermes can improve project-page sections by editing section artifacts through CLI commands.
-- Hermes has a short handbook explaining when to record Discord discussions as persistent project notes.
+- Hermes has a short skill/reference set explaining when to record Discord discussions as persistent project notes.
 - The design leaves a clear later path for Discord digest ingestion and office-wide learning.

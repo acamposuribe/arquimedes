@@ -881,20 +881,6 @@ img { max-width: 100%; display: block; }
   align-items: center;
 }
 
-.project-strategy-badge {
-  display: inline-flex;
-  align-items: center;
-  padding: 0.22rem 0.55rem;
-  border-radius: 999px;
-  background: #7c5a12;
-  color: #fff9e8;
-  font-family: system-ui, -apple-system, sans-serif;
-  font-size: 0.68rem;
-  font-weight: 700;
-  letter-spacing: 0.06em;
-  text-transform: uppercase;
-}
-
 .project-strategy-panel-intro {
   margin: 0 0 0.8rem;
   color: var(--muted);

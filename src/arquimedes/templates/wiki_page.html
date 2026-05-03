@@ -495,9 +495,8 @@
     <section class="panel project-notes-panel project-strategy-panel">
       <div class="project-notes-panel-header project-strategy-panel-header">
         <h2>Estrategia principal</h2>
-        <span class="project-strategy-badge">Prioridad permanente</span>
       </div>
-      <p class="project-strategy-panel-intro">Marco rector del proyecto. Hermes y el equipo contrastan las decisiones contra esta estrategia; lint no la archiva ni la incorpora.</p>
+      <p class="project-strategy-panel-intro">Marco rector del proyecto. Hermes y el equipo contrastan las decisiones contra esta estrategia.</p>
       <div class="project-sticky-notes">
         {% for note in project_notes.strategy %}
         <form class="project-sticky-note project-sticky-note--{{ note.kind }} project-sticky-note--persistent" method="post" action="/projects/{{ project_id }}/notes/{{ note.note_id }}/edit">

@@ -166,6 +166,75 @@ def test_project_reflection_failure_writes_raw_response_debug(tmp_path, monkeypa
     assert "stage must be one of" in debug["error"]
 
 
+def test_project_reflection_keeps_strategy_notes_open(tmp_path, monkeypatch):
+    import arquimedes.project_state as project_state_mod
+
+    _write_project_material(tmp_path)
+    (tmp_path / "indexes").mkdir()
+    (tmp_path / "indexes" / "search.sqlite").write_text("", encoding="utf-8")
+    project_state_mod.append_project_note(
+        "2407-casa-rio",
+        kind="strategy",
+        text="Dar prioridad al jardín habitable como extensión de la casa.",
+        actor="hermes",
+        root=tmp_path,
+    )
+    project_state_mod.append_project_note(
+        "2407-casa-rio",
+        kind="risk",
+        text="Licencia pendiente.",
+        actor="hermes",
+        root=tmp_path,
+    )
+
+    class DummyTool:
+        def __init__(self, _root: Path):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    def llm_factory(stage: str):
+        assert stage == "project-reflection"
+
+        def llm(_system, _messages):
+            return json.dumps({
+                "state_delta": {"next_focus": ["Pedir reunión con urbanismo"]},
+                "section_deltas": [],
+                "note_status_updates": [
+                    {"note_id": "note-0001", "status": "incorporated"},
+                    {"note_id": "note-0002", "status": "incorporated"},
+                ],
+                "_finished": True,
+            })
+
+        return llm
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(lint_mod, "get_project_root", lambda: tmp_path)
+    monkeypatch.setattr(lint_mod, "get_index_path", lambda: tmp_path / "indexes" / "search.sqlite")
+    monkeypatch.setattr(lint_mod, "ReflectionIndexTool", DummyTool)
+    monkeypatch.setattr(lint_mod, "compile_wiki", lambda *args, **kwargs: None)
+    monkeypatch.setattr(lint_mod, "memory_rebuild", lambda _config: None)
+    monkeypatch.setattr(project_state_mod, "get_project_root", lambda: tmp_path)
+
+    lint_mod.run_reflective_lint(
+        {"llm": {"agent_cmd": "echo"}},
+        {"summary": {"issues": 0}, "issues": []},
+        stages=["project-reflection"],
+        llm_factory=llm_factory,
+    )
+
+    notes = project_state_mod.load_project_notes("2407-casa-rio", root=tmp_path, include_deleted=True, include_metadata=True)
+    by_id = {note["note_id"]: note for note in notes}
+    assert by_id["note-0001"]["kind"] == "strategy"
+    assert by_id["note-0001"]["status"] == "open"
+    assert by_id["note-0002"]["status"] == "incorporated"
+
+
 def test_project_reflection_stage_skips_general_bucket(tmp_path, monkeypatch):
     _write_project_material(tmp_path)
     meta_path = tmp_path / "extracted" / "mat_project" / "meta.json"

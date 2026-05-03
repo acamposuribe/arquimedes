@@ -969,13 +969,26 @@ def test_proyectos_project_page_handles_resolved_wiki_paths(tmp_path, monkeypatc
     con.commit()
     con.close()
 
+    (real_root / "derived" / "projects" / "2407-casa-rio").mkdir(parents=True, exist_ok=True)
+    (real_root / "derived" / "projects" / "2407-casa-rio" / "notes.jsonl").write_text(
+        '{"note_id":"note-0001","actor":"hermes","timestamp":"2026-04-30T08:00:00+00:00","kind":"strategy","text":"Abrir la casa al río y ordenar la vida diaria desde el porche.","source_refs":[],"status":"open","deleted":false}\n'
+        '{"note_id":"note-0002","actor":"hermes","timestamp":"2026-04-30T09:00:00+00:00","kind":"risk","text":"Pendiente de licencia.","source_refs":[],"status":"open","deleted":false}\n',
+        encoding="utf-8",
+    )
+
     client = TestClient(serve_mod.create_app())
     response = client.get("/wiki/proyectos/2407-casa-rio")
     assert response.status_code == 200
     assert "Casa Río" in response.text
     assert "Informes de reunión" in response.text
     assert "/materials/mat_proyecto" in response.text
+    assert ">Estrategia principal</h2>" in response.text
+    assert "Prioridad permanente" in response.text
+    assert "persistente" in response.text
+    assert "Abrir la casa al río y ordenar la vida diaria desde el porche." in response.text
+    assert response.text.index(">Estrategia principal</h2>") < response.text.index(">Notas</h2>")
     assert response.text.index(">Materiales del proyecto</h2>") < response.text.index(">Historial reciente</h2>")
+    assert "/projects/2407-casa-rio/notes/note-0001/delete" not in response.text
 
 
 def test_concept_page_uses_concept_search_label_and_linked_material_scope(tmp_path, monkeypatch):

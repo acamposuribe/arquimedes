@@ -275,6 +275,7 @@ Tareas:
   - current_work_in_progress: trabajo activo esta semana.
   - next_focus: foco de las próximas 1-2 semanas, no lo que ya está en curso.
 - Trata notas y secciones Hermes/humanas como evidencia de alta prioridad.
+- Las notas de kind=strategy son evidencia prioritaria permanente: nunca las archives, nunca las marques como incorporated/superseded/deleted y nunca propongas note_status_updates para ellas.
 - Las notas con status=open son la prioridad más alta cuando contradicen inferencias previas o conclusiones débiles.
 - Las notas con status=incorporated ya fueron absorbidas antes: úsalas como contexto/procedencia, pero no dejes que reescriban de nuevo conclusiones no relacionadas.
 - Las notas con status=superseded solo deben servir como rastro histórico; no recuperes su contenido salvo que explique una contradicción o corrección posterior.
@@ -401,11 +402,18 @@ def _run_project_reflections_impl(
 
             note_status_updates = parsed.get("note_status_updates") or []
             if isinstance(note_status_updates, list):
+                note_by_id = {
+                    str(note.get("note_id") or "").strip(): note
+                    for note in load_project_notes(project_id, root=root, include_deleted=True, include_metadata=True)
+                }
                 for item in note_status_updates:
                     if not isinstance(item, dict):
                         continue
                     note_id = str(item.get("note_id") or "").strip()
                     status = str(item.get("status") or "").strip()
+                    note = note_by_id.get(note_id) or {}
+                    if note.get("kind") == "strategy":
+                        continue
                     if note_id and status in {"incorporated", "superseded"}:
                         set_project_note_status(project_id, note_id=note_id, status=status, actor="reflection", root=root)
             project_open_notes = _open_project_notes(root, project_id)

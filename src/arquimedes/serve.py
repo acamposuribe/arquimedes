@@ -667,9 +667,16 @@ def _project_notes_context(project_id: str) -> dict:
         key=lambda row: (str(row.get("timestamp") or ""), str(row.get("note_id") or "")),
         reverse=True,
     )
-    open_notes = [note for note in notes if str(note.get("status") or "open") == "open"]
-    archived_notes = [note for note in notes if str(note.get("status") or "open") != "open"]
-    return {"open": open_notes, "archived": archived_notes}
+    strategy_notes = [note for note in notes if str(note.get("kind") or "") == "strategy"]
+    open_notes = [
+        note for note in notes
+        if str(note.get("kind") or "") != "strategy" and str(note.get("status") or "open") == "open"
+    ]
+    archived_notes = [
+        note for note in notes
+        if str(note.get("kind") or "") != "strategy" and str(note.get("status") or "open") != "open"
+    ]
+    return {"strategy": strategy_notes, "open": open_notes, "archived": archived_notes}
 
 
 def _project_state_panel_context(project_id: str) -> list[dict]:

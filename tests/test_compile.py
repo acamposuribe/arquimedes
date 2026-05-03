@@ -1439,6 +1439,7 @@ def test_compile_writes_proyectos_project_page_without_clusters(tmp_path, monkey
     )
 
     state = load_project_state("2407-casa-rio", root=tmp_path)
+    state["main_strategy"] = "Implantar la casa desde el paisaje y la vida exterior cotidiana."
     state["stage"] = "schematic_design"
     state["current_work_in_progress"] = ["Preparar alternativas de implantación"]
     state["next_focus"] = ["Validar alcance con cliente"]
@@ -1467,6 +1468,9 @@ def test_compile_writes_proyectos_project_page_without_clusters(tmp_path, monkey
     compile_mod.compile_wiki({"llm": {"agent_cmd": "echo"}}, force=True)
 
     page = (tmp_path / "wiki" / "proyectos" / "2407-casa-rio" / "_index.md").read_text(encoding="utf-8")
+    assert "## Estrategia principal" in page
+    assert "Implantar la casa desde el paisaje y la vida exterior cotidiana." in page
+    assert page.index("## Estrategia principal") < page.index("## Estado del proyecto")
     assert "## Estado del proyecto" in page
     assert "schematic_design" in page
     assert "Preparar alternativas de implantación" in page

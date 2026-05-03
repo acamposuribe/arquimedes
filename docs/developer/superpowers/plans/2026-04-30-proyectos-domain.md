@@ -39,11 +39,11 @@ These were open during drafting and are now committed in the spec. Listed here s
 - Prompt-version suffix for Proyectos: `proyectos-es-v1`.
 - Project-extraction storage: nested under `project_extraction` inside the existing document/chunk enrichment JSON, not promoted to top-level keys. Top-level `summary`, `keywords`, `facets` are still produced (Spanish, project-flavored) so material pages render with shared templates. Concept-candidate emission is suppressed at the prompt level for Proyectos, not schema-deleted.
 - Hermes notes are committed to the vault with provenance.
-- Project note kind enum v1: `decision`, `requirement`, `risk`, `deadline`, `coordination`, `learning`, `mistake`, `repair`.
+- Project note kind enum v1: `strategy`, `decision`, `requirement`, `risk`, `deadline`, `coordination`, `learning`, `mistake`, `repair`. `strategy` is persistent priority evidence: lint never archives it and only Hermes/humans may edit it.
 - Section-replacement protocol: schema-enforced via `revision`, `replaces_updated_at`, `justification`, and `references_prior_body` in the delta payload. See spec for merge rules.
 - `proyectos/_general` is an intake bucket: ingested but no project page compiled, no project reflection run; surfaced as an ingest warning instead.
 - `updated_by` enum: `reflection`, `hermes`, `human`, `cli`. Never `lint`.
-- Discord ingestion deferred. Hermes records a persistent note when a discussion captures: a decision, requirement, risk, deadline, coordination issue, learning, mistake, or repair action.
+- Discord ingestion deferred. Hermes records a persistent note when a discussion captures: a project's governing strategy, decision, requirement, risk, deadline, coordination issue, learning, mistake, or repair action.
 
 ## Phase 1: Domain Profile And Ingest Recognition
 
@@ -163,7 +163,7 @@ Changes:
 - Define load/save/merge helpers for:
   - `derived/projects/<project-id>/project_state.json`
   - `derived/projects/<project-id>/notes.jsonl`
-- State schema follows the spec field list, including the v1 stage enum and the three-horizon discipline (`main_objectives` = end-of-project, `current_work_in_progress` = this week, `next_focus` = next 1–2 weeks).
+- State schema follows the spec field list, including `main_strategy` as the highest-priority project framing, the v1 stage enum, and the three-horizon discipline (`main_objectives` = end-of-project, `current_work_in_progress` = this week, `next_focus` = next 1–2 weeks).
 - `updated_by` is constrained to the enum `reflection`, `hermes`, `human`, `cli`. `lint` is rejected.
 - Deterministic rules:
   - notes are append-only with `{actor, timestamp, kind, text, source_refs, material_id?, confidence?}`
@@ -229,6 +229,7 @@ Changes:
 - For `publication_mode=project_dossier`, compile `wiki/proyectos/<project-id>/_index.md` as a project dashboard.
 - Skip page compilation for `proyectos/_general` and emit an ingest-style warning listing the loose files so the maintainer can move them.
 - Render from `project_state.json`, `sections.json` (when present after 4b), `notes.jsonl`, and material evidence:
+  - main strategy
   - current status
   - work in progress
   - objectives

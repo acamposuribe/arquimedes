@@ -871,6 +871,78 @@ img { max-width: 100%; display: block; }
   margin-top: 0;
 }
 
+.project-strategy-panel {
+  border: 1px solid #caa24f;
+  background: linear-gradient(180deg, #fff9e8 0%, #fff4cc 100%);
+  box-shadow: 0 8px 24px rgba(157, 114, 16, 0.12);
+}
+
+.project-strategy-panel-header {
+  align-items: center;
+}
+
+.project-strategy-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.22rem 0.55rem;
+  border-radius: 999px;
+  background: #7c5a12;
+  color: #fff9e8;
+  font-family: system-ui, -apple-system, sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.project-strategy-panel-intro {
+  margin: 0 0 0.8rem;
+  color: var(--muted);
+  font-size: 0.84rem;
+  line-height: 1.45;
+}
+
+.project-sticky-note--strategy,
+.project-sticky-note--persistent {
+  background: linear-gradient(180deg, #fff3b0 0%, #ffe082 100%);
+  border-color: #d1a11e;
+  box-shadow: 0 8px 20px rgba(167, 122, 10, 0.18);
+}
+
+.project-sticky-note-persistent {
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(124, 90, 18, 0.12);
+  color: #6b4d10;
+  font-size: 0.63rem;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.project-strategy-panel .project-sticky-note textarea {
+  font-size: 0.92rem;
+  font-weight: 500;
+  line-height: 1.5;
+}
+
+.project-strategy-panel .project-inline-card-actions {
+  top: 0.6rem;
+  right: 0.65rem;
+}
+
+.project-strategy-panel .project-inline-icon--save {
+  color: #6b4d10;
+}
+
+.project-strategy-panel .project-inline-icon--delete {
+  display: none;
+}
+
+.project-strategy-panel .project-sticky-note-date {
+  margin-left: auto;
+}
+
 .project-sticky-notes {
   display: grid;
   gap: 0.75rem;

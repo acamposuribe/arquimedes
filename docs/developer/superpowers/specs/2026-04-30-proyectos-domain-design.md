@@ -138,6 +138,7 @@ Suggested fields:
 - `domain`: always `proyectos`
 - `project_id`
 - `project_title`
+- `main_strategy`: the project's governing design/living-place strategy; this is the highest-priority project framing and should be checked before subsequent decisions
 - `stage`: one of the v1 stage enum below
 - `stage_confidence`: float in [0, 1]
 - `last_material_ids`: most recent N material ids that informed this state
@@ -234,6 +235,7 @@ wiki/proyectos/<project-id>/_index.md
 
 Suggested sections:
 
+- `Estrategia principal`
 - `Estado del proyecto`
 - `Trabajo en curso`
 - `Objetivos principales`
@@ -381,7 +383,7 @@ The Discord channel name can map to a project id when it matches a `Proyectos/<p
 
 Discord should not be ingested as periodic channel exports in the first design. Hermes already has Discord access and can judge when something discussed in a project channel is worth preserving. The persistent instruction to Hermes should be:
 
-- when a discussion records a decision, requirement, risk, deadline, coordination problem, useful learning, mistake, or repair action, add a project note with `arq project note`
+- when a discussion records a project's governing strategy, decision, requirement, risk, deadline, coordination problem, useful learning, mistake, or repair action, add a project note with `arq project note`
 - include the Discord channel and message reference when available
 - prefer short, curated notes over dumping chat history
 - do not duplicate information already captured in a source material unless the conversation changes its interpretation or priority
@@ -472,7 +474,7 @@ Initial values:
 3. Stage taxonomy v1 is committed above (`lead → feasibility → schematic_design → basic_project → execution_project → tender → construction → handover → archived`).
 4. Phase 1 ships specialized prompts only. Specialized parsers for budgets and drawings are deferred.
 5. Hermes notes are committed to the vault by default with provenance. A `--private` flag on `arq project note` is reserved for a later phase if needed.
-6. Hermes records a persistent note when a discussion captures: a decision, requirement, risk, deadline, coordination issue, learning, mistake, or repair action. The v1 `note.kind` enum is `decision`, `requirement`, `risk`, `deadline`, `coordination`, `learning`, `mistake`, `repair`. The handbook expands each trigger.
+6. Hermes records a persistent note when a discussion captures: a project's governing strategy, decision, requirement, risk, deadline, coordination issue, learning, mistake, or repair action. The v1 `note.kind` enum is `strategy`, `decision`, `requirement`, `risk`, `deadline`, `coordination`, `learning`, `mistake`, `repair`. `strategy` is special: it is permanent high-priority evidence, lint must never archive/touch it, and only Hermes or humans may create/edit it. The handbook expands each trigger.
 7. Section-edit precedence is fully specified by the section replacement protocol above.
 
 ## Open Questions

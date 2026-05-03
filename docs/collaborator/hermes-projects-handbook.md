@@ -30,8 +30,9 @@ Open notes are high-priority unresolved evidence. If they contradict older concl
 0. **Initialize/link folders only if requested.** If the human asks to link a server/NAS folder, create a Unix symlink inside the library project folder. Do not copy server files.
 1. **Identify the project.** Infer it from Discord channel/context only when clear; otherwise ask the human. Confirm against `arq project list`.
 2. **Find and review the dossier.** Use `arq project status <project-id>` and read open notes first.
-3. **Add notes for new facts.** Record decisions, requirements, risks, deadlines, coordination issues, lessons, mistakes, repair actions, or useful meeting/file summaries.
-4. **Update sections when necessary.** Use section edits for curated prose that should appear directly in the generated project page.
+3. **Capture the estrategia principal first when it becomes clear.** Record the project's governing design/place/living strategy as either a `strategy` note or the `estrategia_principal` section before lower-priority project updates.
+4. **Add notes for new facts.** Record strategy, decisions, requirements, risks, deadlines, coordination issues, lessons, mistakes, repair actions, or useful meeting/file summaries.
+5. **Update sections when necessary.** Use section edits for curated prose that should appear directly in the generated project page.
 5. **Force reflection only when requested.** If the human asks to re-run/refresh/force synthesis, run project reflection.
 
 ## Core Project Commands
@@ -42,7 +43,7 @@ Open notes are high-priority unresolved evidence. If they contradict older concl
 | Overview with material counts | `arq overview --domain proyectos --human` |
 | Read state, sections, and open notes | `arq project status <project-id>` |
 | Search one project dossier | `arq project search <project-id> "licencia"` |
-| Add a note | `arq project note <project-id> --kind decision --text "..." --source-ref "discord://channel/message"` |
+| Add a note | `arq project note <project-id> --kind strategy --text "..." --source-ref "discord://channel/message"` |
 | Edit a note by `note_id` | `arq project note-edit <project-id> note-0001 --text "..."` |
 | Delete a note by `note_id` | `arq project note-delete <project-id> note-0001` |
 | Resolve an open item | `arq project resolve <project-id> --item missing_information:1 --note "..."` |
@@ -78,6 +79,7 @@ Prefer `arq project search <project-id> ...` once the project is known. Use broa
 
 Add a short curated note when a conversation or uploaded file records one of these allowed note kinds:
 
+- `strategy`: the project's governing strategy — the main way the project should respond to place, context, climate, or ways of living; later decisions should be checked against it. Unlike other notes, it is not auto-archived by reflection, remains priority evidence, and should only be created/edited by Hermes or humans.
 - `decision`: a choice, approval, rejection, design direction, or agreed action.
 - `requirement`: a client, authority, technical, contractual, budget, or performance requirement.
 - `risk`: a risk, blocker, contradiction, dependency, uncertainty, delay, or potential problem.
@@ -113,7 +115,7 @@ Run reflection only when explicitly requested:
 arq project reflect <project-id>
 ```
 
-After successful incorporation, notes move automatically out of the open queue into archived statuses such as `incorporated` or `superseded`.
+After successful incorporation, ordinary notes move automatically out of the open queue into archived statuses such as `incorporated` or `superseded`. `strategy` notes are the exception: they stay open and visible as permanent priority evidence.
 
 
 ## Vault Root vs Library Root

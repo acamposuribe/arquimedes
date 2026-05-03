@@ -21,8 +21,10 @@ PROJECT_STAGES = (
     "archived",
 )
 UPDATED_BY = {"reflection", "hermes", "human", "cli"}
-NOTE_KINDS = {"decision", "requirement", "risk", "deadline", "coordination", "learning", "mistake", "repair"}
+NOTE_KINDS = {"decision", "requirement", "risk", "deadline", "coordination", "learning", "mistake", "repair", "strategy"}
 NOTE_STATUSES = {"open", "incorporated", "superseded", "deleted"}
+STRATEGY_NOTE_KIND = "strategy"
+STRATEGY_NOTE_EDITORS = {"hermes", "human"}
 LIST_FIELDS = {
     "last_material_ids",
     "main_objectives",
@@ -47,11 +49,13 @@ RESOLVABLE_FIELDS = (
 )
 STATE_FIELDS = LIST_FIELDS | {
     "project_title",
+    "main_strategy",
     "stage",
     "stage_confidence",
     "updated_by",
 }
 SECTION_IDS = {
+    "estrategia_principal": "Estrategia principal",
     "estado": "Estado del proyecto",
     "trabajo_en_curso": "Trabajo en curso",
     "objetivos_principales": "Objetivos principales",
@@ -95,6 +99,7 @@ def empty_project_state(project_id: str) -> dict[str, Any]:
         "domain": "proyectos",
         "project_id": project_id,
         "project_title": project_id.replace("-", " ").title(),
+        "main_strategy": "",
         "stage": "lead",
         "stage_confidence": 0.0,
         "last_material_ids": [],
@@ -143,6 +148,8 @@ def validate_project_state(state: dict[str, Any]) -> dict[str, Any]:
     updated_by = str(state.get("updated_by", "")).strip()
     if updated_by not in UPDATED_BY:
         raise ProjectStateError(f"updated_by must be one of: {', '.join(sorted(UPDATED_BY))}")
+    state["project_title"] = str(state.get("project_title") or "").strip()
+    state["main_strategy"] = str(state.get("main_strategy") or "").strip()
     for field in LIST_FIELDS:
         state[field] = _as_list(state.get(field), field)
     _validate_horizon_disjointness(state)
@@ -434,6 +441,8 @@ def append_project_note(
         raise ProjectStateError(f"note kind must be one of: {', '.join(sorted(NOTE_KINDS))}")
     if actor not in UPDATED_BY:
         raise ProjectStateError(f"actor must be one of: {', '.join(sorted(UPDATED_BY))}")
+    if kind == STRATEGY_NOTE_KIND and actor not in STRATEGY_NOTE_EDITORS:
+        raise ProjectStateError("strategy notes can only be created by hermes or human")
     if not text.strip():
         raise ProjectStateError("note text is required")
     root = root or get_project_root()
@@ -491,6 +500,8 @@ def update_project_note(project_id: str, *, note_id: str, text: str, actor: str,
         if note.get("note_id") == note_id:
             if note.get("deleted"):
                 raise ProjectStateError("cannot edit a deleted note")
+            if note.get("kind") == STRATEGY_NOTE_KIND and actor not in STRATEGY_NOTE_EDITORS:
+                raise ProjectStateError("strategy notes can only be edited by hermes or human")
             note["text"] = text.strip()
             note["updated_at"] = now_iso()
             note["updated_by"] = actor
@@ -508,6 +519,11 @@ def set_project_note_status(project_id: str, *, note_id: str, status: str, actor
     notes = load_project_notes(project_id, root=root, include_deleted=True, include_metadata=True)
     for note in notes:
         if note.get("note_id") == note_id:
+            if note.get("kind") == STRATEGY_NOTE_KIND:
+                if status != "open":
+                    raise ProjectStateError("strategy notes always stay open and cannot be archived or deleted")
+                if actor not in STRATEGY_NOTE_EDITORS:
+                    raise ProjectStateError("strategy notes can only be managed by hermes or human")
             note["status"] = status
             note["deleted"] = status == "deleted"
             note["updated_at"] = now_iso()
@@ -526,7 +542,7 @@ def mark_project_notes_incorporated(project_id: str, *, actor: str = "reflection
     changed = []
     stamp = now_iso()
     for note in notes:
-        if note.get("status") == "open":
+        if note.get("status") == "open" and note.get("kind") != STRATEGY_NOTE_KIND:
             note["status"] = "incorporated"
             note["updated_at"] = stamp
             note["updated_by"] = actor

@@ -909,6 +909,13 @@ def render_project_page(
     section_records = sections or {}
     lines: list[str] = [f"# {title}\n"]
 
+    estrategia = section_records.get("estrategia_principal") or {}
+    estrategia_body = str(estrategia.get("body") or state.get("main_strategy") or "").strip()
+    if estrategia_body:
+        lines.append(f"## {estrategia.get('title') or 'Estrategia principal'}\n")
+        lines.append(estrategia_body)
+        lines.append("")
+
     estado = section_records.get("estado") or {}
     lines.append(f"## {estado.get('title') or 'Estado del proyecto'}\n")
     if estado.get("body"):

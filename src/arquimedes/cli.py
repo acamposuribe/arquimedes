@@ -1977,7 +1977,7 @@ def project_status_cmd(project_id: str):
 
 @project_group.command("note")
 @click.argument("project_id")
-@click.option("--kind", required=True, help="decision|requirement|risk|deadline|coordination|learning|mistake|repair")
+@click.option("--kind", required=True, help="decision|requirement|risk|deadline|coordination|learning|mistake|repair|strategy")
 @click.option("--text", required=True, help="Note text.")
 @click.option("--source-ref", "source_refs", multiple=True, help="Source reference, repeatable.")
 @click.option("--material-id", default=None, help="Optional material id.")

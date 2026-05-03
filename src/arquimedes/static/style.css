@@ -926,7 +926,7 @@ img { max-width: 100%; display: block; }
 }
 
 .project-strategy-panel .project-sticky-note-date {
-  margin-left: auto;
+  margin-left: 0;
 }
 
 .project-sticky-notes {
@@ -977,9 +977,9 @@ img { max-width: 100%; display: block; }
 
 .project-sticky-note-meta {
   display: flex;
+  flex-wrap: wrap;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 0.5rem;
+  gap: 0.2rem 0.5rem;
   font-family: system-ui, -apple-system, sans-serif;
   font-size: 0.72rem;
   line-height: 1.2;
@@ -989,6 +989,11 @@ img { max-width: 100%; display: block; }
 }
 
 .project-sticky-note-kind { font-weight: 700; }
+
+.project-sticky-note-date {
+  flex-basis: 100%;
+  font-size: 0.68rem;
+}
 
 .project-sticky-note textarea {
   width: 100%;

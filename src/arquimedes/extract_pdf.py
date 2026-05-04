@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 import warnings
 from pathlib import Path
 
@@ -57,6 +58,87 @@ def _ocr_page(page: fitz.Page, dpi: int = _PDF_OCR_DPI) -> str:
     return _strip_nuls(pytesseract.image_to_string(image))
 
 
+def _text_quality_score(text: str) -> float:
+    """Estimate how readable extracted text is.
+
+    Higher scores indicate more human-readable running text. This is used to
+    detect pages whose PDF text layer exists but is clearly broken due to font
+    encoding / missing ToUnicode mappings, and to compare native extraction
+    against OCR output.
+    """
+    if not text:
+        return 0.0
+
+    stripped = text.strip()
+    if not stripped:
+        return 0.0
+
+    chars = [c for c in stripped if not c.isspace()]
+    if not chars:
+        return 0.0
+
+    word_tokens = re.findall(r"\S+", stripped)
+    alpha_tokens = [token for token in word_tokens if any(ch.isalpha() for ch in token)]
+    normal_word_tokens = re.findall(r"[A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'’\-]{1,}", stripped)
+
+    suspicious_chars = 0
+    for ch in chars:
+        codepoint = ord(ch)
+        category = unicodedata.category(ch)
+        if category.startswith("C"):
+            suspicious_chars += 1
+            continue
+        if 0x0300 <= codepoint <= 0x036F:  # combining marks floating in broken text layers
+            suspicious_chars += 1
+            continue
+        if 0x0370 <= codepoint <= 0x03FF:  # Greek/Coptic often appear in mojibake here
+            suspicious_chars += 1
+            continue
+        if 0x0180 <= codepoint <= 0x02AF:  # extended Latin / IPA frequently seen in bad mappings
+            suspicious_chars += 1
+
+    suspicious_ratio = suspicious_chars / len(chars)
+    alpha_token_ratio = len(alpha_tokens) / max(len(word_tokens), 1)
+    normal_word_ratio = len(normal_word_tokens) / max(len(alpha_tokens), 1)
+
+    return (normal_word_ratio * 0.6) + (alpha_token_ratio * 0.25) + ((1.0 - suspicious_ratio) * 0.15)
+
+
+def _needs_ocr_fallback(text: str) -> bool:
+    """Return True when extracted page text is empty or looks badly encoded."""
+    stripped = text.strip()
+    if not stripped:
+        return True
+
+    # Very short snippets are too noisy to judge; keep the native extraction.
+    if len(stripped) < 40:
+        return False
+
+    score = _text_quality_score(stripped)
+    suspicious_chars = sum(
+        1
+        for ch in stripped
+        if not ch.isspace() and (
+            0x0300 <= ord(ch) <= 0x036F
+            or 0x0370 <= ord(ch) <= 0x03FF
+            or 0x0180 <= ord(ch) <= 0x02AF
+        )
+    )
+    suspicious_ratio = suspicious_chars / max(sum(1 for ch in stripped if not ch.isspace()), 1)
+    return score < 0.45 or suspicious_ratio > 0.12
+
+
+def _prefer_ocr_text(native_text: str, ocr_text: str) -> bool:
+    """Choose OCR when it is materially better than native extraction."""
+    ocr_score = _text_quality_score(ocr_text)
+    native_score = _text_quality_score(native_text)
+    if not ocr_text.strip():
+        return False
+    if not native_text.strip():
+        return True
+    return ocr_score >= native_score + 0.15
+
+
 def extract_text_and_pages(
     pdf_path: Path,
     ocr_fallback: bool = True,
@@ -83,22 +165,24 @@ def extract_text_and_pages(
             headings=headings,
         ))
 
-    if ocr_fallback and pages and not any(page.text.strip() for page in pages):
-        if not _tesseract_available():
-            warnings.warn(
-                "Tesseract binary not found. Install Tesseract to enable OCR fallback for scanned PDFs: "
-                "brew install tesseract (macOS) or apt install tesseract-ocr (Linux).",
-                stacklevel=2,
-            )
-        else:
-            for i, page in enumerate(pages):
-                try:
-                    ocr_text = _ocr_page(doc[i])
-                except Exception as exc:
-                    warnings.warn(f"OCR failed for {pdf_path} page {i + 1}: {exc}", stacklevel=2)
-                    continue
-                if ocr_text.strip():
-                    page.text = ocr_text
+    if ocr_fallback and pages:
+        pages_needing_ocr = [i for i, page in enumerate(pages) if _needs_ocr_fallback(page.text)]
+        if pages_needing_ocr:
+            if not _tesseract_available():
+                warnings.warn(
+                    "Tesseract binary not found. Install Tesseract to enable OCR fallback for scanned PDFs: "
+                    "brew install tesseract (macOS) or apt install tesseract-ocr (Linux).",
+                    stacklevel=2,
+                )
+            else:
+                for i in pages_needing_ocr:
+                    try:
+                        ocr_text = _ocr_page(doc[i])
+                    except Exception as exc:
+                        warnings.warn(f"OCR failed for {pdf_path} page {i + 1}: {exc}", stacklevel=2)
+                        continue
+                    if _prefer_ocr_text(pages[i].text, ocr_text):
+                        pages[i].text = ocr_text
 
     # Extract TOC from PDF outline
     toc = []

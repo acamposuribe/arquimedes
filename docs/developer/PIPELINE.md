@@ -80,6 +80,7 @@ When a collaborator adds a file to the shared library root:
   - `annotations.jsonl`
   - `figures/`
   - `toc.json`
+- PDF extraction prefers the native text layer when it is readable, but falls back to OCR per page when the text layer is empty or clearly garbled (for example, broken font-encoding output such as `WĂŐ͘κϯ...`).
 - Enriched outputs include:
   - document summary, keywords, facets
   - chunk summaries and keywords

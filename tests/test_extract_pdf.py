@@ -4,6 +4,7 @@ from pathlib import Path
 
 from arquimedes.extract_pdf import (
     _clean_annotation_quote,
+    _needs_ocr_fallback,
     _sanitize_strings,
     extract_text_and_pages,
 )
@@ -99,7 +100,7 @@ def test_extract_text_and_pages_uses_ocr_when_pdf_text_layer_is_empty(monkeypatc
 def test_extract_text_and_pages_skips_ocr_when_pdf_text_exists(monkeypatch):
     monkeypatch.setattr(
         "arquimedes.extract_pdf.fitz.open",
-        lambda path: _FakeDoc(["Already extracted text"]),
+        lambda path: _FakeDoc(["Already extracted text with enough readable words to trust the PDF layer."]),
     )
 
     called = False
@@ -113,5 +114,30 @@ def test_extract_text_and_pages_skips_ocr_when_pdf_text_exists(monkeypatch):
 
     pages, _ = extract_text_and_pages(Path("/tmp/digital.pdf"), ocr_fallback=True)
 
-    assert [page.text for page in pages] == ["Already extracted text"]
+    assert [page.text for page in pages] == ["Already extracted text with enough readable words to trust the PDF layer."]
     assert called is False
+
+
+def test_needs_ocr_fallback_detects_garbled_pdf_text_layer():
+    garbled = "WĂŐ͘κϯ EKZDϭϭǐ͘^h >KhZEK͗KEZ ^/ E/> EdZ ,/^dLZ/ ƌƚşĐƵůŽκς͘ĞĨŝŶŝĐŝsŶ"
+
+    assert _needs_ocr_fallback(garbled) is True
+    assert _needs_ocr_fallback("Norma 11. Suelo urbano: zona residencial Centre Històric") is False
+
+
+def test_extract_text_and_pages_uses_ocr_for_garbled_pdf_text(monkeypatch):
+    garbled = "WĂŐ͘κϯ EKZDϭϭǐ͘^h >KhZEK͗KEZ ^/ E/> EdZ ,/^dLZ/ ƌƚşĐƵůŽκς͘ĞĨŝŶŝĐŝsŶ " * 3
+    monkeypatch.setattr(
+        "arquimedes.extract_pdf.fitz.open",
+        lambda path: _FakeDoc([garbled]),
+    )
+    monkeypatch.setattr("arquimedes.extract_pdf._tesseract_available", lambda: True)
+
+    def fake_ocr_page(page, dpi=300):
+        return "AJUNTAMENT DE GANDIA. NORMA 11. SUELO URBANO: ZONA RESIDENCIAL CENTRE HISTÒRIC"
+
+    monkeypatch.setattr("arquimedes.extract_pdf._ocr_page", fake_ocr_page)
+
+    pages, _ = extract_text_and_pages(Path("/tmp/bad-encoding.pdf"), ocr_fallback=True)
+
+    assert pages[0].text == "AJUNTAMENT DE GANDIA. NORMA 11. SUELO URBANO: ZONA RESIDENCIAL CENTRE HISTÒRIC"

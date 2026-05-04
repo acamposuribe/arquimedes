@@ -65,6 +65,7 @@ Use `docs/developer/llm-wiki.md` as the conceptual reference for the original pa
 - [x] Re-ingesting a moved material refreshes its manifest `relative_path`, `domain`, and `collection`, and updates extracted raw scope fields so collection assignment remains trustworthy after rehoming
 - [x] `arq extract-raw` — deterministic extraction via PyMuPDF + pdfplumber
   - [x] PDF: text, pages, TOC, tables
+  - [x] OCR fallback also repairs PDFs with present-but-garbled text layers (bad font encoding / broken ToUnicode maps), not just fully textless scans
   - [x] PDF annotations: highlights, notes, marks → annotations.jsonl, emphasized flag on chunks
   - [x] Figures: embedded image extraction + page rasterization with region detection
   - [x] Page thumbnails

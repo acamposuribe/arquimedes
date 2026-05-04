@@ -98,7 +98,8 @@ def _populated_material(repo: Path, material_id: str = "mat_001") -> str:
     _write_jsonl(material_dir / "chunks.jsonl", [
         {"chunk_id": "chk_00001", "text": "First chunk body.", "source_pages": [1], "emphasized": True,
          "summary": {"value": "first chunk summary"}, "content_class": "argument"},
-        {"chunk_id": "chk_00002", "text": "Second chunk body.", "source_pages": [2], "emphasized": False},
+        {"chunk_id": "chk_00002", "text": "Second chunk body.", "source_pages": [2], "emphasized": False,
+         "summary": {"value": "second chunk summary"}, "keywords": {"value": ["kw1", "kw2"]}},
     ])
     _write_jsonl(material_dir / "annotations.jsonl", [
         {"annotation_id": "ann_0001", "type": "highlight", "page": 1, "quoted_text": "hi"},
@@ -117,6 +118,7 @@ def _populated_material(repo: Path, material_id: str = "mat_001") -> str:
         "image_path": "figures/fig_002.png",
         "visual_type": {"value": "diagram"},
         "caption": {"value": "A diagram"},
+        "description": {"value": "Diagram description"},
     })
     return material_id
 
@@ -138,6 +140,8 @@ def test_list_chunks_compact_and_get_chunk_by_id(repo):
     assert listing[0]["summary"] == "first chunk summary"
     chunk = read_mod.get_chunk_by_id(mid, "chk_00002")
     assert chunk["text"] == "Second chunk body."
+    assert chunk["summary"] == "second chunk summary"
+    assert chunk["keywords"] == ["kw1", "kw2"]
     with pytest.raises(FileNotFoundError):
         read_mod.get_chunk_by_id(mid, "chk_00099")
 
@@ -163,6 +167,11 @@ def test_get_figure(repo):
     mid = _populated_material(repo)
     fig = read_mod.get_figure(mid, "fig_001")
     assert fig["source_page"] == 1
+    assert fig["visual_type"] == "photograph"
+    assert fig["caption"] == "A photo"
+    fig2 = read_mod.get_figure(mid, "fig_002")
+    assert fig2["visual_type"] == "diagram"
+    assert fig2["caption"] == "A diagram"
     with pytest.raises(FileNotFoundError):
         read_mod.get_figure(mid, "fig_999")
 

@@ -448,6 +448,20 @@ def build_material_card(material_id: str) -> dict:
     }
 
 
+def _flatten_enriched_value(value: object) -> object:
+    if isinstance(value, dict) and "value" in value:
+        return value.get("value")
+    return value
+
+
+def _flatten_selected_fields(payload: dict, fields: tuple[str, ...]) -> dict:
+    flat = dict(payload)
+    for field in fields:
+        if field in flat:
+            flat[field] = _flatten_enriched_value(flat[field])
+    return flat
+
+
 def list_chunks_compact(material_id: str) -> list[dict]:
     """One entry per chunk: id, pages, emphasized flag, summary (if present)."""
     material_dir = _material_dir(material_id)
@@ -478,7 +492,7 @@ def get_chunk_by_id(material_id: str, chunk_id: str) -> dict:
         raise FileNotFoundError(material_dir / "meta.json")
     for chunk in _load_jsonl(material_dir / "chunks.jsonl"):
         if str(chunk.get("chunk_id") or "") == chunk_id:
-            return chunk
+            return _flatten_selected_fields(chunk, ("summary", "keywords"))
     raise FileNotFoundError(f"chunk {chunk_id!r} in material {material_id!r}")
 
 
@@ -525,7 +539,7 @@ def get_figure(material_id: str, figure_id: str) -> dict:
     """Full figure sidecar by id."""
     for fig in load_material_figures(material_id):
         if str(fig.get("figure_id") or "") == figure_id:
-            return fig
+            return _flatten_selected_fields(fig, ("visual_type", "description", "caption"))
     raise FileNotFoundError(f"figure {figure_id!r} in material {material_id!r}")
 
 

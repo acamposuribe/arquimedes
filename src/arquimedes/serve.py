@@ -530,6 +530,7 @@ def _material_sidebar_context(material_id: str) -> dict:
     page_thumbnails = _thumbnail_view_models(material_id)
     return {
         "material_id": material_id,
+        "admin_material_id": material_id,
         "title": str(meta.get("title") or material_id),
         "domain": str(meta.get("domain") or ""),
         "project_extraction": _project_extraction_context(meta),
@@ -1046,6 +1047,7 @@ def _wiki_context(path: Path, body: str, *, material_id: str | None = None, titl
         "content_html": Markup(rendered),
         "page_title": page_title,
         "wiki_path": rel,
+        "page_material_id": material_id or extra.get("material_id") or extra.get("admin_material_id") or "",
         **extra,
     }
 

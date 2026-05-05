@@ -37,28 +37,18 @@ def _is_likely_scanned_document(image_path: Path) -> bool:
     - High resolution (scans are typically 200+ DPI equivalent)
     - Filename hints (scan, diary, page, handwritten, etc.)
     """
+    path_parts_lower = [part.lower() for part in image_path.parts]
     name_lower = image_path.stem.lower()
-    doc_hints = {"scan", "diary", "page", "handwritten", "notes", "letter", "document"}
+
+    # Be conservative: image filenames are often arbitrary, and phone photos can
+    # have paper-like aspect ratios. Only classify standalone images as scanned
+    # documents when explicit path/name evidence says they are scans/doc pages.
+    doc_hints = {"scan", "scanned", "diary", "page", "handwritten", "notes", "letter", "document"}
     if any(hint in name_lower for hint in doc_hints):
         return True
 
-    # Check parent folder for hints
-    parent_lower = image_path.parent.name.lower()
-    if any(hint in parent_lower for hint in {"scanned", "scans", "diary", "diaries", "notes"}):
+    if any(part in {"scanned", "scans", "scan", "diary", "diaries", "notes"} for part in path_parts_lower):
         return True
-
-    # Check aspect ratio
-    try:
-        from PIL import Image
-
-        img = Image.open(image_path)
-        w, h = img.size
-        ratio = max(w, h) / min(w, h)
-        # Paper-like ratio: A4 is ~1.41, letter is ~1.29
-        if 1.2 < ratio < 1.6 and min(w, h) > 1000:
-            return True
-    except Exception:
-        pass
 
     return False
 
@@ -124,6 +114,10 @@ def extract_raw_image(
                 from PIL import Image
 
                 img = Image.open(image_path)
+                # Tesseract/leptonica can reject some valid camera JPEGs or
+                # uncommon color modes. Normalize through Pillow before OCR.
+                if img.mode not in {"RGB", "L"}:
+                    img = img.convert("RGB")
                 text = pytesseract.image_to_string(img)
                 pages = [Page(
                     page_number=1,

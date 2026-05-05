@@ -743,6 +743,7 @@ def compile_wiki(
 
         chunks = _load_jsonl(output_dir / "chunks.jsonl")
         annotations = _load_jsonl(output_dir / "annotations.jsonl")
+        pages = _load_jsonl(output_dir / "pages.jsonl")
         figures = []
         figs_dir = output_dir / "figures"
         if figs_dir.is_dir():
@@ -770,11 +771,20 @@ def compile_wiki(
         if text_md.exists():
             extracted_text_link = os.path.relpath(text_md, page_path.parent)
 
+        cover_thumbnail_link: str | None = None
+        if pages:
+            first_thumbnail = str(pages[0].get("thumbnail_path") or "")
+            if first_thumbnail:
+                thumbnail_path = output_dir / first_thumbnail
+                if thumbnail_path.exists():
+                    cover_thumbnail_link = os.path.relpath(thumbnail_path, page_path.parent)
+
         content = compile_pages.render_material_page(
             meta, mat_clusters, chunks, annotations, figures, related,
             material_paths=material_paths,
             raw_file_link=raw_file_link,
             extracted_text_link=extracted_text_link,
+            cover_thumbnail_link=cover_thumbnail_link,
         )
         _write_page(page_path, content)
         mat_pages_written += 1

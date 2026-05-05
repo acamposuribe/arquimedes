@@ -2221,6 +2221,61 @@ def project_search_cmd(
         click.echo(result.to_json())
 
 
+@project_group.command("enrich")
+@click.argument("project_id")
+@click.option("--force", is_flag=True, help="Re-enrich even if not stale.")
+@click.option(
+    "--stage",
+    "stages",
+    multiple=True,
+    type=click.Choice(["document", "metadata", "chunk", "figure"]),
+    help="Run only specific stage(s). Repeatable. Default: all stages.",
+)
+@click.option("--dry-run", is_flag=True, help="Report staleness without calling LLM.")
+@click.option("--no-recompile", is_flag=True, help="Do not recompile immediately after enrichment.")
+def project_enrich_cmd(project_id: str, force: bool, stages: tuple[str, ...], dry_run: bool, no_recompile: bool):
+    """Run material enrichment only for one Proyectos project."""
+    from arquimedes.enrich import enrich as do_enrich
+    from arquimedes.llm import EnrichmentError
+    from arquimedes.project_state import ProjectStateError, validate_project_id
+
+    try:
+        project_id = validate_project_id(project_id)
+        results, all_succeeded = do_enrich(
+            force=force,
+            stages=list(stages) if stages else None,
+            dry_run=dry_run,
+            domain="proyectos",
+            collection=project_id,
+        )
+    except EnrichmentError as e:
+        raise click.ClickException(str(e))
+    except (ProjectStateError, ValueError, FileNotFoundError) as e:
+        raise click.ClickException(str(e))
+
+    if not results:
+        click.echo(f"Nothing to enrich for project {project_id!r} (all materials up to date).")
+        return
+
+    for mid, material_result in results.items():
+        title = material_result.get("title", mid)
+        click.echo(f"\n{mid}  {title}")
+        for stage_name in ["document", "metadata", "chunk", "figure"]:
+            if stage_name in material_result:
+                r = material_result[stage_name]
+                status = r.get("status", "?")
+                detail = r.get("detail", "")
+                click.echo(f"  [{stage_name}] {status}: {detail}")
+
+    if not dry_run:
+        compile_result = _compile_after_project_write(no_recompile)
+        if compile_result is not None:
+            click.echo("\nRecompiled wiki.")
+
+    if not all_succeeded:
+        raise SystemExit(1)
+
+
 @project_group.command("reflect")
 @click.argument("project_id")
 @click.option("--no-recompile", is_flag=True, help="Do not recompile immediately after reflection.")

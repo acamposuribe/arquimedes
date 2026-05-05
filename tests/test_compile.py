@@ -265,6 +265,29 @@ def test_proyectos_material_page_omits_standard_metadata_summary_and_source():
     assert "## Fuente" not in page
 
 
+def test_proyectos_drawing_set_uses_cover_thumbnail_and_hides_extracted_figures():
+    meta = _make_meta("mat_planos", "Planos PB")
+    meta["domain"] = "proyectos"
+    meta["document_type"] = {"value": "drawing_set", "provenance": {}}
+    meta["raw_document_type"] = "drawing_set"
+    figures = [{
+        "figure_id": "fig_0001",
+        "visual_type": "plan",
+        "caption": "Misleading extracted hatch artifact",
+        "description": "A small hatch fragment.",
+        "source_page": 1,
+        "image_path": "figures/fig_0001.png",
+    }]
+
+    page = render_material_page(
+        meta, [], [], [], figures, [], cover_thumbnail_link="../../extracted/mat_planos/thumbnails/page_0001.png"
+    )
+
+    assert "![Planos PB](../../extracted/mat_planos/thumbnails/page_0001.png)" in page
+    assert "## Figures" not in page
+    assert "Misleading extracted hatch artifact" not in page
+
+
 # ---------------------------------------------------------------------------
 # Test 4: concept page evidence
 # ---------------------------------------------------------------------------

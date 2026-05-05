@@ -14,7 +14,7 @@ from pathlib import Path
 from arquimedes import enrich_stamps
 from arquimedes.llm import get_model_id
 from arquimedes.config import get_logs_root, get_project_root, load_config
-from arquimedes.domain_profiles import domain_prompt_version, normalize_domain
+from arquimedes.domain_profiles import domain_prompt_version, is_proyectos_domain, normalize_domain
 from arquimedes.enrich_document import enrich_document_stage
 from arquimedes.enrich_chunks import enrich_chunks_stage
 from arquimedes.enrich_figures import enrich_figures_stage
@@ -34,8 +34,25 @@ def _progress(message: str) -> None:
 _ALL_STAGES = ["document", "metadata", "chunk", "figure"]
 
 
-def _allows_figure_enrichment(entry) -> bool:
-    """Figure enrichment is for document-like materials, not standalone images/scans."""
+def _entry_is_project_drawing_set(entry, meta: dict | None = None) -> bool:
+    """Return True for Proyectos drawing-set/planos materials."""
+    if not is_proyectos_domain(str(getattr(entry, "domain", "") or (meta or {}).get("domain", ""))):
+        return False
+    values = {str(getattr(entry, "raw_document_type", "") or "")}
+    if meta:
+        values.add(str(meta.get("raw_document_type") or ""))
+        doc_type = meta.get("document_type")
+        if isinstance(doc_type, dict):
+            values.add(str(doc_type.get("value") or ""))
+        project_type = (meta.get("project_extraction") or {}).get("project_material_type")
+        values.add(str(project_type or ""))
+    return "drawing_set" in values
+
+
+def _allows_figure_enrichment(entry, meta: dict | None = None) -> bool:
+    """Figure enrichment is for document-like materials, not standalone images/scans or Planos."""
+    if _entry_is_project_drawing_set(entry, meta):
+        return False
     return getattr(entry, "file_type", "") not in {"image", "scanned_document"}
 
 
@@ -262,6 +279,7 @@ def enrich(
     stages: list[str] | None = None,
     dry_run: bool = False,
     domain: str | None = None,
+    collection: str | None = None,
 ) -> tuple[dict, bool]:
     """Run LLM enrichment for one or all materials.
 
@@ -274,6 +292,7 @@ def enrich(
         stages: List of stage names to run (default: all three).
         dry_run: Report staleness without calling LLM.
         domain: Optional domain filter (research, practice, or proyectos).
+        collection: Optional collection/project filter within the selected domain.
 
     Returns:
         (results_dict, all_succeeded) where results_dict maps material_id to
@@ -299,6 +318,9 @@ def enrich(
         config = load_config()
 
     domain_filter = normalize_domain(domain, default="") if domain else None
+    collection_filter = str(collection or "").strip() or None
+    if collection_filter and not domain_filter:
+        raise ValueError("collection filter requires a domain filter")
     if domain_filter and domain_filter not in {"research", "practice", "proyectos"}:
         raise ValueError("Unknown domain: {!r}. Valid domains: research, practice, proyectos".format(domain))
 
@@ -335,7 +357,11 @@ def enrich(
         return normalize_domain(str(entry_domain), default="research")
 
     def _matches_domain_filter(entry) -> bool:
-        return domain_filter is None or _entry_domain(entry) == domain_filter
+        if domain_filter is not None and _entry_domain(entry) != domain_filter:
+            return False
+        if collection_filter is not None and str(getattr(entry, "collection", "")) != collection_filter:
+            return False
+        return True
 
     def _get_llm_fn(stage: str):
         if llm_fn is not None:
@@ -390,7 +416,7 @@ def enrich(
             title = mid
 
         material_results: dict = {"title": title}
-        figure_allowed = _allows_figure_enrichment(manifest[mid])
+        figure_allowed = _allows_figure_enrichment(manifest[mid], meta if isinstance(meta, dict) else None)
 
         doc_stale_now = force or (
             "document" in requested_stages and _is_document_stale(output_dir, config)
@@ -497,7 +523,10 @@ def enrich(
                     if s == "chunk" and text_artifacts_optional and not has_text_inputs:
                         detail = "no text extraction artifacts"
                     else:
-                        detail = "standalone image material" if s == "figure" and not figure_allowed else "up to date"
+                        if s == "figure" and not figure_allowed:
+                            detail = "drawing set or standalone image material"
+                        else:
+                            detail = "up to date"
                     material_results[s] = {"status": "skipped", "detail": detail}
 
             # Sequential stage order is intentional: figure uses the current

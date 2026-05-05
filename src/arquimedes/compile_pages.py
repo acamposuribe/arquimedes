@@ -370,6 +370,7 @@ def render_material_page(
     material_paths: dict[str, str] | None = None,
     raw_file_link: str | None = None,
     extracted_text_link: str | None = None,
+    cover_thumbnail_link: str | None = None,
 ) -> str:
     """Render a material wiki page as markdown.
 
@@ -383,6 +384,7 @@ def render_material_page(
         material_paths: mapping of material_id → wiki-relative path
         raw_file_link: file:// URL or path to the original source PDF
         extracted_text_link: relative link to extracted/text.md for LLM deep-dive
+        cover_thumbnail_link: relative link to first-page thumbnail for drawing sets
     """
     mid = meta["material_id"]
     page_path = _material_wiki_path(meta)
@@ -393,6 +395,12 @@ def render_material_page(
     domain = meta.get("domain") or ""
     is_project_material = domain == "proyectos"
     lines.append(f"# {title}\n")
+
+    material_type = _meta_val(meta.get("document_type")) or meta.get("raw_document_type") or ""
+    is_drawing_set = (meta.get("domain") == "proyectos") and material_type == "drawing_set"
+    if is_drawing_set and cover_thumbnail_link:
+        lines.append(f"![{title}]({cover_thumbnail_link})")
+        lines.append("")
 
     # --- Metadata block ---
     authors = meta.get("authors") or []
@@ -489,7 +497,7 @@ def render_material_page(
         lines.append("")
 
     # --- Figures ---
-    substantive_figs = [
+    substantive_figs = [] if is_drawing_set else [
         f for f in figures
         if (_meta_val(f.get("description")) or _meta_val(f.get("caption")))
         and _meta_val(f.get("visual_type")) != "decorative"

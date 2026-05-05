@@ -367,10 +367,17 @@ def build_document_file_prompt(
     image_paths = image_paths or []
     image_instruction = ""
     if image_paths:
-        image_instruction = (
-            "- PRIMARY IMAGE MATERIAL(S): attached below and referenced by file path. "
-            "Analyze the image itself as the source material; do not treat it as a figure inside another document.\n"
-        )
+        if is_proyectos_domain(domain):
+            image_instruction = (
+                "- PRIMARY VISUAL EVIDENCE: attached page thumbnails, referenced by file path. "
+                "For drawing sets/planos, analyze these page images as the primary source; "
+                "treat extracted text as secondary and potentially fragmentary. Do not rely on extracted figures.\n"
+            )
+        else:
+            image_instruction = (
+                "- PRIMARY IMAGE MATERIAL(S): attached below and referenced by file path. "
+                "Analyze the image itself as the source material; do not treat it as a figure inside another document.\n"
+            )
     user_content = _DOCUMENT_FILE_USER_TEMPLATE.format(
         meta_path=meta_path,
         document_text_path=document_text_path,

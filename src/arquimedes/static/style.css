@@ -162,6 +162,7 @@ img { max-width: 100%; display: block; }
   position: sticky;
   top: 3.25rem;
   max-height: calc(100vh - 3.25rem);
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--line-dark) transparent;
@@ -191,6 +192,7 @@ img { max-width: 100%; display: block; }
   color: var(--ink);
   border-radius: 3px;
   transition: background 0.08s, color 0.08s;
+  overflow-wrap: anywhere;
 }
 .rail-section a:visited { color: var(--ink); }
 .rail-section a:hover {
@@ -213,6 +215,7 @@ img { max-width: 100%; display: block; }
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.07em;
+  overflow-wrap: anywhere;
 }
 
 .rail-group a {

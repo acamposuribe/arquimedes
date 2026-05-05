@@ -6,8 +6,10 @@ from pathlib import Path
 
 import fitz  # PyMuPDF
 
-THUMBNAIL_DPI = 72  # low-res for browsing
-THUMBNAIL_MAX_WIDTH = 400
+THUMBNAIL_DPI = 108  # readable previews for LLM/page browsing without huge images
+THUMBNAIL_MAX_WIDTH = 900
+SINGLE_PAGE_THUMBNAIL_DPI = 144
+SINGLE_PAGE_THUMBNAIL_MAX_WIDTH = 1400
 
 
 def generate_thumbnails(pdf_path: Path, output_dir: Path) -> list[str]:
@@ -25,12 +27,18 @@ def generate_thumbnails(pdf_path: Path, output_dir: Path) -> list[str]:
 
     doc = fitz.open(str(pdf_path))
     paths: list[str] = []
+    is_single_page = len(doc) == 1
+    dpi = SINGLE_PAGE_THUMBNAIL_DPI if is_single_page else THUMBNAIL_DPI
+    max_width = SINGLE_PAGE_THUMBNAIL_MAX_WIDTH if is_single_page else THUMBNAIL_MAX_WIDTH
 
     for page_num in range(len(doc)):
         page = doc[page_num]
 
-        # Scale to fit within max width
-        scale = min(THUMBNAIL_MAX_WIDTH / page.rect.width, 1.0)
+        # Render at a readable resolution, capped by max width. Single-page
+        # PDFs are usually standalone drawings, so preserve more detail.
+        dpi_scale = dpi / 72
+        width_scale = max_width / page.rect.width
+        scale = min(dpi_scale, width_scale)
         mat = fitz.Matrix(scale, scale)
         pix = page.get_pixmap(matrix=mat)
 

@@ -77,13 +77,53 @@ def _failed_with_response(output_dir: Path, raw_text: str, detail: str) -> dict:
     return {"status": "failed", "detail": detail}
 
 
-def _primary_image_paths(output_dir: Path, meta: dict) -> list[Path]:
-    """Return primary standalone-image paths for multimodal document enrichment.
+def _is_project_drawing_set(meta: dict) -> bool:
+    """Return True for Proyectos drawing-set/planos materials."""
+    if not is_proyectos_domain(str(meta.get("domain", ""))):
+        return False
+    doc_type = meta.get("document_type")
+    if isinstance(doc_type, dict):
+        doc_type = doc_type.get("value")
+    project_type = (meta.get("project_extraction") or {}).get("project_material_type")
+    return "drawing_set" in {str(meta.get("raw_document_type") or ""), str(doc_type or ""), str(project_type or "")}
 
-    Plain image materials need visual input. Scanned documents should use OCR
-    text when chunking succeeded; attach the image only when there are no chunks.
+
+def _project_page_image_paths(output_dir: Path, *, short_doc_limit: int = 6, long_doc_limit: int = 4) -> list[Path]:
+    """Select page thumbnails for Proyectos document enrichment.
+
+    Before document enrichment we may not know whether a PDF is Planos. Attach a
+    small visual sample for all Proyectos PDFs so the model can classify visual
+    materials from what is actually visible, not only defective extracted text.
+    """
+    pages = sorted(
+        [page for page in _load_jsonl(output_dir / "pages.jsonl") if isinstance(page, dict)],
+        key=lambda page: int(page.get("page_number", 0) or 0),
+    )
+    max_images = short_doc_limit if len(pages) <= short_doc_limit else long_doc_limit
+    selected = pages[:max_images]
+    paths: list[Path] = []
+    for page in selected:
+        thumbnail_rel = str(page.get("thumbnail_path") or "")
+        if not thumbnail_rel:
+            continue
+        image_path = output_dir / thumbnail_rel
+        if image_path.exists():
+            paths.append(image_path)
+    return paths
+
+
+def _primary_image_paths(output_dir: Path, meta: dict) -> list[Path]:
+    """Return primary image paths for multimodal document enrichment.
+
+    Proyectos PDFs get a small page-thumbnail sample because before enrichment
+    we may not yet know whether they are drawings. Plain image materials also
+    need visual input. Scanned documents should use OCR text when chunking
+    succeeded; attach the image only when there are no chunks.
     """
     file_type = meta.get("file_type")
+    if is_proyectos_domain(str(meta.get("domain", ""))) and file_type in {"pdf", "scanned_document"}:
+        return _project_page_image_paths(output_dir)
+
     if file_type not in {"image", "scanned_document"}:
         return []
     if file_type == "scanned_document":
@@ -292,6 +332,8 @@ def enrich_document_stage(
     domain = str(meta.get("domain", ""))
     is_project_domain = is_proyectos_domain(domain)
     prompt_version = domain_prompt_version(prompt_version, domain)
+    if is_project_domain and _project_page_image_paths(output_dir):
+        prompt_version = f"{prompt_version}-visual-pages-v1"
 
     # 2. Compute fingerprint and stamp
     try:

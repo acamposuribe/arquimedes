@@ -112,7 +112,20 @@ def _project_page_image_paths(output_dir: Path, *, short_doc_limit: int = 6, lon
     return paths
 
 
-def _primary_image_paths(output_dir: Path, meta: dict) -> list[Path]:
+def _project_visual_config(config: dict) -> dict:
+    """Return configured visual-page limits for Proyectos document enrichment."""
+    enrichment = config.get("enrichment", {}) if isinstance(config, dict) else {}
+    visual = dict(enrichment.get("proyectos_visual_pages") or {})
+    return {
+        "max_images_short": int(visual.get("max_images_short", 6) or 6),
+        "max_images_long": int(visual.get("max_images_long", 4) or 4),
+        "max_width": int(visual.get("max_width", 900) or 900),
+        "max_image_bytes": int(visual.get("max_image_bytes", 1_500_000) or 1_500_000),
+        "jpeg_quality": int(visual.get("jpeg_quality", 82) or 82),
+    }
+
+
+def _primary_image_paths(output_dir: Path, meta: dict, config: dict | None = None) -> list[Path]:
     """Return primary image paths for multimodal document enrichment.
 
     Proyectos PDFs get a small page-thumbnail sample because before enrichment
@@ -122,7 +135,12 @@ def _primary_image_paths(output_dir: Path, meta: dict) -> list[Path]:
     """
     file_type = meta.get("file_type")
     if is_proyectos_domain(str(meta.get("domain", ""))) and file_type in {"pdf", "scanned_document"}:
-        return _project_page_image_paths(output_dir)
+        visual = _project_visual_config(config or {})
+        return _project_page_image_paths(
+            output_dir,
+            short_doc_limit=visual["max_images_short"],
+            long_doc_limit=visual["max_images_long"],
+        )
 
     if file_type not in {"image", "scanned_document"}:
         return []
@@ -379,7 +397,8 @@ def enrich_document_stage(
             meta_path,
             document_text_path,
             domain=domain,
-            image_paths=_primary_image_paths(output_dir, meta),
+            image_paths=_primary_image_paths(output_dir, meta, config),
+            visual_config=_project_visual_config(config),
         )
         raw_text = llm_fn(system, messages)
         repair_schema = _PROJECT_DOCUMENT_PATCH_SCHEMA if is_project_domain else _DOCUMENT_PATCH_SCHEMA

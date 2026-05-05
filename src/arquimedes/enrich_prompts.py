@@ -16,7 +16,10 @@ from __future__ import annotations
 import base64
 import json
 import mimetypes
+from io import BytesIO
 from pathlib import Path
+
+from PIL import Image
 
 from arquimedes.domain_profiles import is_practice_domain, is_proyectos_domain
 from arquimedes import practice_prompts, project_prompts
@@ -358,6 +361,7 @@ def build_document_file_prompt(
     *,
     domain: str = "",
     image_paths: list[Path] | None = None,
+    visual_config: dict | None = None,
 ) -> tuple[str, list[dict]]:
     """Build (system_prompt, messages) for file-based document enrichment.
 
@@ -365,6 +369,7 @@ def build_document_file_prompt(
     disk and returns a structured JSON patch.
     """
     image_paths = image_paths or []
+    visual_config = visual_config or {}
     image_instruction = ""
     if image_paths:
         if is_proyectos_domain(domain):
@@ -398,7 +403,15 @@ def build_document_file_prompt(
             content.append({"type": "text", "text": f"\n(Image unavailable: {image_path})\n"})
             continue
         try:
-            media_type, b64_data = _encode_image(str(image_path))
+            if is_proyectos_domain(domain):
+                media_type, b64_data = _encode_image_for_llm(
+                    image_path,
+                    max_width=int(visual_config.get("max_width", 900) or 900),
+                    max_bytes=int(visual_config.get("max_image_bytes", 1_500_000) or 1_500_000),
+                    jpeg_quality=int(visual_config.get("jpeg_quality", 82) or 82),
+                )
+            else:
+                media_type, b64_data = _encode_image(str(image_path))
             content.append({
                 "type": "image",
                 "source": {
@@ -627,6 +640,49 @@ def _encode_image(image_path: str) -> tuple[str, str]:
     with open(path, "rb") as f:
         data = base64.b64encode(f.read()).decode("utf-8")
     return media_type, data
+
+
+def _encode_image_for_llm(
+    image_path: Path,
+    *,
+    max_width: int = 900,
+    max_bytes: int = 1_500_000,
+    jpeg_quality: int = 82,
+) -> tuple[str, str]:
+    """Encode an image for LLM payloads with hard size controls.
+
+    Proyectos page thumbnails can be PNG drawings that compress poorly. Convert
+    to RGB JPEG, downscale by width, and progressively reduce size until the
+    binary payload fits ``max_bytes``. Returns (media_type, b64_data).
+    """
+    max_width = max(320, int(max_width or 900))
+    max_bytes = max(200_000, int(max_bytes or 1_500_000))
+    quality = min(95, max(45, int(jpeg_quality or 82)))
+
+    with Image.open(image_path) as img:
+        img = img.convert("RGB")
+        width, height = img.size
+        if width > max_width:
+            new_height = max(1, round(height * (max_width / width)))
+            img = img.resize((max_width, new_height), Image.Resampling.LANCZOS)
+
+        current_quality = quality
+        while True:
+            buffer = BytesIO()
+            img.save(buffer, format="JPEG", quality=current_quality, optimize=True)
+            data = buffer.getvalue()
+            if len(data) <= max_bytes:
+                return "image/jpeg", base64.b64encode(data).decode("utf-8")
+            if current_quality > 55:
+                current_quality -= 10
+                continue
+            width, height = img.size
+            if width <= 420:
+                return "image/jpeg", base64.b64encode(data).decode("utf-8")
+            new_width = max(420, int(width * 0.82))
+            new_height = max(1, round(height * (new_width / width)))
+            img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            current_quality = 65
 
 
 def build_figure_batch_prompt(

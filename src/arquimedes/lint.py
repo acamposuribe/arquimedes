@@ -20,6 +20,7 @@ import json
 import os
 import re
 import shutil
+from types import SimpleNamespace
 import sqlite3
 import sys
 import threading
@@ -57,8 +58,8 @@ from arquimedes.compile_pages import (
 )
 from arquimedes.config import get_logs_root, get_project_root, load_config
 from arquimedes.domain_profiles import get_domain_profile, get_publication_mode
-from arquimedes.domain_profiles import should_run_collection_reflection
-from arquimedes.enrich import _is_chunk_stale, _is_document_stale, _is_figure_stale
+from arquimedes.domain_profiles import should_run_collection_reflection, should_run_global_bridge
+from arquimedes.enrich import _allows_figure_enrichment, _is_chunk_stale, _is_document_stale, _is_figure_stale
 from arquimedes.llm import EnrichmentError, LlmFn, get_model_id, make_cli_llm_fn, parse_json_or_repair
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import (
@@ -1504,6 +1505,11 @@ def _index_state_stale(root: Path) -> tuple[bool, str]:
     return False, ""
 
 
+def _should_check_memory_bridge(manifest_records: list[dict]) -> bool:
+    """Return True when any manifest domain uses the concept memory bridge."""
+    return any(should_run_global_bridge(str(rec.get("domain", ""))) for rec in manifest_records)
+
+
 def _memory_state_stale(root: Path) -> tuple[bool, str]:
     stamp = read_memory_bridge_stamp(project_root=root)
     if not stamp:
@@ -1661,11 +1667,12 @@ def _detect_stale_enrichment(root: Path, manifest_records: list[dict], config: d
                 stale_stages.append("chunk")
         except Exception:
             stale_stages.append("chunk")
-        try:
-            if _is_figure_stale(output_dir, config):
+        if _allows_figure_enrichment(SimpleNamespace(**rec)):
+            try:
+                if _is_figure_stale(output_dir, config):
+                    stale_stages.append("figure")
+            except Exception:
                 stale_stages.append("figure")
-        except Exception:
-            stale_stages.append("figure")
         if stale_stages:
             issues.append(_issue(
                 "stale_enrichment",
@@ -1904,16 +1911,17 @@ def run_deterministic_lint(config: dict | None = None) -> dict:
             fixable=True,
         ))
 
-    memory_stale, memory_reason = _memory_state_stale(root)
-    if memory_stale:
-        issues.append(_issue(
-            "stale_memory_bridge",
-            "medium",
-            "Stale memory bridge",
-            memory_reason or "memory bridge needs rebuild",
-            path="indexes/search.sqlite",
-            fixable=True,
-        ))
+    if _should_check_memory_bridge(manifest_records):
+        memory_stale, memory_reason = _memory_state_stale(root)
+        if memory_stale:
+            issues.append(_issue(
+                "stale_memory_bridge",
+                "medium",
+                "Stale memory bridge",
+                memory_reason or "memory bridge needs rebuild",
+                path="indexes/search.sqlite",
+                fixable=True,
+            ))
 
     summary = {
         "materials": len(manifest_records),

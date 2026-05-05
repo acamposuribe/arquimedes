@@ -14,7 +14,7 @@ from click.testing import CliRunner
 from arquimedes.compile_pages import _concept_wiki_path, _material_wiki_path
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import rebuild_index
-from arquimedes.lint import EnrichmentError, ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _cluster_audit_apply_bridge_update, _expected_pages, _filter_local_rows_not_in_bridge, _graph_reflection_due, _graph_reflection_packet, _load_manifest, _memory_state_stale, _resolve_wiki_link, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, _stage_cluster_audit_reviews_input, run_deterministic_lint, run_lint
+from arquimedes.lint import EnrichmentError, ReflectionIndexTool, _build_collection_reflection_evidence_payload, _build_concept_reflection_evidence_payload, _build_material_info, _cluster_audit_apply_bridge_update, _detect_stale_enrichment, _expected_pages, _filter_local_rows_not_in_bridge, _graph_reflection_due, _graph_reflection_packet, _load_manifest, _memory_state_stale, _resolve_wiki_link, _run_cluster_audit, _run_collection_reflections, _run_concept_reflections, _run_graph_reflection, _should_check_memory_bridge, _stage_cluster_audit_reviews_input, run_deterministic_lint, run_lint
 from arquimedes.memory import memory_rebuild
 from arquimedes.cli import lint as lint_cmd
 
@@ -5457,3 +5457,37 @@ def test_graph_reflection_packet_uses_only_collection_and_bridge_signals(tmp_pat
     assert packet["bridge_threads"][0]["bridge_id"] == "bridge_001"
     assert packet["bridge_threads"][0]["helpful_new_sources"] == ["oral histories of archive reuse"]
     assert packet["bridge_threads"][0]["why_this_bridge_matters"] == "It is a cross-collection seam."
+
+
+def test_stale_enrichment_ignores_figure_stage_for_standalone_images(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    mid = "img001"
+    output_dir = root / "extracted" / mid
+    (output_dir / "figures").mkdir(parents=True)
+    _write_json(output_dir / "meta.json", {"material_id": mid, "file_type": "image"})
+    _write_json(output_dir / "figures" / "fig_0001.json", {"image_path": "figures/fig_0001.jpg"})
+
+    monkeypatch.setattr("arquimedes.lint._is_document_stale", lambda _output_dir, _config: False)
+    monkeypatch.setattr("arquimedes.lint._is_chunk_stale", lambda _output_dir, _config: False)
+    monkeypatch.setattr("arquimedes.lint._is_figure_stale", lambda _output_dir, _config: True)
+
+    issues = _detect_stale_enrichment(
+        root,
+        [{"material_id": mid, "file_type": "image", "domain": "proyectos", "collection": "2410-casa"}],
+        config,
+    )
+
+    assert issues == []
+
+
+def test_memory_bridge_check_skips_proyectos_only_manifest():
+    assert _should_check_memory_bridge([
+        {"material_id": "p1", "domain": "proyectos", "collection": "2410-casa"},
+    ]) is False
+
+
+def test_memory_bridge_check_runs_for_concept_graph_domains():
+    assert _should_check_memory_bridge([
+        {"material_id": "p1", "domain": "proyectos", "collection": "2410-casa"},
+        {"material_id": "r1", "domain": "research", "collection": "papers"},
+    ]) is True

@@ -108,6 +108,55 @@ def save_manifest(project_root: Path, materials: dict[str, MaterialManifest]) ->
     manifest_path.write_text("\n".join(lines) + "\n" if lines else "")
 
 
+def ignored_materials_path(project_root: Path) -> Path:
+    return project_root / "manifests" / "ignored_materials.jsonl"
+
+
+def load_ignored_material_hashes(project_root: Path) -> set[str]:
+    path = ignored_materials_path(project_root)
+    hashes: set[str] = set()
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            file_hash = str(row.get("file_hash") or "").strip()
+            if file_hash:
+                hashes.add(file_hash)
+    return hashes
+
+
+def add_ignored_material(project_root: Path, *, material_id: str, file_hash: str, relative_path: str, reason: str = "admin_delete") -> None:
+    path = ignored_materials_path(project_root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    existing = []
+    if path.exists():
+        existing = [line for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    row = {
+        "material_id": material_id,
+        "file_hash": file_hash,
+        "relative_path": relative_path,
+        "reason": reason,
+        "ignored_at": datetime.now(timezone.utc).isoformat(),
+    }
+    rows = []
+    seen_hashes = set()
+    for line in existing:
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            rows.append(line)
+            continue
+        seen_hashes.add(str(parsed.get("file_hash") or ""))
+        rows.append(json.dumps(parsed, ensure_ascii=False))
+    if file_hash not in seen_hashes:
+        rows.append(json.dumps(row, ensure_ascii=False))
+    path.write_text("\n".join(rows) + "\n", encoding="utf-8")
+
+
 def _ignored_extensions(config: dict | None = None) -> set[str]:
     """Return configured file extensions to ignore during ingest.
 
@@ -269,6 +318,7 @@ def ingest(
 
     # Load existing manifest
     manifest = load_manifest(project_root)
+    ignored_hashes = load_ignored_material_hashes(project_root)
     existing_hashes = {m.file_hash for m in manifest.values()}
     existing_by_hash = {m.file_hash: m for m in manifest.values()}
 
@@ -283,6 +333,9 @@ def ingest(
         # Compute identity
         material_id = compute_material_id(file_path)
         file_hash = compute_file_hash(file_path)
+
+        if file_hash in ignored_hashes:
+            continue
 
         # Refresh path-derived scope for already-registered materials.
         if material_id in manifest:

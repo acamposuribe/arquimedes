@@ -1445,6 +1445,9 @@ img { max-width: 100%; display: block; }
 
 /* Action links in sidebar */
 .action-links { display: grid; gap: 0.2rem; }
+.material-admin-form { display: grid; gap: 0.45rem; margin-bottom: 0.8rem; }
+.material-admin-form label { font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+.material-admin-form select { width: 100%; }
 
 .action-link {
   display: flex;

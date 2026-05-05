@@ -425,11 +425,29 @@
 
   <div class="wiki-aside-stack">
   <aside class="wiki-aside wiki-aside--top">
-    {% if material_admin_mode and project_visual_first and material_figures %}
+    {% if material_admin_mode %}
     <section class="panel project-admin-panel">
       <h2>Admin</h2>
+      {% if project_extraction %}
+      <form method="post" action="/materials/{{ material_id }}/admin/project-type" class="material-admin-form">
+        <input type="hidden" name="return_to" value="{{ request.url.path }}?mode=admin">
+        <label for="project-material-type">Tipo</label>
+        <select id="project-material-type" name="project_material_type">
+          {% for key, label in project_material_type_options %}
+          <option value="{{ key }}" {% if project_extraction.material_type_key == key %}selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+        <button class="action-link" type="submit">Guardar tipo</button>
+      </form>
+      {% endif %}
       <div class="action-links">
+        {% if project_visual_first and material_figures %}
         <button class="action-link action-link--danger" type="button" data-figure-delete-toggle data-figure-delete-target="#figure-delete-form">Eliminar figuras…</button>
+        {% endif %}
+        <form method="post" action="/materials/{{ material_id }}/admin/delete-ignore" onsubmit="return confirm('Eliminar este material e impedir que se reingeste mientras el archivo siga igual?');">
+          <input type="hidden" name="return_to" value="/">
+          <button class="action-link action-link--danger" type="submit">Eliminar y no reingestar</button>
+        </form>
       </div>
     </section>
     {% endif %}

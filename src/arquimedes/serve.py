@@ -35,7 +35,7 @@ from arquimedes.domain_profiles import (
 from arquimedes.config import get_enabled_domains
 from arquimedes.index import get_index_path
 
-_PROJECT_GALLERY_TYPES = {"drawing_set", "site_photo", "map_or_cartography"}
+_PROJECT_GALLERY_TYPES = {"drawing_set", "site_photo", "map_or_cartography", "reference_material"}
 _PROJECT_MATERIAL_TYPE_LABEL_FALLBACKS = {
     "meeting_report": "Informes de reunión",
 }
@@ -974,6 +974,7 @@ def _material_page_context(material_id: str, body: str, *, admin_mode: bool = Fa
         "related_materials_body": related_materials_body,
         "material_figures": _figure_view_models(material_id, read_mod.load_material_figures(material_id)),
         "material_admin_mode": admin_mode,
+        "project_material_type_options": list(_PROJECT_MATERIAL_TYPE_LABELS.items()),
     }
 
 
@@ -1291,6 +1292,49 @@ def create_app(config: dict | None = None) -> FastAPI:
                 ),
             },
         )
+
+    @app.post("/materials/{material_id}/admin/project-type")
+    def material_admin_project_type(material_id: str, project_material_type: str = Form(""), return_to: str = Form("")):
+        try:
+            meta = read_mod.load_material_meta(material_id)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if not is_proyectos_domain(str(meta.get("domain") or ""), default="research"):
+            raise HTTPException(status_code=404, detail="Project type editing is only available for Proyectos materials")
+        type_key = (project_material_type or "").strip()
+        if type_key not in _PROJECT_MATERIAL_TYPE_LABELS:
+            raise HTTPException(status_code=400, detail="Unknown project material type")
+        project_extraction = meta.get("project_extraction") if isinstance(meta.get("project_extraction"), dict) else {}
+        project_extraction = dict(project_extraction)
+        project_extraction["project_material_type"] = type_key
+        meta["project_extraction"] = project_extraction
+        meta_path = read_mod.get_project_root() / "extracted" / material_id / "meta.json"
+        tmp = meta_path.with_suffix(".json.tmp")
+        tmp.write_text(json.dumps(meta, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+        tmp.replace(meta_path)
+        target = (return_to or "").strip() or f"/materials/{material_id}?mode=admin"
+        return RedirectResponse(url=target, status_code=303)
+
+    @app.post("/materials/{material_id}/admin/delete-ignore")
+    def material_admin_delete_ignore(material_id: str, return_to: str = Form("")):
+        from arquimedes.config import get_project_root
+        from arquimedes.ingest import add_ignored_material, load_manifest
+        from arquimedes.removal import cascade_delete
+
+        project_root = get_project_root()
+        manifest = load_manifest(project_root)
+        entry = manifest.get(material_id)
+        if not entry:
+            raise HTTPException(status_code=404, detail="Material not found in manifest")
+        add_ignored_material(
+            project_root,
+            material_id=entry.material_id,
+            file_hash=entry.file_hash,
+            relative_path=entry.relative_path,
+        )
+        cascade_delete([material_id], project_root=project_root)
+        target = (return_to or "").strip() or "/"
+        return RedirectResponse(url=target, status_code=303)
 
     @app.post("/materials/{material_id}/figures/delete")
     def material_delete_figures(request: Request, material_id: str, figure_sidecar: list[str] = Form([]), return_to: str = Form("")):

@@ -21,7 +21,7 @@ from arquimedes.config import (
     load_config,
 )
 from arquimedes.git_publish import git_env, push as git_push
-from arquimedes.ingest import SUPPORTED_EXTENSIONS, _relative_to_library, load_manifest, scan_library
+from arquimedes.ingest import SUPPORTED_EXTENSIONS, _relative_to_library, load_ignored_material_hashes, load_manifest, scan_library
 from arquimedes.models import compute_file_hash, compute_material_id
 from arquimedes.removal import RemovalReport, cascade_delete
 
@@ -186,12 +186,15 @@ class BatchPlanner:
 
     def plan(self, snapshot: Iterable[FileSnapshotEntry]) -> WatchBatch:
         manifest = load_manifest(self.project_root)
+        ignored_hashes = load_ignored_material_hashes(self.project_root)
         by_path = {m.relative_path.replace("\\", "/"): m for m in manifest.values()}
         by_hash = {m.file_hash: m for m in manifest.values()}
         live_paths = set()
         batch = WatchBatch()
 
         for entry in snapshot:
+            if entry.file_hash in ignored_hashes:
+                continue
             live_paths.add(entry.relative_path)
             path_match = by_path.get(entry.relative_path)
             if path_match:

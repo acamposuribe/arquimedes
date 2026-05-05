@@ -283,6 +283,34 @@ def _refresh_extracted_scope(project_root: Path, entry: MaterialManifest) -> Non
         meta_path.write_text(json.dumps(meta, separators=(",", ":"), ensure_ascii=False), encoding="utf-8")
 
 
+def prune_missing_materials(
+    config: dict | None = None,
+    *,
+    dry_run: bool = False,
+):
+    """Remove manifest/artifacts for materials whose source files are gone.
+
+    This is intentionally opt-in: transient server/symlink outages should not
+    delete materials during normal ingest.
+    """
+    if config is None:
+        config = load_config()
+
+    library_root = get_library_root(config)
+    project_root = get_project_root()
+    manifest = load_manifest(project_root)
+    missing_ids: list[str] = []
+    for mid, entry in manifest.items():
+        relative = Path(entry.relative_path)
+        source_path = library_root / relative
+        if _is_in_ignored_folder(relative) or not source_path.exists():
+            missing_ids.append(mid)
+
+    from arquimedes.removal import cascade_delete
+
+    return cascade_delete(missing_ids, project_root=project_root, dry_run=dry_run)
+
+
 def ingest(
     path: str | list[str] | tuple[str, ...] | None = None,
     config: dict | None = None,

@@ -202,6 +202,53 @@ def test_ingest_ignores_configured_extension_for_explicit_file(tmp_path, monkeyp
     assert result == []
 
 
+def test_prune_missing_materials_removes_deleted_sources(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    manifest_dir = project_root / "manifests"
+    manifest_dir.mkdir(parents=True, exist_ok=True)
+
+    kept = library_root / "Research" / "papers" / "kept.pdf"
+    kept.parent.mkdir(parents=True, exist_ok=True)
+    kept.write_bytes(b"kept")
+    missing = library_root / "Research" / "papers" / "missing.pdf"
+
+    kept_entry = MaterialManifest(
+        material_id="kept",
+        file_hash="hash-kept",
+        relative_path="Research/papers/kept.pdf",
+        file_type="pdf",
+        domain="research",
+        collection="papers",
+        ingested_at="2026-01-01T00:00:00+00:00",
+    )
+    missing_entry = MaterialManifest(
+        material_id="missing",
+        file_hash="hash-missing",
+        relative_path="Research/papers/missing.pdf",
+        file_type="pdf",
+        domain="research",
+        collection="papers",
+        ingested_at="2026-01-01T00:00:00+00:00",
+    )
+    (manifest_dir / "materials.jsonl").write_text(
+        kept_entry.to_json_line() + "\n" + missing_entry.to_json_line() + "\n",
+        encoding="utf-8",
+    )
+    (project_root / "extracted" / "missing").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    report = ingest_mod.prune_missing_materials(config={})
+
+    assert report.removed_material_ids == ["missing"]
+    manifest_rows = (manifest_dir / "materials.jsonl").read_text(encoding="utf-8")
+    assert "kept" in manifest_rows
+    assert "missing" not in manifest_rows
+    assert not (project_root / "extracted" / "missing").exists()
+
+
 def test_ingest_ignores_files_inside_previos_folders_case_insensitively(tmp_path, monkeypatch):
     library_root = tmp_path / "library"
     project_root = tmp_path / "project"

@@ -828,13 +828,16 @@ def vault_info_cmd(human: bool):
 
 @cli.command()
 @click.argument("path", nargs=-1)
-def ingest(path: tuple[str, ...]):
+@click.option("--prune-missing", is_flag=True, help="Remove manifest entries/artifacts whose source files are missing.")
+@click.option("--dry-run", is_flag=True, help="With --prune-missing, report removals without deleting.")
+def ingest(path: tuple[str, ...], prune_missing: bool, dry_run: bool):
     """Scan library for new materials and register them."""
-    from arquimedes.ingest import ingest as do_ingest
+    from arquimedes.ingest import ingest as do_ingest, prune_missing_materials
 
     try:
         requested_path = None if not path else (path[0] if len(path) == 1 else list(path))
         new_materials = do_ingest(path=requested_path)
+        prune_report = prune_missing_materials(dry_run=dry_run) if prune_missing else None
     except FileNotFoundError as e:
         raise click.ClickException(str(e))
 
@@ -844,6 +847,16 @@ def ingest(path: tuple[str, ...]):
             click.echo(f"  {m.material_id}  {m.relative_path}  [{m.file_type}] ({m.collection})")
     else:
         click.echo("No new materials found.")
+
+    if prune_report is not None:
+        removed = prune_report.removed_material_ids
+        action = "Would remove" if dry_run else "Removed"
+        if removed:
+            click.echo(f"{action} {len(removed)} missing material(s):")
+            for mid in removed:
+                click.echo(f"  {mid}")
+        else:
+            click.echo("No missing materials to prune.")
 
 
 @cli.command("extract-raw")

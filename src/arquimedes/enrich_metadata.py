@@ -31,6 +31,22 @@ def _load_jsonl(path: Path) -> list[dict]:
     return records
 
 
+def _standalone_image_pages(output_dir: Path) -> list[dict]:
+    """Build a synthetic page thumbnail from a standalone image figure sidecar."""
+    figures_dir = output_dir / "figures"
+    if not figures_dir.exists():
+        return []
+    for sidecar_path in sorted(figures_dir.glob("*.json")):
+        try:
+            sidecar = json.loads(sidecar_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        image_rel = str(sidecar.get("image_path", "") or "")
+        if image_rel and (output_dir / image_rel).exists():
+            return [{"page_number": 1, "text": "", "thumbnail_path": image_rel}]
+    return []
+
+
 def enrich_metadata_stage(
     output_dir: Path,
     config: dict,
@@ -57,7 +73,7 @@ def enrich_metadata_stage(
     try:
         meta_path = output_dir / "meta.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-        pages = _load_jsonl(output_dir / "pages.jsonl")
+        pages = _load_jsonl(output_dir / "pages.jsonl") or _standalone_image_pages(output_dir)
     except Exception as exc:
         return {"status": "failed", "detail": f"Load error: {exc}"}
 

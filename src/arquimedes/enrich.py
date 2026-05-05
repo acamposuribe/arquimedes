@@ -46,14 +46,6 @@ def _has_text_enrichment_inputs(output_dir: Path) -> bool:
 
 def _is_document_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for document stage without calling LLM."""
-    if not _has_text_enrichment_inputs(output_dir):
-        try:
-            meta_path = output_dir / "meta.json"
-            meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-            if str(meta.get("file_type", "")) in {"image", "scanned_document"}:
-                return False
-        except Exception:
-            pass
     enrichment_config = config.get("enrichment", {})
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
@@ -454,7 +446,7 @@ def enrich(
             for s in remaining:
                 if s == "figure" and not figure_allowed:
                     continue
-                if s in {"document", "chunk"} and text_artifacts_optional and not has_text_inputs:
+                if s == "chunk" and text_artifacts_optional and not has_text_inputs:
                     continue
                 if force:
                     stale_stages.add(s)
@@ -502,7 +494,7 @@ def enrich(
 
             for s in remaining:
                 if s not in stale_stages:
-                    if s in {"document", "chunk"} and text_artifacts_optional and not has_text_inputs:
+                    if s == "chunk" and text_artifacts_optional and not has_text_inputs:
                         detail = "no text extraction artifacts"
                     else:
                         detail = "standalone image material" if s == "figure" and not figure_allowed else "up to date"

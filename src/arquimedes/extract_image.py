@@ -161,14 +161,22 @@ def extract_raw_image(
         raw_document_type=raw_document_type,
     )
 
+    if not pages:
+        pages = [Page(
+            page_number=1,
+            text="",
+            headings=[],
+            figure_refs=["fig_0001"],
+            thumbnail_path=f"figures/{dest_filename}",
+        )]
+
     # Write artifacts
     meta.save(output_dir.parent)
     (output_dir / "text.md").write_text(normalized_text, encoding="utf-8")
 
-    if pages:
-        with open(output_dir / "pages.jsonl", "w", encoding="utf-8") as f:
-            for page in pages:
-                f.write(json.dumps(page.to_dict(), ensure_ascii=False) + "\n")
+    with open(output_dir / "pages.jsonl", "w", encoding="utf-8") as f:
+        for page in pages:
+            f.write(json.dumps(page.to_dict(), ensure_ascii=False) + "\n")
 
     (output_dir / "toc.json").write_text("[]", encoding="utf-8")
 

@@ -92,8 +92,10 @@ def document_fingerprint(output_dir: Path) -> str:
         "page_count": raw_meta.get("page_count", 0),
     }
 
-    # 2. pages.jsonl (required)
-    pages_text = (output_dir / "pages.jsonl").read_text(encoding="utf-8")
+    # 2. pages.jsonl. Older standalone-image extractions may not have this;
+    # document enrichment can still use the primary image attachment.
+    pages_path = output_dir / "pages.jsonl"
+    pages_text = pages_path.read_text(encoding="utf-8") if pages_path.exists() else ""
 
     # 3. annotations.jsonl (optional — fall back to empty list repr)
     ann_path = output_dir / "annotations.jsonl"
@@ -101,7 +103,8 @@ def document_fingerprint(output_dir: Path) -> str:
 
     # 4. chunks.jsonl — raw fields only (exclude enriched summary/keywords)
     raw_chunks = []
-    for line in (output_dir / "chunks.jsonl").read_text(encoding="utf-8").splitlines():
+    chunks_path = output_dir / "chunks.jsonl"
+    for line in (chunks_path.read_text(encoding="utf-8") if chunks_path.exists() else "").splitlines():
         line = line.strip()
         if not line:
             continue

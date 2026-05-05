@@ -420,9 +420,10 @@ def enrich_figures_stage(
         if isinstance(summary, str):
             doc_context["summary"] = summary
 
-    # 3. Load pages for text lookup (keyed by page number)
+    # 3. Load pages for text lookup (keyed by page number). Standalone images may
+    # not have pages.jsonl; they can still be enriched from the image itself.
     try:
-        pages_list = _load_jsonl(output_dir / "pages.jsonl")
+        pages_list = _load_jsonl(output_dir / "pages.jsonl") if (output_dir / "pages.jsonl").exists() else []
         pages_by_num: dict[int, str] = {p["page_number"]: p.get("text", "") for p in pages_list}
     except Exception as exc:
         return {"status": "failed", "detail": f"Load pages error: {exc}"}

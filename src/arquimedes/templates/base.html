@@ -23,6 +23,8 @@
   </header>
   <div class="site-shell">
     <aside class="site-rail">
+      <details class="site-rail-details" open>
+        <summary>{{ ui_label('navigation', active_domain, 'Navigation') }}</summary>
       {% set _path = request.url.path %}
       <section class="rail-section">
         <h2>{{ ui_label('navigation', active_domain, 'Navigation') }}</h2>
@@ -57,6 +59,7 @@
         {% endfor %}
       </section>
       {% endif %}
+      </details>
     </aside>
     <main class="page">
       {% if not public_exposure %}
@@ -78,6 +81,7 @@
         <p hidden id="lightbox-meta"></p>
         <p hidden id="lightbox-caption-text"></p>
         <p hidden id="lightbox-description"></p>
+        <a hidden id="lightbox-source" target="_blank" rel="noopener">Open source page</a>
       </figcaption>
     </figure>
   </div>

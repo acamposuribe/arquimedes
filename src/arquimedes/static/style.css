@@ -167,6 +167,10 @@ img { max-width: 100%; display: block; }
   scrollbar-color: var(--line-dark) transparent;
 }
 
+.site-rail-details > summary {
+  display: none;
+}
+
 .rail-section + .rail-section { margin-top: 1.1rem; }
 
 .rail-section h2 {
@@ -552,7 +556,7 @@ img { max-width: 100%; display: block; }
 
 .wiki-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 15.5rem;
+  grid-template-columns: minmax(0, 1fr) 18rem;
   grid-template-areas: "body aside-stack";
   gap: 1.15rem;
   align-items: start;
@@ -2058,6 +2062,12 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
   margin-bottom: 0.2rem;
 }
 .lightbox-caption p { margin: 0.35rem 0 0; }
+.lightbox-caption a {
+  display: inline-block;
+  margin-top: 0.55rem;
+  color: #fff;
+  text-decoration: underline;
+}
 
 .lightbox-nav,
 .lightbox-close {
@@ -2187,6 +2197,24 @@ body.lightbox-open { overflow: hidden; }
     overflow-y: visible;
   }
 
+  .site-rail-details {
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--panel);
+  }
+  .site-rail-details > summary {
+    display: block;
+    padding: 0.65rem 0.85rem;
+    cursor: pointer;
+    color: var(--ink);
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .site-rail-details > .rail-section {
+    padding: 0 0.85rem 0.85rem;
+  }
+
   .site-header {
     padding: 0 1rem;
     gap: 0.75rem;
@@ -2228,6 +2256,50 @@ body.lightbox-open { overflow: hidden; }
     grid-template-columns: 1fr;
   }
   .home-search { flex-direction: column; }
+
+  .lightbox {
+    align-items: stretch;
+    justify-content: stretch;
+    padding: 0.75rem;
+  }
+  .lightbox-figure {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    overflow: hidden;
+    justify-content: center;
+  }
+  .lightbox img {
+    max-width: 100%;
+    max-height: 62vh;
+    object-fit: contain;
+  }
+  .lightbox-caption {
+    width: 100%;
+    max-width: none;
+    max-height: 28vh;
+    overflow: auto;
+    padding: 0.7rem 0.25rem 0;
+    font-size: 0.82rem;
+  }
+  .lightbox-nav {
+    top: auto;
+    bottom: 0.75rem;
+    transform: none;
+    padding: 0.25rem 0.7rem;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, 0.12);
+    font-size: 2rem;
+  }
+  .lightbox-prev { left: 0.75rem; }
+  .lightbox-next { right: 0.75rem; }
+  .lightbox-close {
+    top: 0.55rem;
+    right: 0.75rem;
+    padding: 0.25rem 0.55rem;
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.35);
+  }
 }
 
 /* Project material groups (proyectos domain) */

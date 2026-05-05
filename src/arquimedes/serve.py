@@ -484,6 +484,7 @@ def _figure_view_models(material_id: str, figures: list[dict]) -> list[dict]:
             "description_text": _plain(figure.get("description")),
             "image_url": f"/figures-low/{material_id}/{name}",
             "zoom_url": f"/figures/{material_id}/{name}",
+            "source_page_url": f"/source/{material_id}#page={figure.get('source_page')}" if figure.get("source_page") and read_mod.material_source_path(material_id) else "",
         })
     return items
 

@@ -7,6 +7,7 @@ const lightboxTitle = document.getElementById("lightbox-title");
 const lightboxMeta = document.getElementById("lightbox-meta");
 const lightboxCaptionText = document.getElementById("lightbox-caption-text");
 const lightboxDescription = document.getElementById("lightbox-description");
+const lightboxSource = document.getElementById("lightbox-source");
 const lightboxPrev = document.getElementById("lightbox-prev");
 const lightboxNext = document.getElementById("lightbox-next");
 const confirmModal = document.getElementById("confirm-modal");
@@ -160,7 +161,13 @@ if (lightbox && lightboxImage) {
       lightboxDescription.textContent = description;
       lightboxDescription.hidden = !description;
     }
-    if (lightboxCaption) lightboxCaption.hidden = !(title || meta || caption || description);
+    if (lightboxSource) {
+      const sourceUrl = node.dataset.zoomSourceUrl || "";
+      lightboxSource.href = sourceUrl;
+      lightboxSource.hidden = !sourceUrl;
+      lightboxSource.textContent = meta ? `Open source (${meta.split(" · ")[0]})` : "Open source";
+    }
+    if (lightboxCaption) lightboxCaption.hidden = !(title || meta || caption || description || (lightboxSource && !lightboxSource.hidden));
   }
 
   function openLightbox(node) {
@@ -186,6 +193,7 @@ if (lightbox && lightboxImage) {
     lightbox.setAttribute("hidden", "");
     lightboxImage.removeAttribute("src");
     if (lightboxCaption) lightboxCaption.hidden = true;
+    if (lightboxSource) lightboxSource.hidden = true;
     document.body.classList.remove("lightbox-open");
   }
 
@@ -204,10 +212,32 @@ if (lightbox && lightboxImage) {
     if (event.target === lightbox || target?.closest(".lightbox-close")) closeLightbox();
   });
 
+  let touchStartX = 0;
+  let touchStartY = 0;
+  lightbox.addEventListener("touchstart", (event) => {
+    const touch = event.changedTouches[0];
+    touchStartX = touch.clientX;
+    touchStartY = touch.clientY;
+  }, {passive: true});
+  lightbox.addEventListener("touchend", (event) => {
+    const touch = event.changedTouches[0];
+    const dx = touch.clientX - touchStartX;
+    const dy = touch.clientY - touchStartY;
+    if (Math.abs(dx) > 45 && Math.abs(dx) > Math.abs(dy) * 1.4) moveLightbox(dx > 0 ? -1 : 1);
+  }, {passive: true});
+
   document.addEventListener("keydown", (event) => {
     if (lightbox.hasAttribute("hidden")) return;
     if (event.key === "Escape") closeLightbox();
     if (event.key === "ArrowLeft") moveLightbox(-1);
     if (event.key === "ArrowRight") moveLightbox(1);
   });
+}
+
+const siteRailDetails = document.querySelector(".site-rail-details");
+if (siteRailDetails instanceof HTMLDetailsElement && window.matchMedia) {
+  const railQuery = window.matchMedia("(max-width: 920px)");
+  const syncRail = () => { siteRailDetails.open = !railQuery.matches; };
+  syncRail();
+  railQuery.addEventListener?.("change", syncRail);
 }

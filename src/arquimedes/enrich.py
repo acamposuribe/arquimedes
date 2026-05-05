@@ -39,8 +39,21 @@ def _allows_figure_enrichment(entry) -> bool:
     return getattr(entry, "file_type", "") not in {"image", "scanned_document"}
 
 
+def _has_text_enrichment_inputs(output_dir: Path) -> bool:
+    """Document/chunk enrichment requires text-bearing raw artifacts."""
+    return (output_dir / "pages.jsonl").exists() and (output_dir / "chunks.jsonl").exists()
+
+
 def _is_document_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for document stage without calling LLM."""
+    if not _has_text_enrichment_inputs(output_dir):
+        try:
+            meta_path = output_dir / "meta.json"
+            meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
+            if str(meta.get("file_type", "")) in {"image", "scanned_document"}:
+                return False
+        except Exception:
+            pass
     enrichment_config = config.get("enrichment", {})
     prompt_version = enrichment_config.get("prompt_version", "enrich-v1.0")
     schema_version = enrichment_config.get("enrichment_schema_version", "1")
@@ -415,6 +428,8 @@ def enrich(
         if not dry_run:
             _progress(f"[enrich] start {mid}  {title}")
 
+        has_text_inputs = _has_text_enrichment_inputs(output_dir)
+        text_artifacts_optional = getattr(manifest[mid], "file_type", "") in {"image", "scanned_document"}
         remaining = requested_stages
 
         if dry_run:
@@ -438,6 +453,8 @@ def enrich(
             stale_stages: set[str] = set()
             for s in remaining:
                 if s == "figure" and not figure_allowed:
+                    continue
+                if s in {"document", "chunk"} and text_artifacts_optional and not has_text_inputs:
                     continue
                 if force:
                     stale_stages.add(s)
@@ -485,7 +502,10 @@ def enrich(
 
             for s in remaining:
                 if s not in stale_stages:
-                    detail = "standalone image material" if s == "figure" and not figure_allowed else "up to date"
+                    if s in {"document", "chunk"} and text_artifacts_optional and not has_text_inputs:
+                        detail = "no text extraction artifacts"
+                    else:
+                        detail = "standalone image material" if s == "figure" and not figure_allowed else "up to date"
                     material_results[s] = {"status": "skipped", "detail": detail}
 
             # Sequential stage order is intentional: figure uses the current

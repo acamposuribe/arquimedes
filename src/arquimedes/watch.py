@@ -473,10 +473,11 @@ function esc(value) {{
   return String(value).replace(/[&<>"']/g, ch => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[ch]));
 }}
 function fmt(value) {{
-  if (typeof value === 'string' && RegExp('^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}').test(value)) {{
+  if (typeof value === 'string' && value.includes('T')) {{
     const d = new Date(value);
     if (!Number.isNaN(d.getTime())) {{
-      return d.toLocaleString(undefined, {{ weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }});
+      const pad = n => String(n).padStart(2, '0');
+      return `${{d.getFullYear()}}-${{pad(d.getMonth() + 1)}}-${{pad(d.getDate())}} ${{pad(d.getHours())}}:${{pad(d.getMinutes())}}`;
     }}
   }}
   if (Array.isArray(value) || (value && typeof value === 'object')) return JSON.stringify(value);

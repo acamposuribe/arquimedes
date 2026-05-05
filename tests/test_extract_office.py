@@ -129,6 +129,31 @@ def test_extract_raw_xlsx(tmp_path):
     assert meta["title"] == "Budget"
 
 
+def test_extract_raw_xlsx_fallback_without_expat(tmp_path, monkeypatch):
+    openpyxl = pytest.importorskip("openpyxl")
+    src = tmp_path / "fallback.xlsx"
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    ws.title = "Budget"
+    ws.append(["Item", "Cost"])
+    ws.append(["Door", 1200])
+    wb.save(src)
+
+    def fail_load_workbook(*args, **kwargs):
+        raise ImportError("No module named pyexpat")
+
+    monkeypatch.setattr(openpyxl, "load_workbook", fail_load_workbook)
+    out = tmp_path / "out-fallback"
+    extract_raw_xlsx(src, out, "mid", _manifest("Practice/sheets/fallback.xlsx"))
+
+    text = (out / "text.md").read_text(encoding="utf-8")
+    assert "Sheet: Budget" in text
+    assert "Door" in text
+    assert "1200" in text
+    meta = json.loads((out / "meta.json").read_text(encoding="utf-8"))
+    assert any("limited XLSX fallback" in warning for warning in meta["extraction_warnings"])
+
+
 def test_extract_raw_xlsx_truncates_large_sheets(tmp_path):
     openpyxl = pytest.importorskip("openpyxl")
     src = tmp_path / "big.xlsx"

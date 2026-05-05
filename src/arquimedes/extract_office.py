@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import html
+import re
+import zipfile
 from pathlib import Path
 
 from arquimedes.extract_text import (
@@ -308,6 +311,107 @@ def _xlsx_rows_to_markdown(
     return "\n".join(lines)
 
 
+_XML_TAG_RE = re.compile(r"<[^>]+>")
+_CELL_RE = re.compile(r'<c\\b([^>]*)>(.*?)</c>', re.DOTALL)
+_VALUE_RE = re.compile(r'<v[^>]*>(.*?)</v>', re.DOTALL)
+_TEXT_RE = re.compile(r'<t[^>]*>(.*?)</t>', re.DOTALL)
+_ROW_RE = re.compile(r'<row\\b[^>]*>(.*?)</row>', re.DOTALL)
+
+
+def _col_index(cell_ref: str) -> int:
+    letters = "".join(ch for ch in cell_ref if ch.isalpha()).upper()
+    value = 0
+    for ch in letters:
+        value = value * 26 + (ord(ch) - ord("A") + 1)
+    return max(value - 1, 0)
+
+
+def _xml_text(raw: str) -> str:
+    return html.unescape(_XML_TAG_RE.sub("", raw)).strip()
+
+
+def _load_shared_strings(zf: zipfile.ZipFile) -> list[str]:
+    try:
+        xml = zf.read("xl/sharedStrings.xml").decode("utf-8", errors="replace")
+    except KeyError:
+        return []
+    strings = []
+    for item in re.findall(r"<si\\b[^>]*>(.*?)</si>", xml, flags=re.DOTALL):
+        parts = [_xml_text(match) for match in _TEXT_RE.findall(item)]
+        strings.append("".join(parts))
+    return strings
+
+
+def _xlsx_sheet_names(zf: zipfile.ZipFile) -> dict[str, str]:
+    try:
+        workbook = zf.read("xl/workbook.xml").decode("utf-8", errors="replace")
+        rels = zf.read("xl/_rels/workbook.xml.rels").decode("utf-8", errors="replace")
+    except KeyError:
+        return {}
+    rel_targets = {
+        rel_id: target
+        for rel_id, target in re.findall(r'<Relationship[^>]+Id="([^"]+)"[^>]+Target="([^"]+)"', rels)
+    }
+    names = {}
+    for attrs in re.findall(r"<sheet\\b([^>]*)/?>", workbook):
+        name_m = re.search(r'name="([^"]+)"', attrs)
+        rel_m = re.search(r'r:id="([^"]+)"', attrs)
+        if not (name_m and rel_m):
+            continue
+        target = rel_targets.get(rel_m.group(1), "")
+        sheet_path = "xl/" + target.lstrip("/")
+        sheet_path = sheet_path.replace("xl/xl/", "xl/")
+        names[sheet_path] = html.unescape(name_m.group(1))
+    return names
+
+
+def _extract_xlsx_without_expat(source_path: Path) -> tuple[list[tuple[str, list[list[str]], bool, bool]], list[str]]:
+    """Tiny XLSX reader that avoids XML parsers for Python builds without expat."""
+    warnings_: list[str] = ["openpyxl unavailable; used limited XLSX fallback parser"]
+    sheets = []
+    with zipfile.ZipFile(source_path) as zf:
+        shared_strings = _load_shared_strings(zf)
+        names = _xlsx_sheet_names(zf)
+        sheet_paths = sorted(
+            [name for name in zf.namelist() if re.match(r"xl/worksheets/sheet\\d+\\.xml$", name)],
+            key=lambda name: int(re.search(r"sheet(\\d+)\\.xml", name).group(1)),
+        )
+        for idx, sheet_path in enumerate(sheet_paths, start=1):
+            xml = zf.read(sheet_path).decode("utf-8", errors="replace")
+            rows: list[list[str]] = []
+            truncated_rows = False
+            truncated_cols = False
+            for row_idx, row_xml in enumerate(_ROW_RE.findall(xml), start=1):
+                if row_idx > XLSX_MAX_ROWS_PER_SHEET:
+                    truncated_rows = True
+                    break
+                row_values: list[str] = []
+                for attrs, cell_xml in _CELL_RE.findall(row_xml):
+                    ref_m = re.search(r'r="([A-Z]+\\d+)"', attrs)
+                    col = _col_index(ref_m.group(1)) if ref_m else len(row_values)
+                    if col >= XLSX_MAX_COLS_PER_SHEET:
+                        truncated_cols = True
+                        continue
+                    while len(row_values) <= col:
+                        row_values.append("")
+                    value_m = _VALUE_RE.search(cell_xml)
+                    text = ""
+                    if 't="s"' in attrs and value_m:
+                        try:
+                            text = shared_strings[int(_xml_text(value_m.group(1)))]
+                        except Exception:
+                            text = _xml_text(value_m.group(1))
+                    elif 't="inlineStr"' in attrs:
+                        text = "".join(_xml_text(t) for t in _TEXT_RE.findall(cell_xml))
+                    elif value_m:
+                        text = _xml_text(value_m.group(1))
+                    row_values[col] = _markdown_table_cell(text)
+                if any(row_values):
+                    rows.append(row_values)
+            sheets.append((names.get(sheet_path, f"Sheet {idx}"), rows, truncated_rows, truncated_cols))
+    return sheets, warnings_
+
+
 def extract_raw_xlsx(
     source_path: Path,
     output_dir: Path,
@@ -316,52 +420,57 @@ def extract_raw_xlsx(
     chunk_size: int = 500,
 ) -> MaterialMeta:
     """Extract a .xlsx file: one synthetic page per visible worksheet."""
-    from openpyxl import load_workbook
-
     warnings_: list[str] = []
     title = ""
 
-    try:
-        wb = load_workbook(filename=str(source_path), read_only=True, data_only=True)
-    except Exception as exc:
-        warnings_.append(f"failed to open xlsx: {exc}")
-        return write_synthetic_extraction(
-            output_dir,
-            material_id,
-            manifest_entry,
-            pages=[],
-            text_md="",
-            file_type="xlsx",
-            chunk_size=chunk_size,
-            warnings_=warnings_,
-            classify=False,
-        )
-
     pages: list[Page] = []
     text_md_parts: list[str] = []
-    page_index = 0
 
-    for sheet_name in wb.sheetnames:
-        ws = wb[sheet_name]
-        if getattr(ws, "sheet_state", "visible") != "visible":
-            continue
-        page_index += 1
+    try:
+        from openpyxl import load_workbook
 
-        truncated_rows = False
-        truncated_cols = False
-        rows: list[list[str]] = []
-        for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
-            if row_idx > XLSX_MAX_ROWS_PER_SHEET:
-                truncated_rows = True
-                break
-            cells = list(row)
-            if len(cells) > XLSX_MAX_COLS_PER_SHEET:
-                truncated_cols = True
-                cells = cells[:XLSX_MAX_COLS_PER_SHEET]
-            rendered = [_markdown_table_cell(v) for v in cells]
-            if any(c for c in rendered):
-                rows.append(rendered)
+        wb = load_workbook(filename=str(source_path), read_only=True, data_only=True)
+        sheet_rows = []
+        for sheet_name in wb.sheetnames:
+            ws = wb[sheet_name]
+            if getattr(ws, "sheet_state", "visible") != "visible":
+                continue
+            truncated_rows = False
+            truncated_cols = False
+            rows: list[list[str]] = []
+            for row_idx, row in enumerate(ws.iter_rows(values_only=True), start=1):
+                if row_idx > XLSX_MAX_ROWS_PER_SHEET:
+                    truncated_rows = True
+                    break
+                cells = list(row)
+                if len(cells) > XLSX_MAX_COLS_PER_SHEET:
+                    truncated_cols = True
+                    cells = cells[:XLSX_MAX_COLS_PER_SHEET]
+                rendered = [_markdown_table_cell(v) for v in cells]
+                if any(c for c in rendered):
+                    rows.append(rendered)
+            sheet_rows.append((sheet_name, rows, truncated_rows, truncated_cols))
+        wb.close()
+    except Exception as exc:
+        warnings_.append(f"openpyxl failed to open xlsx: {exc}")
+        try:
+            sheet_rows, fallback_warnings = _extract_xlsx_without_expat(source_path)
+            warnings_.extend(fallback_warnings)
+        except Exception as fallback_exc:
+            warnings_.append(f"limited xlsx fallback failed: {fallback_exc}")
+            return write_synthetic_extraction(
+                output_dir,
+                material_id,
+                manifest_entry,
+                pages=[],
+                text_md="",
+                file_type="xlsx",
+                chunk_size=chunk_size,
+                warnings_=warnings_,
+                classify=False,
+            )
 
+    for page_index, (sheet_name, rows, truncated_rows, truncated_cols) in enumerate(sheet_rows, start=1):
         heading_label = f"Sheet: {sheet_name}"
         if not title:
             title = sheet_name
@@ -390,8 +499,6 @@ def extract_raw_xlsx(
         page.headings = [heading_label]
         pages.append(page)
         text_md_parts.append(page_text)
-
-    wb.close()
 
     if not pages:
         warnings_.append("xlsx had no visible worksheets")

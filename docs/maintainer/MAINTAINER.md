@@ -83,6 +83,19 @@ arq serve --install
 arq mcp --install
 ```
 
+Verify native/Python dependencies for extraction and OCR:
+
+```bash
+arq doctor
+```
+
+On macOS, missing native dependencies are usually fixed with:
+
+```bash
+brew install tesseract tesseract-lang expat
+brew reinstall python
+```
+
 Verify the vault was resolved correctly:
 
 ```bash

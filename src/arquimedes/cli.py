@@ -1681,6 +1681,17 @@ def watch(config_path: str | None, install: bool, uninstall: bool, show_status: 
         raise click.ClickException(str(e))
 
 
+@cli.command("doctor")
+def doctor():
+    """Check native/Python dependencies needed by extraction and OCR."""
+    from arquimedes.doctor import format_checks, has_required_failures, run_checks
+
+    checks = run_checks()
+    click.echo(format_checks(checks))
+    if has_required_failures(checks):
+        raise click.exceptions.Exit(1)
+
+
 @cli.command("monitor")
 @click.option("--host", default="127.0.0.1", show_default=True, help="Host for the local monitor web UI.")
 @click.option("--port", default=8765, show_default=True, type=int, help="Port for the local monitor web UI.")

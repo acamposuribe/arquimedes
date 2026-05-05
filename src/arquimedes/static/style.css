@@ -2050,21 +2050,22 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 
 .lightbox-caption {
   max-width: min(88vw, 1100px);
-  padding: 1rem 0 0;
+  padding: 0.65rem 0 0;
   font-family: system-ui, -apple-system, sans-serif;
-  font-size: 0.875rem;
+  font-size: 0.8rem;
+  line-height: 1.35;
   color: rgba(255, 255, 255, 0.65);
 }
 .lightbox-caption strong {
   display: block;
   color: #fff;
-  font-size: 0.9rem;
-  margin-bottom: 0.2rem;
+  font-size: 0.82rem;
+  margin-bottom: 0.12rem;
 }
-.lightbox-caption p { margin: 0.35rem 0 0; }
+.lightbox-caption p { margin: 0.22rem 0 0; }
 .lightbox-caption a {
   display: inline-block;
-  margin-top: 0.55rem;
+  margin-top: 0.32rem;
   color: #fff;
   text-decoration: underline;
 }
@@ -2277,11 +2278,19 @@ body.lightbox-open { overflow: hidden; }
   .lightbox-caption {
     width: 100%;
     max-width: none;
-    max-height: 28vh;
+    max-height: 24vh;
     overflow: auto;
-    padding: 0.7rem 0.25rem 0;
-    font-size: 0.82rem;
+    padding: 0.42rem 0.25rem 0;
+    font-size: 0.72rem;
+    line-height: 1.25;
+    scrollbar-width: thin;
   }
+  .lightbox-caption strong {
+    font-size: 0.74rem;
+    margin-bottom: 0.08rem;
+  }
+  .lightbox-caption p { margin-top: 0.14rem; }
+  .lightbox-caption a { margin-top: 0.2rem; }
   .lightbox-nav {
     top: auto;
     bottom: 0.75rem;

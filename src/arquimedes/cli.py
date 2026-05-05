@@ -1681,6 +1681,16 @@ def watch(config_path: str | None, install: bool, uninstall: bool, show_status: 
         raise click.ClickException(str(e))
 
 
+@cli.command("monitor")
+@click.option("--host", default="127.0.0.1", show_default=True, help="Host for the local monitor web UI.")
+@click.option("--port", default=8765, show_default=True, type=int, help="Port for the local monitor web UI.")
+def monitor(host: str, port: int):
+    """Serve a tiny local web UI for live watcher progress."""
+    from arquimedes.watch import serve_monitor
+
+    serve_monitor(host=host, port=port)
+
+
 @cli.group()
 def memory():
     """Manage the memory bridge (canonical concept graph in SQLite)."""

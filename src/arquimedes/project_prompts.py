@@ -33,7 +33,7 @@ def document_file_system_prompt() -> str:
 Eres archivista operativa de un estudio de arquitectura. Estás enriqueciendo un material dentro de un expediente vivo de proyecto.
 
 Vas a leer:
-1. el objeto JSON de metadatos en bruto, que puede incluir contexto del proyecto actual
+1. el objeto JSON de metadatos en bruto, que puede incluir contexto del proyecto actual y la ruta/carpeta fuente del material
 2. el texto del documento
 
 Devuelve un único objeto JSON completo. Sin introducción, sin markdown, sin parche parcial.
@@ -42,6 +42,7 @@ Reglas:
 - Escribe en español todos los campos de texto libre.
 - Mantén en inglés los valores controlados por esquema cuando el esquema los controle.
 - Clasifica primero el papel del material dentro del proyecto.
+- Considera la ruta/carpeta fuente como contexto relevante: en Proyectos los nombres de carpeta suelen indicar fase, entrega, origen, paquete, disciplina o tipo de material. Úsala como pista, pero no como sustituto de evidencia del contenido.
 - Extrae evidencia operativa para estado, decisiones, requisitos, riesgos y próximos pasos.
 - No reflexiones sobre el material: nada de conclusiones metodológicas ni aprendizajes de contenido. Aquí solo interesa archivar y consultar.
 - No emitas conceptos para grafo: concepts_local y concepts_bridge_candidates deben ser listas vacías.
@@ -96,6 +97,7 @@ project_extraction:
 - Para drawing_set, el título del material y drawing_scope deben ser específicos y útiles dentro del proyecto: no uses solo el nombre del proyecto. Incluye fase + contenido de plano cuando sea posible, por ejemplo "Anteproyecto. Planta baja", "Proyecto básico. Alzados", "Proyecto de ejecución. Detalles constructivos". Si la fase no aparece en el plano, usa la fase actual del proyecto para esa parte del título. Si hay varias láminas, resume el alcance: "Anteproyecto. Plantas y secciones".
 - Para drawing_set, si el título actual es genérico o coincide con el proyecto/colección, corrígelo en el campo title de salida con ese patrón fase + alcance.
 - Usa reference_material para referencias externas de diseño usadas como antecedente o inspiración del proyecto: fotografías de referencia, imágenes de ambiente, benchmarks, casos similares, catálogos visuales o documentos que no son producción propia del expediente. No las clasifiques como working_document solo porque se usan durante el trabajo.
+- Atiende a carpetas como entregas, planos, fotos, referencias, actas, presupuesto, ayuntamiento, estructura, instalaciones, cliente, obra o similares: son pistas fuertes para project_material_type, project_phase, drawing_scope, actores y evidencia_refs. Si una inferencia depende de la carpeta, dilo en evidence_refs.
 - Para site_photo/fotografías de obra, rellena material_date con la fecha real de captura o envío si aparece en nombre de archivo, metadatos o contenido. Usa formato ISO YYYY-MM-DD. No uses fecha de ingesta salvo que sea la única fecha disponible y dilo en evidence_refs.
 - Distingue decisiones ya tomadas de requisitos, bloqueos y preguntas abiertas.
 - Usa evidence_refs para páginas, figuras, tablas, nombres de archivo o marcas temporales que respalden los puntos importantes.
@@ -115,6 +117,8 @@ def chunk_batch_user_template() -> str:
 ## Contexto del documento
 
 {doc_context_str}
+
+La ruta/carpeta fuente, si aparece en el contexto, es una pista relevante sobre fase, entrega, origen, disciplina o tipo de material. Úsala con cautela y registra inferencias en evidence_refs.
 
 ## Fragmentos
 
@@ -150,6 +154,8 @@ def figure_batch_user_intro() -> str:
 ## Contexto del documento
 
 {doc_context_str}
+
+La ruta/carpeta fuente, si aparece en el contexto, es una pista relevante sobre fase, entrega, origen, disciplina o tipo de material. Úsala con cautela y registra inferencias en evidence_refs.
 
 ## Figuras
 

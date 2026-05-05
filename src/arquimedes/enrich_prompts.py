@@ -105,6 +105,7 @@ def build_document_context(
     collection = meta.get("collection", "")
     raw_document_type = meta.get("raw_document_type", "")
     raw_keywords = meta.get("raw_keywords", [])
+    source_path = meta.get("source_path", "") or meta.get("relative_path", "")
 
     authors_str = ", ".join(authors) if authors else ""
     keywords_str = ", ".join(raw_keywords) if raw_keywords else ""
@@ -116,6 +117,7 @@ def build_document_context(
         f"Year: {year}",
         f"Domain: {domain}",
         f"Collection: {collection}",
+        f"Source path: {source_path}",
         f"Raw document type: {raw_document_type}",
         f"Raw keywords: {keywords_str}",
     ]
@@ -162,6 +164,7 @@ def build_figure_context(meta: dict) -> str:
     year = meta.get("year", "")
     domain = meta.get("domain", "")
     collection = meta.get("collection", "")
+    source_path = meta.get("source_path", "") or meta.get("relative_path", "")
 
     authors_str = ", ".join(authors) if authors else ""
     lines = [
@@ -170,6 +173,7 @@ def build_figure_context(meta: dict) -> str:
         f"Year: {year}",
         f"Domain: {domain}",
         f"Collection: {collection}",
+        f"Source path: {source_path}",
     ]
 
     enriched_summary = meta.get("summary")

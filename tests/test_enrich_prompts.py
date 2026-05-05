@@ -81,6 +81,7 @@ def test_proyectos_document_prompt_requests_project_extraction(tmp_path):
     assert "project_extraction" in system
     assert "project_material_type" in system
     assert "meeting_report" in system
+    assert "ruta/carpeta fuente" in system
     assert "concepts_local\": []" in system
     assert "methodological_conclusions" not in system
     assert "main_content_learnings" not in system
@@ -104,11 +105,21 @@ def test_document_file_prompt_can_attach_primary_images(tmp_path):
 
 
 def test_proyectos_chunk_and_figure_prompts_include_project_extraction():
-    doc_context = build_document_context(_meta(domain="proyectos", collection="2407-casa-rio"), None, None)
+    doc_context = build_document_context(
+        _meta(
+            domain="proyectos",
+            collection="2407-casa-rio",
+            source_path="Proyectos/2407-casa-rio/entregas/proyecto-basico/plantas.pdf",
+        ),
+        None,
+        None,
+    )
     chunk_system, chunk_messages = build_chunk_batch_prompt(_chunks(), doc_context, [], domain="proyectos")
     figure_system, figure_messages = build_figure_batch_prompt([], doc_context, domain="proyectos")
 
     assert "project_extraction" in chunk_system
+    assert "Source path: Proyectos/2407-casa-rio/entregas/proyecto-basico/plantas.pdf" in chunk_messages[0]["content"]
+    assert "ruta/carpeta fuente" in chunk_messages[0]["content"]
     assert "risks_or_blockers" in chunk_messages[0]["content"]
     assert "project_extraction" in figure_system
     assert "spatial_or_design_scope" in figure_messages[0]["content"][0]["text"]

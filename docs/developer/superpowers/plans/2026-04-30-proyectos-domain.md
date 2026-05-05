@@ -100,6 +100,7 @@ Changes:
 - Add dedicated project-focused document, chunk, figure, and table prompt fragments. Proyectos enrichment should not reuse Research or Practice prompts with only language changes.
 - Ask for Spanish outputs.
 - Ask the model to classify `project_material_type`.
+- Include the material's relative source path/folder context in Proyectos enrichment context and instruct the model to use folder names as clues for phase, delivery package, discipline, actor/source, and material type, while recording path-based inferences in `evidence_refs`.
 - Ask for operational evidence written into a `project_extraction` sub-block of the document/chunk enrichment JSON (not top-level keys):
   - relevance
   - main points
@@ -118,7 +119,7 @@ Changes:
 
 Tests:
 
-- Proyectos prompts mention project material types and operational extraction.
+- Proyectos prompts mention project material types, operational extraction, and source folder/path clues.
 - Research and Practice prompts do not change.
 - Prompt versioning distinguishes Proyectos if semantic outputs change.
 

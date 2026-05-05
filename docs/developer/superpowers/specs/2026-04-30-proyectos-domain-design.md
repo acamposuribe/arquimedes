@@ -85,7 +85,7 @@ This is a parallel publication mode, not a small prompt variation.
 
 ## Material Understanding
 
-Enrichment for `proyectos` is a dedicated behavior, not a reuse of Research or Practice prompts. It should first classify what role a material plays inside a project, then extract operational evidence for project status and next actions.
+Enrichment for `proyectos` is a dedicated behavior, not a reuse of Research or Practice prompts. It should first classify what role a material plays inside a project, then extract operational evidence for project status and next actions. The material's folder path is relevant enrichment context: in office project dossiers, folders often encode phase, delivery package, discipline, source actor, or material type. Prompts should expose the relative source path and instruct the LLM to treat folder names as clues, while still grounding claims in content and recording path-based inferences in `evidence_refs`.
 
 Suggested `project_material_type` values:
 

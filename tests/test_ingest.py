@@ -202,6 +202,46 @@ def test_ingest_ignores_configured_extension_for_explicit_file(tmp_path, monkeyp
     assert result == []
 
 
+def test_ingest_ignores_files_inside_previos_folders_case_insensitively(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    (project_root / "manifests").mkdir(parents=True, exist_ok=True)
+
+    files = {
+        "Proyectos/2407-casa-rio/Planos/actual.pdf": b"actual",
+        "Proyectos/2407-casa-rio/Previos/old.pdf": b"old",
+        "Proyectos/2407-casa-rio/01_previos_entrega/old2.pdf": b"old2",
+        "Proyectos/2407-casa-rio/PREVIOS/sub/old3.pdf": b"old3",
+    }
+    for rel, data in files.items():
+        p = library_root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(data)
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(config={})
+
+    assert [item.relative_path for item in result] == ["Proyectos/2407-casa-rio/Planos/actual.pdf"]
+
+
+def test_ingest_ignores_explicit_file_inside_previos_folder(tmp_path, monkeypatch):
+    library_root = tmp_path / "library"
+    project_root = tmp_path / "project"
+    (project_root / "manifests").mkdir(parents=True, exist_ok=True)
+    old_file = library_root / "Proyectos" / "2407-casa-rio" / "Previos" / "old.pdf"
+    old_file.parent.mkdir(parents=True, exist_ok=True)
+    old_file.write_bytes(b"old")
+
+    monkeypatch.setattr(ingest_mod, "get_library_root", lambda _config=None: library_root)
+    monkeypatch.setattr(ingest_mod, "get_project_root", lambda: project_root)
+
+    result = ingest_mod.ingest(path="Proyectos/2407-casa-rio/Previos/old.pdf", config={})
+
+    assert result == []
+
+
 def test_ingest_recognizes_proyectos_domain_and_general_bucket(tmp_path, monkeypatch):
     library_root = tmp_path / "library"
     project_root = tmp_path / "project"

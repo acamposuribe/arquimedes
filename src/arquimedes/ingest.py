@@ -27,6 +27,16 @@ SUPPORTED_EXTENSIONS = (
     | PPTX_EXTENSIONS
     | XLSX_EXTENSIONS
 )
+IGNORED_FOLDER_NAME_SUBSTRINGS = ("previos",)
+
+
+def _is_in_ignored_folder(path: Path) -> bool:
+    """Return True when any parent folder should be ignored by ingest."""
+    return any(
+        ignored in part.casefold()
+        for part in path.parts[:-1]
+        for ignored in IGNORED_FOLDER_NAME_SUBSTRINGS
+    )
 
 
 def _detect_file_type(path: Path) -> str:
@@ -200,6 +210,8 @@ def scan_library(library_root: Path, ignored_extensions: set[str] | None = None)
     visited_dirs: set[Path] = set()
 
     def walk(directory: Path) -> None:
+        if any(ignored in directory.name.casefold() for ignored in IGNORED_FOLDER_NAME_SUBSTRINGS):
+            return
         try:
             real_dir = directory.resolve(strict=True)
         except OSError:
@@ -308,10 +320,15 @@ def ingest(
             if not target.is_absolute():
                 target = library_root / target
             if target.is_file():
-                if target.suffix.lower() not in ignored_extensions:
+                if target.suffix.lower() not in ignored_extensions and not _is_in_ignored_folder(target):
                     files.append(target)
             elif target.is_dir():
-                files.extend(scan_library(target, ignored_extensions=ignored_extensions))
+                if not any(
+                    ignored in part.casefold()
+                    for part in target.parts
+                    for ignored in IGNORED_FOLDER_NAME_SUBSTRINGS
+                ):
+                    files.extend(scan_library(target, ignored_extensions=ignored_extensions))
             else:
                 raise FileNotFoundError(f"Path does not exist: {target}")
         files = list(dict.fromkeys(files))

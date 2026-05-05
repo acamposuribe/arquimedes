@@ -448,7 +448,7 @@ def _monitor_html(payload: dict) -> str:
     log = html.escape("\n".join(payload.get("log_tail", [])))
     paths = payload.get("paths", {})
     return f"""<!doctype html>
-<html><head><meta charset='utf-8'><meta http-equiv='refresh' content='2'>
+<html><head><meta charset='utf-8'>
 <title>Arquimedes Watch Monitor</title>
 <style>
 body{{font-family:-apple-system,BlinkMacSystemFont,Segoe UI,sans-serif;margin:24px;background:#111;color:#eee}}
@@ -459,12 +459,45 @@ pre{{background:#050505;border:1px solid #333;border-radius:8px;padding:14px;ove
 a{{color:#93c5fd}} code{{color:#ddd}}
 </style></head><body>
 <h1>Arquimedes Watch Monitor</h1>
-<p><span class='badge {html.escape(str(state.get('status','')))}'>{html.escape(str(state.get('status','unknown')))}</span>
+<p id="summary"><span class='badge {html.escape(str(state.get('status','')))}'>{html.escape(str(state.get('status','unknown')))}</span>
 <strong>{html.escape(str(state.get('step','')))}</strong> — {html.escape(str(state.get('message','')))}</p>
-<table>{rows}</table>
-<h2>Live command output</h2><pre>{log or '(no command output yet)'}</pre>
+<table id="state-table">{rows}</table>
+<h2>Live command output</h2><pre id="log-output">{log or '(no command output yet)'}</pre>
 <h2>Files</h2>
 <ul><li>{html.escape(paths.get('state',''))}</li><li>{html.escape(paths.get('current_log',''))}</li><li>{html.escape(paths.get('watch_log',''))}</li></ul>
+<script>
+const logEl = document.getElementById('log-output');
+const summaryEl = document.getElementById('summary');
+const tableEl = document.getElementById('state-table');
+function esc(value) {{
+  return String(value).replace(/[&<>"']/g, ch => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[ch]));
+}}
+function fmt(value) {{
+  if (typeof value === 'string' && RegExp('^\\\\d{4}-\\\\d{2}-\\\\d{2}T\\\\d{2}:\\\\d{2}').test(value)) {{
+    const d = new Date(value);
+    if (!Number.isNaN(d.getTime())) {{
+      return d.toLocaleString(undefined, {{ weekday: 'short', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }});
+    }}
+  }}
+  if (Array.isArray(value) || (value && typeof value === 'object')) return JSON.stringify(value);
+  return String(value ?? '');
+}}
+async function refresh() {{
+  const wasNearBottom = logEl.scrollTop + logEl.clientHeight >= logEl.scrollHeight - 24;
+  const res = await fetch('/state.json?ts=' + Date.now());
+  const data = await res.json();
+  const state = data.state || {{}};
+  const status = esc(state.status || 'unknown');
+  summaryEl.innerHTML = `<span class="badge ${{status}}">${{status}}</span> <strong>${{esc(state.step || '')}}</strong> — ${{esc(state.message || '')}}`;
+  tableEl.innerHTML = Object.entries(state)
+    .filter(([k]) => k !== 'last_result')
+    .map(([k, v]) => `<tr><th>${{esc(k)}}</th><td><code>${{esc(fmt(v))}}</code></td></tr>`)
+    .join('');
+  logEl.textContent = (data.log_tail || []).join('\n') || '(no command output yet)';
+  if (wasNearBottom) logEl.scrollTop = logEl.scrollHeight;
+}}
+setInterval(refresh, 2000);
+</script>
 </body></html>"""
 
 

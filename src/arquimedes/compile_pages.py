@@ -23,6 +23,7 @@ _PROJECT_MATERIAL_TYPE_LABELS: dict[str, str] = {
     "map_or_cartography": "Cartografía",
     "drawing_set": "Planos",
     "technical_report": "Informes técnicos",
+    "reference_material": "Referencias",
     "working_document": "Documentos de trabajo",
     "budget_table": "Mediciones y presupuestos",
     "site_photo": "Fotografías de obra",

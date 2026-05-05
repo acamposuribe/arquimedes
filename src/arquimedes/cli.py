@@ -1684,11 +1684,12 @@ def watch(config_path: str | None, install: bool, uninstall: bool, show_status: 
 @cli.command("monitor")
 @click.option("--host", default="127.0.0.1", show_default=True, help="Host for the local monitor web UI.")
 @click.option("--port", default=8765, show_default=True, type=int, help="Port for the local monitor web UI.")
-def monitor(host: str, port: int):
-    """Serve a tiny local web UI for live watcher progress."""
+@click.option("--minutes", default=10, show_default=True, type=int, help="Auto-stop the monitor after this many minutes.")
+def monitor(host: str, port: int, minutes: int):
+    """Serve a temporary local web UI for live watcher progress."""
     from arquimedes.watch import serve_monitor
 
-    serve_monitor(host=host, port=port)
+    serve_monitor(host=host, port=port, duration_minutes=minutes)
 
 
 @cli.group()

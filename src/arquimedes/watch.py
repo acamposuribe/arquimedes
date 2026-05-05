@@ -501,7 +501,7 @@ setInterval(refresh, 2000);
 </body></html>"""
 
 
-def serve_monitor(*, host: str = "127.0.0.1", port: int = 8765) -> None:
+def serve_monitor(*, host: str = "127.0.0.1", port: int = 8765, duration_minutes: int = 10) -> None:
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
             payload = _monitor_payload()
@@ -521,5 +521,12 @@ def serve_monitor(*, host: str = "127.0.0.1", port: int = 8765) -> None:
             return
 
     server = ThreadingHTTPServer((host, port), Handler)
-    print(f"Arquimedes watch monitor: http://{host}:{port}")
-    server.serve_forever()
+    server.timeout = 1
+    deadline = time.monotonic() + max(duration_minutes, 1) * 60
+    print(f"Arquimedes watch monitor: http://{host}:{port}  (auto-stops in {duration_minutes} min)")
+    try:
+        while time.monotonic() < deadline:
+            server.handle_request()
+    finally:
+        server.server_close()
+        print("Arquimedes watch monitor stopped.")

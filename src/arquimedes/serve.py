@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import subprocess
+import sys
 import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode, urlsplit
@@ -1324,16 +1327,31 @@ def create_app(config: dict | None = None) -> FastAPI:
         project_root = get_project_root()
         manifest = load_manifest(project_root)
         entry = manifest.get(material_id)
-        if not entry:
-            raise HTTPException(status_code=404, detail="Material not found in manifest")
-        add_ignored_material(
-            project_root,
-            material_id=entry.material_id,
-            file_hash=entry.file_hash,
-            relative_path=entry.relative_path,
-        )
+        try:
+            meta = read_mod.load_material_meta(material_id)
+        except FileNotFoundError:
+            meta = {}
+        file_hash = str(getattr(entry, "file_hash", "") or meta.get("file_hash") or "").strip()
+        relative_path = str(getattr(entry, "relative_path", "") or meta.get("source_path") or "").strip()
+        domain = str(getattr(entry, "domain", "") or meta.get("domain") or "").strip()
+        collection = str(getattr(entry, "collection", "") or meta.get("collection") or "").strip()
+        if file_hash:
+            add_ignored_material(
+                project_root,
+                material_id=material_id,
+                file_hash=file_hash,
+                relative_path=relative_path,
+            )
+        collection_target = wiki_url(f"wiki/{domain}/{collection}/_index.md") if domain and collection else "/"
+        target = (return_to or "").strip() or collection_target
+        # Never redirect back to the material page we just deleted.
+        if f"/materials/{material_id}" in target:
+            target = collection_target
         cascade_delete([material_id], project_root=project_root)
-        target = (return_to or "").strip() or "/"
+        env = dict(os.environ)
+        env.setdefault("ARQUIMEDES_ROOT", str(project_root))
+        subprocess.run([sys.executable, "-m", "arquimedes.cli", "compile"], cwd=project_root, env=env, check=False)
+        subprocess.run([sys.executable, "-m", "arquimedes.cli", "index", "ensure"], cwd=project_root, env=env, check=False)
         return RedirectResponse(url=target, status_code=303)
 
     @app.post("/materials/{material_id}/figures/delete")

@@ -445,7 +445,7 @@
         <button class="action-link action-link--danger" type="button" data-figure-delete-toggle data-figure-delete-target="#figure-delete-form">Eliminar figuras…</button>
         {% endif %}
         <form method="post" action="/materials/{{ material_id }}/admin/delete-ignore" onsubmit="return confirm('Eliminar este material e impedir que se reingeste mientras el archivo siga igual?');">
-          <input type="hidden" name="return_to" value="/">
+          <input type="hidden" name="return_to" value="{{ collection_url or '/' }}">
           <button class="action-link action-link--danger" type="submit">Eliminar y no reingestar</button>
         </form>
       </div>

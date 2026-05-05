@@ -3,10 +3,7 @@
 from __future__ import annotations
 
 import json
-import os
 import re
-import subprocess
-import sys
 import time
 from pathlib import Path, PurePosixPath
 from urllib.parse import urlencode, urlsplit
@@ -1318,8 +1315,7 @@ def create_app(config: dict | None = None) -> FastAPI:
         target = (return_to or "").strip() or f"/materials/{material_id}?mode=admin"
         return RedirectResponse(url=target, status_code=303)
 
-    @app.post("/materials/{material_id}/admin/delete-ignore")
-    def material_admin_delete_ignore(material_id: str, return_to: str = Form("")):
+    def _delete_ignore_material(material_id: str, return_to: str = "") -> RedirectResponse:
         from arquimedes.config import get_project_root
         from arquimedes.ingest import add_ignored_material, load_manifest
         from arquimedes.removal import cascade_delete
@@ -1347,12 +1343,27 @@ def create_app(config: dict | None = None) -> FastAPI:
         # Never redirect back to the material page we just deleted.
         if f"/materials/{material_id}" in target:
             target = collection_target
-        cascade_delete([material_id], project_root=project_root)
-        env = dict(os.environ)
-        env.setdefault("ARQUIMEDES_ROOT", str(project_root))
-        subprocess.run([sys.executable, "-m", "arquimedes.cli", "compile"], cwd=project_root, env=env, check=False)
-        subprocess.run([sys.executable, "-m", "arquimedes.cli", "index", "ensure"], cwd=project_root, env=env, check=False)
+        report = cascade_delete([material_id], project_root=project_root)
+        if material_id not in report.removed_material_ids and not report.touched_paths:
+            raise HTTPException(status_code=404, detail="Material artifacts were not found")
+        try:
+            from arquimedes.compile import compile_wiki
+            from arquimedes.config import load_config
+            from arquimedes.index import ensure_index_and_memory
+
+            compile_wiki(load_config(), recompile_pages=True)
+            ensure_index_and_memory()
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"Deleted material, but rebuild failed: {exc}") from exc
         return RedirectResponse(url=target, status_code=303)
+
+    @app.post("/materials/{material_id}/admin/delete-ignore")
+    def material_admin_delete_ignore_post(material_id: str, return_to: str = Form("")):
+        return _delete_ignore_material(material_id, return_to)
+
+    @app.get("/materials/{material_id}/admin/delete-ignore")
+    def material_admin_delete_ignore_get(material_id: str, return_to: str = ""):
+        return _delete_ignore_material(material_id, return_to)
 
     @app.post("/materials/{material_id}/figures/delete")
     def material_delete_figures(request: Request, material_id: str, figure_sidecar: list[str] = Form([]), return_to: str = Form("")):

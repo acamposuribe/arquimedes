@@ -5486,6 +5486,24 @@ def test_memory_bridge_check_skips_proyectos_only_manifest():
     ]) is False
 
 
+def test_run_deterministic_lint_handles_proyectos_without_memory_bridge(tmp_path, monkeypatch):
+    root, config = _setup_repo(tmp_path)
+    monkeypatch.chdir(root)
+    rows = []
+    with (root / "manifests" / "materials.jsonl").open(encoding="utf-8") as fh:
+        for line in fh:
+            row = json.loads(line)
+            row["domain"] = "proyectos"
+            row["collection"] = "2410-casa"
+            rows.append(row)
+    _write_jsonl(root / "manifests" / "materials.jsonl", rows)
+
+    report = run_deterministic_lint(config)
+
+    assert report["checks"]["memory_stale"] is False
+    assert "stale_memory_bridge" not in {issue["check"] for issue in report["issues"]}
+
+
 def test_memory_bridge_check_runs_for_concept_graph_domains():
     assert _should_check_memory_bridge([
         {"material_id": "p1", "domain": "proyectos", "collection": "2410-casa"},

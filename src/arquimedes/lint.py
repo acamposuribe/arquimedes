@@ -1901,6 +1901,8 @@ def run_deterministic_lint(config: dict | None = None) -> dict:
     issues.extend(_detect_orphaned_wiki_pages(root, wiki_pages, expected_pages))
 
     index_stale, index_reason = _index_state_stale(root)
+    memory_stale = False
+    memory_reason = ""
     if index_stale:
         issues.append(_issue(
             "stale_index",

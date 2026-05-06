@@ -58,8 +58,8 @@ from arquimedes.compile_pages import (
 )
 from arquimedes.config import get_logs_root, get_project_root, load_config
 from arquimedes.domain_profiles import get_domain_profile, get_publication_mode
-from arquimedes.domain_profiles import should_run_collection_reflection, should_run_global_bridge
-from arquimedes.enrich import _allows_figure_enrichment, _is_chunk_stale, _is_document_stale, _is_figure_stale
+from arquimedes.domain_profiles import is_proyectos_domain, should_run_collection_reflection, should_run_global_bridge
+from arquimedes.enrich import _allows_figure_enrichment, _has_text_enrichment_inputs, _is_chunk_stale, _is_document_stale, _is_figure_stale
 from arquimedes.llm import EnrichmentError, LlmFn, get_model_id, make_cli_llm_fn, parse_json_or_repair
 from arquimedes.enrich_stamps import canonical_hash
 from arquimedes.index import (
@@ -1528,9 +1528,32 @@ def _memory_state_stale(root: Path) -> tuple[bool, str]:
 # Deterministic lint
 # ---------------------------------------------------------------------------
 
+def _is_project_visual_or_nontext_material(meta: dict, rec: dict | None = None) -> bool:
+    """Return True for Proyectos materials where text chunk/figure lint is optional.
+
+    Project dossiers use visual samples and project_extraction as the main
+    semantic layer for drawings, photos, maps, and other visual/non-text office
+    records. OCR chunks and extracted figures for these files are best-effort
+    secondary artifacts, so deterministic lint should not require their
+    enrichment stamps to be current.
+    """
+    domain = str((meta or {}).get("domain") or (rec or {}).get("domain") or "")
+    if not is_proyectos_domain(domain, default="research"):
+        return False
+    file_type = str((meta or {}).get("file_type") or (rec or {}).get("file_type") or "")
+    if file_type in {"image", "scanned_document"}:
+        return True
+    doc_type = (meta or {}).get("document_type")
+    if isinstance(doc_type, dict):
+        doc_type = doc_type.get("value")
+    project_type = ((meta or {}).get("project_extraction") or {}).get("project_material_type")
+    values = {str((meta or {}).get("raw_document_type") or ""), str(doc_type or ""), str(project_type or "")}
+    return bool(values & {"drawing_set", "site_photo", "map_or_cartography", "reference_material"})
+
+
 def _detect_missing_metadata(root: Path, manifest_records: list[dict]) -> list[dict]:
     issues: list[dict] = []
-    required_fields = [
+    base_required_fields = [
         "material_id",
         "file_hash",
         "source_path",
@@ -1539,7 +1562,6 @@ def _detect_missing_metadata(root: Path, manifest_records: list[dict]) -> list[d
         "collection",
         "page_count",
         "file_type",
-        "raw_document_type",
     ]
     for rec in manifest_records:
         mid = rec.get("material_id", "")
@@ -1555,6 +1577,9 @@ def _detect_missing_metadata(root: Path, manifest_records: list[dict]) -> list[d
                 fixable=True,
             ))
             continue
+        required_fields = list(base_required_fields)
+        if not is_proyectos_domain(str(meta.get("domain") or rec.get("domain") or ""), default="research"):
+            required_fields.append("raw_document_type")
         missing = [field for field in required_fields if meta.get(field) in (None, "", [], {})]
         if missing:
             issues.append(_issue(
@@ -1656,18 +1681,21 @@ def _detect_stale_enrichment(root: Path, manifest_records: list[dict], config: d
         output_dir = root / "extracted" / mid
         if not output_dir.exists():
             continue
+        meta = _load_material_meta(root, mid) or {}
+        project_visual_or_nontext = _is_project_visual_or_nontext_material(meta, rec)
         stale_stages: list[str] = []
         try:
             if _is_document_stale(output_dir, config):
                 stale_stages.append("document")
         except Exception:
             stale_stages.append("document")
-        try:
-            if _is_chunk_stale(output_dir, config):
+        if not project_visual_or_nontext and _has_text_enrichment_inputs(output_dir):
+            try:
+                if _is_chunk_stale(output_dir, config):
+                    stale_stages.append("chunk")
+            except Exception:
                 stale_stages.append("chunk")
-        except Exception:
-            stale_stages.append("chunk")
-        if _allows_figure_enrichment(SimpleNamespace(**rec)):
+        if not project_visual_or_nontext and _allows_figure_enrichment(SimpleNamespace(**rec), meta):
             try:
                 if _is_figure_stale(output_dir, config):
                     stale_stages.append("figure")

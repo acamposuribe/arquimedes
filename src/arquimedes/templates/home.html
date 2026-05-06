@@ -22,7 +22,13 @@
   {% if project_cards %}
   <div class="project-card-grid">
     {% for project in project_cards %}
-    <article class="project-card">
+    <article class="project-card{% if not project.thumbnail_url %} project-card--no-thumb{% endif %}">
+      {% if project.thumbnail_url %}
+      <a class="project-card-thumb" href="{{ project.url }}" aria-label="{{ project.title }}">
+        <img src="{{ project.thumbnail_url }}" alt="">
+      </a>
+      {% endif %}
+      <div class="project-card-body">
       <div class="project-card-header">
         <div>
           <p class="eyebrow">{{ project.stage }}</p>
@@ -65,6 +71,7 @@
       {% if project.updated_at %}
       <p class="meta-line">Actualizado {{ project.updated_at }}</p>
       {% endif %}
+      </div>
     </article>
     {% endfor %}
   </div>

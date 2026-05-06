@@ -1909,15 +1909,39 @@ a.thumb-button { cursor: pointer; text-decoration: none; color: inherit; }
 
 .project-card-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(22rem, 1fr));
+  grid-template-columns: 1fr;
   gap: 1rem;
 }
 
 .project-card {
+  display: grid;
+  grid-template-columns: minmax(12rem, 18rem) 1fr;
+  gap: 1rem;
+  align-items: stretch;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: 4px;
   padding: 1.1rem 1.25rem;
+}
+
+.project-card--no-thumb {
+  grid-template-columns: 1fr;
+}
+
+.project-card-thumb {
+  display: block;
+  min-height: 11rem;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel-2);
+}
+
+.project-card-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
 }
 
 .project-card-header {
@@ -2258,6 +2282,7 @@ body.lightbox-open { overflow: hidden; }
   .home-recent-materials-grid,
   .project-state-columns { grid-template-columns: 1fr; }
   .project-card-grid,
+  .project-card,
   .project-state-grid,
   .project-extraction-grid {
     grid-template-columns: 1fr;

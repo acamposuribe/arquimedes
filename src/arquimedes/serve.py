@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import random
 import re
 import time
 from pathlib import Path, PurePosixPath
@@ -548,6 +549,19 @@ def _material_sidebar_context(material_id: str) -> dict:
     }
 
 
+def _project_random_thumbnail(domain: str, project_id: str) -> str:
+    candidates: list[str] = []
+    for entry in read_mod.materials_for_collection(domain, project_id):
+        material_id = str(entry.get("material_id") or "").strip()
+        if not material_id:
+            continue
+        for thumb in read_mod.load_material_thumbnails(material_id):
+            filename = str(thumb.get("filename") or "").strip()
+            if filename:
+                candidates.append(f"/thumbnails/{material_id}/{filename}")
+    return random.choice(candidates) if candidates else ""
+
+
 def _project_home_cards(collections: list[dict]) -> list[dict]:
     cards: list[dict] = []
     for item in collections:
@@ -556,14 +570,15 @@ def _project_home_cards(collections: list[dict]) -> list[dict]:
         if not project_id or project_id == "_general" or not is_proyectos_domain(domain, default="research"):
             continue
         state = project_state_mod.load_project_state(project_id, root=read_mod.get_project_root())
-        material_count = len(read_mod.materials_for_collection(domain, project_id))
+        materials = read_mod.materials_for_collection(domain, project_id)
         cards.append({
             "project_id": project_id,
             "title": str(state.get("project_title") or project_id),
             "url": wiki_url(f"wiki/{domain}/{project_id}/_index.md"),
             "stage": str(state.get("stage") or "lead").replace("_", " "),
             "updated_at": str(state.get("updated_at") or "")[:10],
-            "material_count": material_count,
+            "material_count": len(materials),
+            "thumbnail_url": _project_random_thumbnail(domain, project_id),
             "current_work": [str(value) for value in (state.get("current_work_in_progress") or []) if str(value).strip()][:2],
             "next_focus": [str(value) for value in (state.get("next_focus") or []) if str(value).strip()][:2],
             "risks": [str(value) for value in (state.get("risks_or_blockers") or []) if str(value).strip()][:2],

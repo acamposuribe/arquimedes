@@ -61,6 +61,25 @@ def _has_text_enrichment_inputs(output_dir: Path) -> bool:
     return (output_dir / "pages.jsonl").exists() and (output_dir / "chunks.jsonl").exists()
 
 
+def _has_project_page_images(output_dir: Path) -> bool:
+    """Return True when a Proyectos material has page thumbnails for visual document enrichment."""
+    pages_path = output_dir / "pages.jsonl"
+    if not pages_path.exists():
+        return False
+    try:
+        for line in pages_path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            page = json.loads(line)
+            thumbnail_rel = str(page.get("thumbnail_path") or "")
+            if thumbnail_rel and (output_dir / thumbnail_rel).exists():
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _is_document_stale(output_dir: Path, config: dict) -> bool:
     """Quick staleness check for document stage without calling LLM."""
     enrichment_config = config.get("enrichment", {})
@@ -69,7 +88,10 @@ def _is_document_stale(output_dir: Path, config: dict) -> bool:
     try:
         meta_path = output_dir / "meta.json"
         meta = json.loads(meta_path.read_text(encoding="utf-8")) if meta_path.exists() else {}
-        prompt_version = domain_prompt_version(prompt_version, str(meta.get("domain", "")))
+        domain = str(meta.get("domain", ""))
+        prompt_version = domain_prompt_version(prompt_version, domain)
+        if is_proyectos_domain(domain) and _has_project_page_images(output_dir):
+            prompt_version = f"{prompt_version}-visual-pages-v1"
         existing = enrich_stamps.read_document_stamp(output_dir)
         return not enrich_stamps.matches_stage_version(existing, prompt_version, schema_version)
     except Exception:
@@ -524,7 +546,11 @@ def enrich(
                         detail = "no text extraction artifacts"
                     else:
                         if s == "figure" and not figure_allowed:
-                            detail = "drawing set or standalone image material"
+                            detail = (
+                                "drawing set material"
+                                if _entry_is_project_drawing_set(manifest[mid], meta if isinstance(meta, dict) else None)
+                                else "standalone image material"
+                            )
                         else:
                             detail = "up to date"
                     material_results[s] = {"status": "skipped", "detail": detail}

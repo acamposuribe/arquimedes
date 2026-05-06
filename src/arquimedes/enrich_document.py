@@ -426,7 +426,7 @@ def enrich_document_stage(
     except Exception as exc:
         return {"status": "failed", "detail": f"LLM error: {exc}"}
     finally:
-        for work_path in (document_text_path,):
+        for work_path in (document_text_path, output_dir / "document.meta.work.json"):
             try:
                 work_path.unlink(missing_ok=True)
             except Exception:
